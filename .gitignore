@@ -5,10 +5,10 @@
 game/.godot/
 *.translation
 
-# Python
+# Python (all local venvs: .venv, .venv-heat, .venv-water, ...)
 __pycache__/
 *.pyc
-.venv/
+.venv*/
 venv/
 
 # spike outputs / reports
