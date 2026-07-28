@@ -26,7 +26,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-CONTRACT_VERSION = "1.0"
+CONTRACT_VERSION = "1.1"
 BACKEND_NAME = "mock"
 API_VERSION = "0.1.0"
 
@@ -100,7 +100,9 @@ def _validate_topology(doc: Any) -> None:
     for key in ("contract", "network_kind", "name", "steps_per_day", "native", "zones", "devices"):
         if key not in doc:
             _bad(f"topology document missing required key '{key}'")
-    if doc["contract"] != CONTRACT_VERSION:
+    major, _, minor = str(doc["contract"]).partition(".")
+    if major != CONTRACT_VERSION.partition(".")[0] or not minor.isdigit() \
+            or int(minor) > int(CONTRACT_VERSION.partition(".")[2]):
         _bad(f"unsupported contract version {doc['contract']!r} (this backend speaks {CONTRACT_VERSION})")
     if doc["network_kind"] not in NETWORK_KINDS:
         _bad(f"unknown network_kind {doc['network_kind']!r}")
@@ -244,12 +246,21 @@ def _fabricate(req: dict) -> dict:
     zones_out = {zid: {"supplied": 1.0, "detail": dict(ZONE_DETAIL[state.network_kind])}
                  for zid in state.zones}
 
+    # edges (contract §4, since 1.1): fabricated but plausible — one feeder
+    # edge per zone carrying that zone's demand, loading proportional to it.
+    edges_out = {}
+    for i, zid in enumerate(state.zones):
+        demand = state.zone_demand[zid]
+        edges_out[f"L{i}"] = {"loading_percent": round(min(abs(demand) / 2.0, 100.0), 3),
+                              "p_from_kw": round(demand, 6)}
+
     return {
         "t": req["t"],
         "status": "converged",
         "solve_ms": round(max((time.perf_counter() - started) * 1000.0, 0.001), 3),
         "zones": zones_out,
         "devices": devices_out,
+        "edges": edges_out,
         "coupling_out": coupling_out,
         "violations": violations,
     }

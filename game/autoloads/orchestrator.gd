@@ -38,10 +38,11 @@ func register(id: String, topology: Dictionary) -> bool:
 	networks[id] = {
 		"topology": topology, "in_flight": false, "last_result": {},
 		"last_t": -1, "missed": 0, "consecutive_failed": 0,
-		"needs_reset": false, "down_since_t": -1,
+		"needs_reset": false, "down_since_t": -1, "resetting": true,
 	}
 	var response := await CosimBridge.net_reset(id, topology)
 	var ok: bool = response.get("_status", 0) == 200 and response.get("ok", false)
+	networks[id]["resetting"] = false
 	if not ok:
 		push_warning("net_reset failed for %s: %s" % [id, JSON.stringify(response)])
 		supply_event.emit(id, "reset_failed", "critical", response)
@@ -69,6 +70,8 @@ func _on_sim_step(t: int) -> void:
 
 func _dispatch(id: String, t: int) -> void:
 	var net: Dictionary = networks[id]
+	if net.get("resetting", false):
+		return  # quiet skip: an ordinary re-register is in flight
 	if SidecarManager.state_of(id) != SidecarManager.State.HEALTHY or net["needs_reset"]:
 		stats["skipped_down"] += 1
 		if net["down_since_t"] < 0:
@@ -87,8 +90,12 @@ func _dispatch(id: String, t: int) -> void:
 
 func _step_async(id: String, t: int) -> void:
 	var net: Dictionary = networks[id]
+	# Wire t must be last_t+1 for the backend (contract §0.3) even when the
+	# game skipped steps (overruns, re-registration) — boundary conditions are
+	# still evaluated at the GAME step t, so physics follow the game clock.
+	var wire_t: int = net["last_t"] + 1 if net["last_t"] >= 0 else t
 	var request := {
-		"t": t,
+		"t": wire_t,
 		"dt_s": GameClock.SIM_STEP_MINUTES * 60,
 		"weather": boundary_provider.get_weather(t) if boundary_provider else {},
 		"zone_demand": boundary_provider.get_zone_demand(id, t) if boundary_provider else {},
@@ -102,8 +109,14 @@ func _step_async(id: String, t: int) -> void:
 		supply_event.emit(id, "step_transport_failed", "warning",
 			{"t": t, "error": result.get("_error", "?")})
 		return
+	if result.get("status", "") == "error":
+		# protocol rejection (e.g. out_of_order after a mid-run reset race) —
+		# do not store; the wire-t resync self-heals on the next dispatch
+		supply_event.emit(id, "step_rejected", "warning",
+			{"t": t, "error": result.get("error", "?")})
+		return
 	net["last_result"] = result
-	net["last_t"] = t
+	net["last_t"] = wire_t
 	stats["completed"] += 1
 	match result.get("status", "failed"):
 		"converged":

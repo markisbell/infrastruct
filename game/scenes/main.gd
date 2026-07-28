@@ -1,58 +1,15 @@
 extends Node2D
-## Spike A: isometric drag-build prototype (ROADMAP Phase 0).
-## - 256×256 isometric terrain TileMapLayer
-## - drag-build cable tool: left-drag paints, right-drag erases
-## - logical model (WorldModel) is the source of truth; the network
-##   TileMapLayer is rebuilt/updated as a view of it
-## - F5 saves the model to user://world.json, F6 loads it back
-## - `--bench --out=<path>` runs an automated drag benchmark, writes a JSON
-##   report (frame times, save/load round-trip check) and quits.
+## Entry scene: normal game (CityView + HUD + supervised sidecars) plus the
+## headless modes — spike bench, screenshot, and the acceptance smokes
+## (Phases 1-3). Smokes print one machine-readable JSON line and quit 0/1.
 
-const MAP_SIZE := 256
-const TILE_W := 64
-const TILE_H := 32
-
-const TILE_GRASS := Vector2i(0, 0)
-const TILE_CABLE := Vector2i(1, 0)
-const CABLE_KIND_DEFAULT := 1
-
-var model := WorldModel.new()
-var terrain_layer: TileMapLayer
-var network_layer: TileMapLayer
-var cam: Camera2D
-
-var _painting := false
-var _erasing := false
-
-# bench state
+var view: CityView
+var _screenshot_path := ""
 var _bench := false
 var _bench_out := ""
-var _bench_warmup_frames := 30
-var _bench_paint_frames := 300
-var _bench_tiles_per_frame := 5
-var _bench_cursor := Vector2i(64, 64)
-var _bench_dir := Vector2i(1, 0)
-var _frame_times: Array[float] = []
 
 
 func _ready() -> void:
-	var tile_set := _make_tileset()
-	terrain_layer = TileMapLayer.new()
-	terrain_layer.tile_set = tile_set
-	add_child(terrain_layer)
-	network_layer = TileMapLayer.new()
-	network_layer.tile_set = tile_set
-	add_child(network_layer)
-
-	for x in MAP_SIZE:
-		for y in MAP_SIZE:
-			terrain_layer.set_cell(Vector2i(x, y), 0, TILE_GRASS)
-
-	cam = Camera2D.new()
-	add_child(cam)
-	cam.position = terrain_layer.map_to_local(Vector2i(MAP_SIZE / 2, MAP_SIZE / 2))
-	cam.make_current()
-
 	var smoke := ""
 	for arg: String in OS.get_cmdline_user_args():
 		if arg == "--bench":
@@ -63,13 +20,16 @@ func _ready() -> void:
 			smoke = arg.trim_prefix("--smoke=")
 		elif arg.begins_with("--screenshot="):
 			_screenshot_path = arg.trim_prefix("--screenshot=")
+
+	view = CityView.new()
+	add_child(view)
+
 	if _bench:
-		cam.position = terrain_layer.map_to_local(_bench_cursor)
+		_run_bench()
 		return
 	if _screenshot_path != "":
 		_take_screenshot()
 		return
-
 	match smoke:
 		"sidecars":
 			_smoke_sidecars()
@@ -81,106 +41,55 @@ func _ready() -> void:
 			_smoke_cosim(false)
 		"cosim-kill":
 			_smoke_cosim(true)
+		"windless-week":
+			_smoke_windless_week()
+		"overload":
+			_smoke_overload()
 		_:
-			# normal game run: supervise the backends + debug panel
-			if SidecarManager.load_config():
-				SidecarManager.start_all()
-				SidecarManager.state_changed.connect(_on_sidecar_state)
-				_add_debug_panel()
+			_boot_game()
 
 
-func _make_tileset() -> TileSet:
-	var ts := TileSet.new()
-	ts.tile_shape = TileSet.TILE_SHAPE_ISOMETRIC
-	ts.tile_layout = TileSet.TILE_LAYOUT_DIAMOND_DOWN
-	ts.tile_size = Vector2i(TILE_W, TILE_H)
-	var src := TileSetAtlasSource.new()
-	src.texture = _make_texture()
-	src.texture_region_size = Vector2i(TILE_W, TILE_H)
-	src.create_tile(TILE_GRASS)
-	src.create_tile(TILE_CABLE)
-	ts.add_source(src, 0)
-	return ts
+func _boot_game() -> void:
+	var hud := Hud.new()
+	hud.view = view
+	add_child(hud)
+	if SidecarManager.load_config():
+		SidecarManager.start_all()
+		SidecarManager.state_changed.connect(_on_sidecar_state)
+		_add_debug_panel()
+	GameClock.speed = 1.0
 
 
-## Procedurally drawn diamond tiles — no binary assets needed for the spike.
-## Atlas: [0]=grass green, [1]=cable yellow.
-func _make_texture() -> ImageTexture:
-	var colors := [Color(0.33, 0.55, 0.28), Color(0.95, 0.78, 0.15)]
-	var img := Image.create(TILE_W * colors.size(), TILE_H, false, Image.FORMAT_RGBA8)
-	for t in colors.size():
-		var col: Color = colors[t]
-		var edge := col.darkened(0.35)
-		var half_h := TILE_H / 2.0
-		for y in TILE_H:
-			var frac := 1.0 - absf(y - half_h + 0.5) / half_h
-			var half_w := int(frac * TILE_W / 2.0)
-			for x in range(TILE_W / 2 - half_w, TILE_W / 2 + half_w):
-				var border := x <= TILE_W / 2 - half_w + 1 or x >= TILE_W / 2 + half_w - 2
-				img.set_pixel(t * TILE_W + x, y, edge if border else col)
-	return ImageTexture.create_from_image(img)
+func _on_sidecar_state(id: String, state: SidecarManager.State) -> void:
+	if state == SidecarManager.State.HEALTHY and not CosimBridge.info.has(id):
+		CosimBridge.handshake(id)
 
 
-# ─── model <-> view ───
-
-func _paint_cable(pos: Vector2i) -> void:
-	if pos.x < 0 or pos.y < 0 or pos.x >= MAP_SIZE or pos.y >= MAP_SIZE:
-		return
-	model.set_cable(pos, CABLE_KIND_DEFAULT)
-	network_layer.set_cell(pos, 0, TILE_CABLE)
+var _debug_panel: PanelContainer
 
 
-func _erase_cable(pos: Vector2i) -> void:
-	model.remove_cable(pos)
-	network_layer.erase_cell(pos)
+func _add_debug_panel() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 2
+	add_child(layer)
+	_debug_panel = preload("res://scenes/debug_panel.gd").new()
+	_debug_panel.position = Vector2(8, 48)
+	layer.add_child(_debug_panel)
 
-
-func _rebuild_network_view() -> void:
-	network_layer.clear()
-	for pos: Vector2i in model.cables:
-		network_layer.set_cell(pos, 0, TILE_CABLE)
-
-
-# ─── input ───
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		var mb: InputEventMouseButton = event
-		match mb.button_index:
-			MOUSE_BUTTON_LEFT:
-				_painting = mb.pressed
-				if mb.pressed:
-					_paint_cable(_mouse_tile())
-			MOUSE_BUTTON_RIGHT:
-				_erasing = mb.pressed
-				if mb.pressed:
-					_erase_cable(_mouse_tile())
-			MOUSE_BUTTON_WHEEL_UP:
-				if mb.pressed:
-					cam.zoom = (cam.zoom * 1.1).clamp(Vector2(0.25, 0.25), Vector2(4, 4))
-			MOUSE_BUTTON_WHEEL_DOWN:
-				if mb.pressed:
-					cam.zoom = (cam.zoom / 1.1).clamp(Vector2(0.25, 0.25), Vector2(4, 4))
-	elif event is InputEventMouseMotion:
-		var mm: InputEventMouseMotion = event
-		if _painting:
-			_paint_cable(_mouse_tile())
-		elif _erasing:
-			_erase_cable(_mouse_tile())
-		elif mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
-			cam.position -= mm.relative / cam.zoom
-	elif event is InputEventKey and event.is_pressed():
+	if event is InputEventKey and event.is_pressed():
 		var key: InputEventKey = event
 		match key.keycode:
 			KEY_F5:
-				_save_to(_save_path())
+				SaveGame.save_to(SaveGame.DEFAULT_PATH)
 			KEY_F6:
-				_load_from(_save_path())
+				if SaveGame.load_from(SaveGame.DEFAULT_PATH)["ok"]:
+					view.redraw()
 			KEY_F1:
 				if _debug_panel:
 					_debug_panel.visible = not _debug_panel.visible
 			KEY_F2:
-				# debug console: dump the latest contract results per network
 				var dump := {}
 				for id: String in Orchestrator.networks:
 					dump[id] = Orchestrator.latest(id)
@@ -189,93 +98,105 @@ func _unhandled_input(event: InputEvent) -> void:
 				f.close()
 				print("debug: results dumped to user://debug_dump.json")
 			KEY_F3:
-				# debug console: force one sim-step while paused
 				GameClock.total_minutes += GameClock.SIM_STEP_MINUTES
-				var forced := int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES)
-				Orchestrator._on_sim_step(forced)
-				print("debug: forced sim-step ", forced)
+				Orchestrator._on_sim_step(int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES))
+				print("debug: forced sim-step")
 			KEY_F4:
-				# debug console: toggle a cold-snap weather override
-				if Orchestrator.boundary_provider is FixtureProvider:
-					var provider: FixtureProvider = Orchestrator.boundary_provider
-					if provider.weather_override.is_empty():
-						provider.weather_override = {"temp_c": -12.0, "wind_ms": 1.0}
-					else:
-						provider.weather_override = {}
-					print("debug: weather override = ", provider.weather_override)
+				if City.weather._calm_from < 0:
+					City.weather.force_calm(City.current_t, City.current_t + 96)
+					print("debug: cold calm forced for 24 h")
+				else:
+					City.weather.clear_calm()
+					print("debug: weather override cleared")
 
 
-func _mouse_tile() -> Vector2i:
-	return network_layer.local_to_map(network_layer.get_local_mouse_position())
+# ─── bench (Phase 0 spike A, now through the City/model path) ───
+
+var _bench_state := {"warmup": 30, "frames": [], "cursor": Vector2i(64, 64), "dir": 1}
+
+
+func _run_bench() -> void:
+	City.money = 100_000_000
+	set_process(true)
 
 
 func _process(delta: float) -> void:
-	var pan := Vector2(
-		Input.get_axis(&"ui_left", &"ui_right"), Input.get_axis(&"ui_up", &"ui_down")
-	)
-	cam.position += pan * 600.0 * delta / cam.zoom.x
-	if _bench:
-		_bench_tick(delta)
+	if not _bench:
+		return
+	if _bench_state["warmup"] > 0:
+		_bench_state["warmup"] -= 1
+		return
+	var frames: Array = _bench_state["frames"]
+	if frames.size() >= 300:
+		set_process(false)
+		_bench_finish()
+		return
+	for i in 5:
+		var cursor: Vector2i = _bench_state["cursor"]
+		City.model.set_cable(cursor, 1)
+		cursor.x += _bench_state["dir"]
+		if cursor.x >= 192 or cursor.x <= 64:
+			_bench_state["dir"] = -_bench_state["dir"]
+			cursor.y += 1
+		_bench_state["cursor"] = cursor
+	view.redraw()
+	view.cam.position = view._terrain.map_to_local(_bench_state["cursor"])
+	frames.append(delta)
 
 
-# ─── save/load (SaveGame autoload: model + clock, versioned envelope) ───
+func _bench_finish() -> void:
+	var frames: Array = _bench_state["frames"]
+	frames.sort()
+	var total := 0.0
+	for f: float in frames:
+		total += f
+	var restored := WorldModel.from_json(City.model.to_json())
+	var report := {
+		"frames": frames.size(), "tiles_painted": City.model.cables.size(),
+		"avg_ms": total / frames.size() * 1000.0,
+		"p99_ms": frames[mini(int(frames.size() * 0.99), frames.size() - 1)] * 1000.0,
+		"avg_fps": frames.size() / total,
+		"roundtrip_ok": restored.equals(City.model),
+	}
+	if not _bench_out.is_empty():
+		var f := FileAccess.open(_bench_out, FileAccess.WRITE)
+		f.store_string(JSON.stringify(report, "  "))
+		f.close()
+	print("SPIKE_A_REPORT ", JSON.stringify(report))
+	get_tree().quit(0 if report["roundtrip_ok"] else 1)
 
-func _save_path() -> String:
-	return SaveGame.DEFAULT_PATH
 
-
-func _save_to(path: String) -> void:
-	SaveGame.save_to(path, model)
-
-
-func _load_from(path: String) -> void:
-	var loaded: Dictionary = SaveGame.load_from(path)
-	if loaded["ok"]:
-		model = loaded["model"]
-		_rebuild_network_view()
-
-
-# ─── screenshot mode (pre-alpha look, no sidecars) ───
-
-var _screenshot_path := ""
-
+# ─── screenshot (pre-alpha look; builds a demo town, no sidecars) ───
 
 func _take_screenshot() -> void:
-	# paint a small demo network so the shot shows content
-	for i in 42:
-		_paint_cable(Vector2i(118 + i, 128))
-	for i in 26:
-		_paint_cable(Vector2i(138, 110 + i))
-	for i in 18:
-		_paint_cable(Vector2i(150 + i, 118))
-	cam.position = terrain_layer.map_to_local(Vector2i(140, 124))
-	cam.zoom = Vector2(1.4, 1.4)
-	await get_tree().create_timer(1.0).timeout  # let a few frames render
-	var img := get_viewport().get_texture().get_image()
-	img.save_png(_screenshot_path)
+	City.money = 100_000_000
+	City.place_building("grid_connection", Vector2i(118, 120))
+	for x in range(120, 141):
+		City.build_cable(Vector2i(x, 121))
+	City.place_building("substation", Vector2i(134, 122))
+	City.place_building("wind_farm", Vector2i(124, 116))
+	for y in range(118, 121):
+		City.build_cable(Vector2i(126, y))
+	City.place_building("solar_park", Vector2i(139, 117))
+	for y in range(119, 121):
+		City.build_cable(Vector2i(140, y))
+	for x in range(128, 143):
+		City.build_road(Vector2i(x, 124))
+	for x in range(128, 143):
+		for y in [125, 126]:
+			City.build_zone(Vector2i(x, y))
+	var subs := City.model.buildings_of_kind("substation")
+	City.spawn_houses_bulk(subs[0], 22)
+	view.redraw()
+	view.cam.position = view._terrain.map_to_local(Vector2i(131, 121))
+	view.cam.zoom = Vector2(1.6, 1.6)
+	await get_tree().create_timer(1.0).timeout
+	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)
 	get_tree().quit(0)
 
 
-# ─── sidecar supervision UI ───
-
-var _debug_panel: PanelContainer
-
-
-func _add_debug_panel() -> void:
-	var layer := CanvasLayer.new()
-	add_child(layer)
-	_debug_panel = preload("res://scenes/debug_panel.gd").new()
-	_debug_panel.position = Vector2(8, 8)
-	layer.add_child(_debug_panel)
-
-
-func _on_sidecar_state(id: String, state: SidecarManager.State) -> void:
-	if state == SidecarManager.State.HEALTHY and not CosimBridge.info.has(id):
-		CosimBridge.handshake(id)
-
-
-# ─── Phase 1 acceptance smoke modes (headless, print one JSON line, quit) ───
+# ─── shared smoke helpers ───
 
 func _wait_all_healthy(timeout_s: float) -> bool:
 	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
@@ -286,24 +207,44 @@ func _wait_all_healthy(timeout_s: float) -> bool:
 	return true
 
 
+func _wait_power_healthy(timeout_s: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
+	while SidecarManager.state_of("power") != SidecarManager.State.HEALTHY:
+		if Time.get_ticks_msec() > deadline:
+			return false
+		await get_tree().create_timer(0.5).timeout
+	return true
+
+
+func _wait_registered(timeout_s: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
+	while not City.registered:
+		if Time.get_ticks_msec() > deadline:
+			return false
+		await get_tree().create_timer(0.5).timeout
+	return true
+
+
+func _fail(tag: String, reason: String) -> void:
+	print(tag, " ", JSON.stringify({"ok": false, "reason": reason}))
+	SidecarManager.stop_all()
+	get_tree().quit(1)
+
+
+# ─── Phase 1 smokes ───
+
 func _smoke_sidecars() -> void:
 	SidecarManager.load_config()
 	SidecarManager.start_all()
 	if not await _wait_all_healthy(180.0):
-		print("SMOKE_SIDECARS ", JSON.stringify({"ok": false, "reason": "health timeout"}))
-		SidecarManager.stop_all()
-		get_tree().quit(1)
+		_fail("SMOKE_SIDECARS", "health timeout")
 		return
 	var ok := true
 	var per_sidecar := {}
 	for id: String in SidecarManager.ids():
-		# spawn + health + handshake only — contract stepping (which requires a
-		# /gb/net/reset first) is covered end-to-end by --smoke=cosim
 		var handshake_ok: bool = await CosimBridge.handshake(id)
-		per_sidecar[id] = {
-			"handshake": handshake_ok,
-			"solver": CosimBridge.info.get(id, {}).get("solver", "?"),
-		}
+		per_sidecar[id] = {"handshake": handshake_ok,
+			"solver": CosimBridge.info.get(id, {}).get("solver", "?")}
 		ok = ok and handshake_ok
 	print("SMOKE_SIDECARS ", JSON.stringify({"ok": ok, "sidecars": per_sidecar}))
 	SidecarManager.stop_all()
@@ -314,50 +255,56 @@ func _smoke_resilience() -> void:
 	SidecarManager.load_config()
 	SidecarManager.start_all()
 	if not await _wait_all_healthy(180.0):
-		print("SMOKE_RESILIENCE ", JSON.stringify({"ok": false, "reason": "initial health timeout"}))
-		SidecarManager.stop_all()
-		get_tree().quit(1)
+		_fail("SMOKE_RESILIENCE", "initial health timeout")
 		return
-	# hand the harness what it needs to kill a backend process externally
 	print("SMOKE_READY ", JSON.stringify({"ports": SidecarManager.ids().map(
 		func(id: String) -> int: return SidecarManager.port_of(id))}))
-	# the harness now kills the port owner; we must observe DOWN/RESTARTING…
 	var saw_down := false
 	var deadline := Time.get_ticks_msec() + 120_000
-	while Time.get_ticks_msec() < deadline:
+	while Time.get_ticks_msec() < deadline and not saw_down:
 		for id: String in SidecarManager.ids():
 			var state: SidecarManager.State = SidecarManager.state_of(id)
 			if state == SidecarManager.State.DOWN or state == SidecarManager.State.RESTARTING:
 				saw_down = true
-		if saw_down:
-			break
 		await get_tree().create_timer(0.5).timeout
-	# …and the automatic recovery back to all-healthy, without crashing
 	var recovered := saw_down and await _wait_all_healthy(180.0)
 	print("SMOKE_RESILIENCE ", JSON.stringify({"ok": recovered, "saw_down": saw_down}))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if recovered else 1)
 
 
-## Phase 2 acceptance e2e (ROADMAP): boot with the fixture town, run a full
-## in-game day (96 sim-steps) against BOTH real backends, assert: no missed
-## steps (=> one-step lag held), statuses within the fixture's allowance,
-## golden ranges on the final results, coupling routed heat->power.
-## kill_mode: the harness kills the heat backend mid-run; assert disturbance
-## event + reset-recovery + post-recovery stepping, power unaffected.
+func _smoke_saveload() -> void:
+	City.model.set_cable(Vector2i(10, 20), 1)
+	City.model.set_road(Vector2i(0, 0))
+	City.money = 123_456
+	GameClock.restore({"total_minutes": 3 * 1440.0 + 125.0, "speed": 3.0})
+	var path := "user://smoke_save.json"
+	var save_err := SaveGame.save_to(path)
+	City.model = WorldModel.new()
+	City.money = City.START_MONEY
+	GameClock.restore({"total_minutes": 0.0, "speed": 1.0})
+	var loaded: Dictionary = SaveGame.load_from(path)
+	var ok: bool = (
+		save_err == OK and loaded["ok"]
+		and City.model.has_cable(Vector2i(10, 20)) and City.model.roads.has(Vector2i(0, 0))
+		and City.money == 123_456
+		and GameClock.day() == 3 and GameClock.time_of_day_string() == "02:05"
+	)
+	print("SMOKE_SAVELOAD ", JSON.stringify({"ok": ok}))
+	get_tree().quit(0 if ok else 1)
+
+
+# ─── Phase 2 smokes (fixture-driven cosim, both backends) ───
+
 func _smoke_cosim(kill_mode: bool) -> void:
 	var provider := FixtureProvider.load_default(SidecarManager.repo_root)
 	if provider.fixtures.size() < 2:
-		print("SMOKE_COSIM ", JSON.stringify(
-			{"ok": false, "reason": "fixtures missing (need power+heat)"}))
-		get_tree().quit(1)
+		_fail("SMOKE_COSIM", "fixtures missing (need power+heat)")
 		return
 	SidecarManager.load_config()
 	SidecarManager.start_all()
 	if not await _wait_all_healthy(180.0):
-		print("SMOKE_COSIM ", JSON.stringify({"ok": false, "reason": "health timeout"}))
-		SidecarManager.stop_all()
-		get_tree().quit(1)
+		_fail("SMOKE_COSIM", "health timeout")
 		return
 
 	Orchestrator.boundary_provider = provider
@@ -367,9 +314,9 @@ func _smoke_cosim(kill_mode: bool) -> void:
 			events.append({"network": network, "kind": kind, "severity": severity,
 				"t": data.get("t", -1)}))
 	var n_steps := provider.steps("power")
-	var seen := {"power": [], "heat": []}  # per-network list of completed t (order check)
+	var seen := {"power": [], "heat": []}
 	var statuses := {"power": {}, "heat": {}}
-	var final_results := {}  # network -> result at t == n_steps-1 (golden basis)
+	var final_results := {}
 	Orchestrator.step_completed.connect(
 		func(network: String, t: int, result: Dictionary) -> void:
 			seen[network].append(t)
@@ -381,22 +328,16 @@ func _smoke_cosim(kill_mode: bool) -> void:
 	var registered := true
 	for id: String in ["power", "heat"]:
 		var handshake_ok := await CosimBridge.handshake(id)
-		if not handshake_ok:
-			print("register diag: handshake failed for ", id, ": ",
-				JSON.stringify(CosimBridge.info.get(id, {})))
-		var reset_ok := handshake_ok and await Orchestrator.register(id, provider.topology(id))
-		registered = registered and reset_ok
+		registered = registered and handshake_ok \
+			and await Orchestrator.register(id, provider.topology(id))
 	if not registered:
-		print("SMOKE_COSIM ", JSON.stringify({"ok": false, "reason": "register failed"}))
-		SidecarManager.stop_all()
-		get_tree().quit(1)
+		_fail("SMOKE_COSIM", "register failed")
 		return
 
 	GameClock.restore({"total_minutes": 0.0, "speed": 0.0})
 	Orchestrator.start()
 	if kill_mode:
 		print("SMOKE_READY ", JSON.stringify({"ports": [8010, 8011]}))
-	# kill mode runs slower so the backend can restart inside the window
 	GameClock.speed = 15.0 if kill_mode else 60.0
 
 	var deadline := Time.get_ticks_msec() + (420_000 if kill_mode else 240_000)
@@ -409,7 +350,6 @@ func _smoke_cosim(kill_mode: bool) -> void:
 		await get_tree().create_timer(0.25).timeout
 	GameClock.pause()
 	Orchestrator.stop()
-	# drain any in-flight request without dispatching further steps
 	await get_tree().create_timer(2.0).timeout
 
 	var report := {"ok": true, "steps_target": n_steps, "events": events.size()}
@@ -424,18 +364,16 @@ func _smoke_cosim(kill_mode: bool) -> void:
 				bad_status += statuses[id][status]
 		var golden_fails := _golden_check(provider.golden(id),
 			final_results.get(id, Orchestrator.latest(id)))
-		report[id] = {
-			"completed": ts.size(), "missed": Orchestrator.networks[id]["missed"],
-			"monotonic": monotonic, "statuses": statuses[id],
-			"bad_status_steps": bad_status, "golden_fails": golden_fails,
-		}
+		report[id] = {"completed": ts.size(),
+			"missed": Orchestrator.networks[id]["missed"], "monotonic": monotonic,
+			"statuses": statuses[id], "bad_status_steps": bad_status,
+			"golden_fails": golden_fails}
 		if kill_mode and id == "heat":
 			var down := events.any(func(e: Dictionary) -> bool:
 				return e.kind == "backend_down" and e.network == "heat")
 			var recovered := events.any(func(e: Dictionary) -> bool:
 				return e.kind == "backend_recovered" and e.network == "heat")
-			var resumed: bool = not ts.is_empty() \
-				and ts.back() > (ts[0] + ts.size())  # stepped again after a gap
+			var resumed: bool = not ts.is_empty() and ts.back() > (ts[0] + ts.size())
 			report["heat"]["down_event"] = down
 			report["heat"]["recovered_event"] = recovered
 			report["heat"]["resumed_after_gap"] = resumed
@@ -445,11 +383,9 @@ func _smoke_cosim(kill_mode: bool) -> void:
 				and Orchestrator.networks[id]["missed"] == 0 and monotonic \
 				and bad_status == 0 and golden_fails.is_empty()
 	if kill_mode:
-		# power must have sailed through the heat outage untouched
 		report["ok"] = report["ok"] and report["power"]["completed"] >= n_steps - 2 \
 			and report["power"]["bad_status_steps"] == 0
-	var tag := "SMOKE_COSIM_KILL " if kill_mode else "SMOKE_COSIM "
-	print(tag, JSON.stringify(report))
+	print("SMOKE_COSIM_KILL " if kill_mode else "SMOKE_COSIM ", JSON.stringify(report))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if report["ok"] else 1)
 
@@ -472,77 +408,195 @@ func _golden_check(golden: Dictionary, result: Dictionary) -> Array:
 	return fails
 
 
-func _smoke_saveload() -> void:
-	model.set_cable(Vector2i(10, 20), 1)
-	model.set_cable(Vector2i(-3, 7), 2)
-	GameClock.total_minutes = 3 * 1440.0 + 125.0  # day 3, 02:05
-	GameClock.speed = 3.0
-	var path := "user://smoke_save.json"
-	var save_err := SaveGame.save_to(path, model)
-	model = WorldModel.new()  # wipe state
-	GameClock.restore({"total_minutes": 0.0, "speed": 1.0})
-	var loaded: Dictionary = SaveGame.load_from(path)
-	var restored: WorldModel = loaded.get("model")
+# ─── Phase 3 acceptance scenarios ───
+
+## Wind-only town behind a tiny grid connection: outages must occur exactly
+## during the forced calm window; a battery bridges it (ROADMAP Phase 3).
+func _smoke_windless_week() -> void:
+	SidecarManager.load_config()
+	SidecarManager.start_all()
+	if not await _wait_power_healthy(180.0):
+		_fail("SMOKE_WINDLESS", "power health timeout")
+		return
+	var phases := {}
+	for with_battery: bool in [false, true]:
+		var result := await _run_windless_phase(42, with_battery)
+		phases["battery" if with_battery else "plain"] = result
+	var plain: Dictionary = phases["plain"]
+	var battery: Dictionary = phases["battery"]
 	var ok: bool = (
-		save_err == OK and loaded["ok"]
-		and restored.cables.size() == 2
-		and restored.cables[Vector2i(-3, 7)] == 2
-		and GameClock.day() == 3
-		and GameClock.time_of_day_string() == "02:05"
-		and is_equal_approx(GameClock.speed, 3.0)
+		plain["outage_min"] > 0 and plain["all_in_window"]
+		and plain["outage_before_calm"] == 0
+		and battery["outage_min"] == 0
 	)
-	print("SMOKE_SAVELOAD ", JSON.stringify({"ok": ok}))
+	print("SMOKE_WINDLESS ", JSON.stringify({"ok": ok,
+		"plain": plain, "battery": battery}))
+	SidecarManager.stop_all()
 	get_tree().quit(0 if ok else 1)
 
 
-# ─── benchmark mode ───
+func _run_windless_phase(weather_seed: int, with_battery: bool) -> Dictionary:
+	# fresh city
+	City.model = WorldModel.new()
+	City.money = 100_000_000
+	City.weather = WeatherSystem.new(weather_seed)
+	City.outage_minutes = {}
+	City.happiness = 100.0
+	City.tripped_tiles.clear()
+	City.grid_trip_until = -1
+	City.grid_capacity_override = 3.0  # kW — below even the night minimum
+	City.place_building("grid_connection", Vector2i(10, 10))
+	for x in range(12, 31):
+		City.build_cable(Vector2i(x, 10))
+	City.place_building("substation", Vector2i(31, 10))
+	City.place_building("wind_farm", Vector2i(24, 8))  # touches cable at (24,10)? no: (24,9),(25,9) adjacent
+	for x in range(26, 38):
+		City.build_road(Vector2i(x, 12))
+	for x in range(26, 38):
+		City.build_zone(Vector2i(x, 13))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("substation")[0], 6)
+	if with_battery:
+		City.place_building("battery", Vector2i(27, 9))  # adjacent to cable (27,10)
+	City._topo_dirty = true
+	if not await _wait_registered(120.0):
+		return {"error": "register timeout"}
 
-func _bench_tick(delta: float) -> void:
-	if _bench_warmup_frames > 0:
-		_bench_warmup_frames -= 1
+	# clock: start at the next full day boundary; calm 06:00-18:00 on day 1
+	var t0 := (int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES / 96) + 1) * 96
+	GameClock.restore({"total_minutes": t0 * float(GameClock.SIM_STEP_MINUTES), "speed": 0.0})
+	var calm_start := t0 + 24
+	var calm_end := t0 + 72
+	# scripted series: solid wind across the whole run, dead calm inside the
+	# window — "outages fire exactly when the weather series says calm"
+	# 7 m/s -> ~26 kW from the 300-kW farm: covers the town without the huge
+	# export that would overvolt this small feeder
+	City.weather.force_wind(t0 - 96, t0 + 192, 7.0)
+	City.weather.force_calm(calm_start, calm_end)
+	var unsupplied_steps: Array[int] = []
+	var slack_id: String = City.model.buildings_of_kind("grid_connection")[0]
+	var import_calm := [0.0, -999.0]   # min, max during calm
+	var import_windy := [0.0, -999.0]
+	var statuses := {}
+	var handler := func(t: int, result: Dictionary) -> void:
+		for zone_id: String in City.zone_supplied:
+			if not City.zone_supplied[zone_id]:
+				unsupplied_steps.append(t)
+				break
+		var status: String = result.get("status", "?")
+		statuses[status] = statuses.get(status, 0) + 1
+		var import_kw := float(result.get("devices", {}).get(slack_id, {}).get("output_kw", 0.0))
+		var bucket: Array = import_calm if (t >= calm_start and t < calm_end) else import_windy
+		bucket[0] = minf(bucket[0], import_kw)
+		bucket[1] = maxf(bucket[1], import_kw)
+	City.power_result.connect(handler)
+	Orchestrator.start()
+	GameClock.speed = 60.0
+	var end_t := t0 + 96  # one full day covering the calm window
+	var deadline := Time.get_ticks_msec() + 300_000
+	while City.current_t < end_t and Time.get_ticks_msec() < deadline:
+		await get_tree().create_timer(0.25).timeout
+	GameClock.pause()
+	Orchestrator.stop()
+	await get_tree().create_timer(1.5).timeout
+	City.power_result.disconnect(handler)
+	City.weather.clear_calm()
+
+	var all_in_window := true
+	var before_calm := 0
+	for t: int in unsupplied_steps:
+		if t < calm_start:
+			before_calm += 1
+		if t < calm_start or t > calm_end + City.REPAIR_STEPS + 2:
+			all_in_window = false
+	return {"outage_min": City.total_outage_minutes(),
+		"unsupplied_steps": unsupplied_steps.size(),
+		"all_in_window": all_in_window, "outage_before_calm": before_calm,
+		"calm": [calm_start, calm_end], "statuses": statuses,
+		"import_calm": import_calm, "import_windy": import_windy,
+		"events": City.events.size()}
+
+
+## Two feeders from the grid connection; the heavy one (140 houses behind two
+## substations) overloads past 120 %, trips, and blacks out ONLY its zones.
+func _smoke_overload() -> void:
+	SidecarManager.load_config()
+	SidecarManager.start_all()
+	if not await _wait_power_healthy(180.0):
+		_fail("SMOKE_OVERLOAD", "power health timeout")
 		return
-	if _frame_times.size() < _bench_paint_frames:
-		# simulate a fast drag: paint N tiles per frame in a snake pattern
-		for i in _bench_tiles_per_frame:
-			_paint_cable(_bench_cursor)
-			_bench_cursor += _bench_dir
-			if _bench_cursor.x >= 192:
-				_bench_dir = Vector2i(-1, 0)
-				_bench_cursor += Vector2i(0, 1)
-			elif _bench_cursor.x <= 64:
-				_bench_dir = Vector2i(1, 0)
-				_bench_cursor += Vector2i(0, 1)
-		cam.position = terrain_layer.map_to_local(_bench_cursor)
-		_frame_times.append(delta)
+	City.model = WorldModel.new()
+	City.money = 100_000_000
+	City.weather = WeatherSystem.new(42)
+	City.outage_minutes = {}
+	City.grid_capacity_override = 2000.0  # capacity is not under test here
+	City.place_building("grid_connection", Vector2i(10, 10))
+	# feeder A (east) -> sub1, light
+	for x in range(12, 18):
+		City.build_cable(Vector2i(x, 10))
+	City.place_building("substation", Vector2i(18, 10))
+	for x in range(14, 26):
+		City.build_road(Vector2i(x, 8))
+	for x in range(14, 26):
+		City.build_zone(Vector2i(x, 7))
+	# feeder B (south, then east) -> sub2 + sub3, heavy
+	for y in range(12, 16):
+		City.build_cable(Vector2i(10, y))
+	for x in range(11, 30):
+		City.build_cable(Vector2i(x, 15))
+	City.place_building("substation", Vector2i(20, 16))  # touches (20,15)
+	City.place_building("substation", Vector2i(30, 15))
+	for x in range(12, 34):
+		City.build_road(Vector2i(x, 18))
+		City.build_road(Vector2i(x, 21))
+		City.build_road(Vector2i(x, 24))
+	for x in range(12, 34):
+		for y in [19, 20, 22, 23]:  # every zoned row is road-adjacent
+			City.build_zone(Vector2i(x, y))
+	var subs := City.model.buildings_of_kind("substation")
+	# heavy district spawns FIRST so sub1 cannot eat its candidate tiles
+	var spawned := [City.spawn_houses_bulk(subs[1], 60),
+		City.spawn_houses_bulk(subs[2], 60), City.spawn_houses_bulk(subs[0], 20)]
+	City._topo_dirty = true
+	if not await _wait_registered(120.0):
+		_fail("SMOKE_OVERLOAD", "register timeout")
 		return
-	_bench_finish()
 
+	var zone1 := "z_" + subs[0]
+	# NOTE: GDScript lambdas capture scalars BY VALUE — mutate a shared
+	# Dictionary (reference semantics) or the counters silently stay 0.
+	var counters := {"trips": 0, "max_loading": 0.0, "steps": 0}
+	City.event_logged.connect(func(event: Dictionary) -> void:
+		if event["kind"] == "line_trip":
+			counters["trips"] += 1)
+	City.power_result.connect(func(_t: int, result: Dictionary) -> void:
+		counters["steps"] += 1
+		for edge_id: String in result.get("edges", {}):
+			counters["max_loading"] = maxf(counters["max_loading"],
+				float(result["edges"][edge_id].get("loading_percent", 0.0))))
 
-func _bench_finish() -> void:
-	var sorted := _frame_times.duplicate()
-	sorted.sort()
-	var total := 0.0
-	for t: float in _frame_times:
-		total += t
-	var avg := total / _frame_times.size()
-	var p50: float = sorted[int(sorted.size() * 0.50)]
-	var p99: float = sorted[mini(int(sorted.size() * 0.99), sorted.size() - 1)]
+	# start at 17:30 — into the evening peak
+	GameClock.restore({"total_minutes": 17.5 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	GameClock.speed = 30.0
+	var end_t := int(21.0 * 60.0 / GameClock.SIM_STEP_MINUTES)  # run to 21:00
+	var deadline := Time.get_ticks_msec() + 300_000
+	while City.current_t < end_t and Time.get_ticks_msec() < deadline:
+		await get_tree().create_timer(0.25).timeout
+	GameClock.pause()
+	Orchestrator.stop()
+	await get_tree().create_timer(1.5).timeout
 
-	# save/load round-trip check on the freshly painted model
-	var restored := WorldModel.from_json(model.to_json())
+	var heavy_outage: int = City.outage_minutes.get("z_" + subs[1], 0) \
+		+ City.outage_minutes.get("z_" + subs[2], 0)
+	var light_outage: int = City.outage_minutes.get(zone1, 0)
 	var report := {
-		"frames": _frame_times.size(),
-		"tiles_painted": model.cables.size(),
-		"avg_ms": avg * 1000.0,
-		"p50_ms": p50 * 1000.0,
-		"p99_ms": p99 * 1000.0,
-		"worst_ms": sorted[-1] * 1000.0,
-		"avg_fps": 1.0 / avg,
-		"roundtrip_ok": restored.equals(model),
+		"ok": counters["trips"] >= 1 and counters["max_loading"] > 120.0
+			and heavy_outage > 0 and light_outage == 0,
+		"trip_events": counters["trips"],
+		"max_loading": snappedf(counters["max_loading"], 0.1),
+		"heavy_feeder_outage_min": heavy_outage, "light_feeder_outage_min": light_outage,
+		"steps_seen": counters["steps"], "houses_spawned": spawned,
 	}
-	var out := _bench_out if not _bench_out.is_empty() else "user://spike_a_report.json"
-	var f := FileAccess.open(out, FileAccess.WRITE)
-	f.store_string(JSON.stringify(report, "  "))
-	f.close()
-	print("SPIKE_A_REPORT ", JSON.stringify(report))
-	get_tree().quit(0 if report.roundtrip_ok else 1)
+	print("SMOKE_OVERLOAD ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)

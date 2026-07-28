@@ -5,13 +5,18 @@ Deterministic, stdlib-only. Rerun after changing any parameter:
 
     python gen_power_fixture.py            # writes power_fixture.json here
 
-Network (contract §3.1, authored per the Phase-2 task):
+Network (contract §3.1, authored per the Phase-2 task; battery added with
+the Phase-3 backend slice / contract 1.1):
     5 buses ``b0``-``b4``, one 0.4-kV chain of NAYY 4x150 SE segments
     (0.3 km hops), 10 zones spread 3/2/2/3 over ``b1``-``b4``, devices:
     slack@b0 (vm_pu 1.0) · generator gen1@b1 (p_max_kw 500, dispatched
     const 200 kW) · pv pv1@b3 (p_rated_kw 200, midday bell) · wind
     wind1@b4 (p_rated_kw 300, varied series) · coupling_load cpl_heat@b2
-    (never fed by the suite — held at 0). 96 steps/day, dt_s 900.
+    (never fed by the suite — held at 0) · battery bat1@b2 (e_kwh 200,
+    p_max_kw 100, charge-at-midday / discharge-in-the-evening dispatch,
+    0 kW at the final step so the golden slack band is untouched; sized so
+    neither the p_max nor the SoC bounds ever clamp — SoC runs 0.5 → ~0.95
+    → ~0.16, inside the [0, 1] golden). 96 steps/day, dt_s 900.
 
 Boundary script: one full day. Zone demands 10-40 kW with a morning/evening
 double peak; the b1 zones keep a late-evening plateau so the constant
@@ -95,6 +100,21 @@ def wind_series() -> "list[float]":
     return out
 
 
+def battery_series() -> "list[float]":
+    """Signed battery dispatch (contract §3.1: + discharges, − charges):
+    soak up part of the midday PV surplus (−30-kW bell at noon), release it
+    into the evening peak (+50-kW bell at 18:30). Amplitudes fit inside the
+    200-kWh store starting half full (≈ +89 kWh stored midday at charge
+    efficiency 0.95, ≈ −157 kWh discharged in the evening — no clamping),
+    and the tails snap to 0 so the final step (t=95) dispatches exactly
+    0 kW, leaving the calibrated golden slack band untouched."""
+    out = []
+    for t in range(STEPS):
+        p = -30.0 * bell(t, 48, 5.0) + 50.0 * bell(t, 74, 5.0)
+        out.append(_r3(p) if abs(p) >= 0.5 else 0.0)
+    return out
+
+
 # ------------------------------------------------------------------- weather
 
 def weather() -> dict:
@@ -141,12 +161,15 @@ def topology() -> dict:
             {"id": "wind1", "kind": "wind", "node": "b4",
              "params": {"p_rated_kw": 300}},
             {"id": "cpl_heat", "kind": "coupling_load", "node": "b2"},
+            {"id": "bat1", "kind": "battery", "node": "b2",
+             "params": {"e_kwh": 200, "p_max_kw": 100}},
         ],
     }
 
 
 def main() -> None:
     wind = wind_series()
+    bat = battery_series()
     fixture = {
         "topology": topology(),
         "script": {
@@ -158,12 +181,16 @@ def main() -> None:
                 "gen1": {"p_kw": {"const": 200.0}},
                 "pv1": {"p_kw": pv_series()},
                 "wind1": {"p_kw": wind},
+                "bat1": {"p_kw": bat},
             },
             "weather": weather(),
         },
         "allowed_statuses": ["converged"],
         # Evaluated on the FINAL step (t=95, 23:45): balanced by design —
         # slack band calibrated against a live rtpowerflow run (see git log).
+        # bat1 dispatches 0 kW at t=95 (battery_series tails snap to 0), so
+        # the pre-battery calibration stays valid; its SoC bound is the
+        # contract guarantee soc ∈ [0, 1].
         "golden": {
             **{f"zones.{zid}.supplied": [1.0, 1.0] for zid in ZONE_BUS},
             **{f"zones.{zid}.detail.v_pu": [0.93, 1.02] for zid in ZONE_BUS},
@@ -171,6 +198,8 @@ def main() -> None:
             "devices.pv1.output_kw": [-0.01, 0.01],
             "devices.wind1.output_kw": [wind[-1] - 0.01, wind[-1] + 0.01],
             "devices.cpl_heat.output_kw": [-0.01, 0.01],
+            "devices.bat1.output_kw": [-0.01, 0.01],
+            "devices.bat1.soc": [0.0, 1.0],
             "devices.slack.output_kw": [-80.0, 60.0],
         },
         # Evaluated by the GAME's cosim e2e at the same step — but with live
@@ -185,6 +214,8 @@ def main() -> None:
             "devices.pv1.output_kw": [-0.01, 0.01],
             "devices.wind1.output_kw": [wind[-1] - 0.01, wind[-1] + 0.01],
             "devices.cpl_heat.output_kw": [-90.0, -10.0],
+            "devices.bat1.output_kw": [-0.01, 0.01],
+            "devices.bat1.soc": [0.0, 1.0],
             "devices.slack.output_kw": [-170.0, 60.0],
         },
         "patch_probe": {"id": "gen_probe", "kind": "generator", "node": "b2",
@@ -194,9 +225,17 @@ def main() -> None:
                    newline="\n")
     total0 = sum(zone_demand(i)[0] for i in range(10))
     total95 = sum(zone_demand(i)[-1] for i in range(10))
+    # battery SoC dry run (backend physics: charge eff 0.95, discharge
+    # lossless, start at 0.5 * e_kwh) — proves the series never clamps
+    soc, lo, hi = 100.0, 100.0, 100.0
+    for p in bat:
+        soc += (-p * 0.95 if p < 0 else -p) * DT_S / 3600.0
+        lo, hi = min(lo, soc), max(hi, soc)
     print(f"wrote {OUT}")
     print(f"  zone demand: t=0 {total0:.1f} kW · t=95 {total95:.1f} kW")
     print(f"  wind: t=0 {wind[0]:.1f} kW · t=95 {wind[-1]:.1f} kW")
+    print(f"  battery: t=95 {bat[-1]:.1f} kW · SoC {lo:.1f}..{hi:.1f} kWh "
+          f"(bounds 0/200) · final {soc:.1f} kWh")
 
 
 if __name__ == "__main__":

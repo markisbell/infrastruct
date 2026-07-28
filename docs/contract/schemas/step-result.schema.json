@@ -32,6 +32,17 @@
         }
       }
     },
+    "edges": {
+      "type": "object",
+      "description": "optional since 1.1: per-edge solved quantities for overlays; ids follow native element order (L<idx> lines, T<idx> trafos)",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "loading_percent": {"type": "number", "minimum": 0},
+          "p_from_kw": {"type": "number"}
+        }
+      }
+    },
     "coupling_out": {
       "type": "object",
       "additionalProperties": {

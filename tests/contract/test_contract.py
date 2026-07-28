@@ -8,7 +8,9 @@ asserts contract v1 behavior IN ORDER:
   a. /gb/version handshake (contract major 1, external_clock true)
   b. POST /gb/net/reset with the fixture topology
   c. the fixture script, stepped over WebSocket /gb/ws, every result validated
-     against docs/contract/schemas/step-result.schema.json
+     against docs/contract/schemas/step-result.schema.json; when a result
+     carries the optional 'edges' field (contract 1.1) every entry must have a
+     numeric loading_percent >= 0
   d. idempotent re-send of the last step over HTTP; out-of-order -> 409 / WS
      error frame
   e. GET /gb/result/latest equals the last result
@@ -284,6 +286,17 @@ def test_contract(entry: dict, tmp_path: Path) -> None:
                 assert not errors, (
                     f"step {t}: result violates step-result.schema.json:\n" +
                     "\n".join(f"  - {e.json_path}: {e.message}" for e in errors))
+                # edges (optional since contract 1.1): when present, every
+                # entry must carry a numeric loading_percent >= 0 (v1.md §4)
+                if "edges" in result:
+                    assert isinstance(result["edges"], dict), \
+                        f"step {t}: 'edges' must be an object: {result['edges']!r}"
+                    for eid, edge in result["edges"].items():
+                        lp = edge.get("loading_percent") if isinstance(edge, dict) else None
+                        assert isinstance(lp, (int, float)) and not isinstance(lp, bool) \
+                            and lp >= 0, (
+                            f"step {t}: edges[{eid!r}] needs a numeric "
+                            f"loading_percent >= 0, got {edge!r}")
                 last_req, last_result = req, result
 
             # --- d. idempotency + out-of-order -----------------------------

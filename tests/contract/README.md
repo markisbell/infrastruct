@@ -109,12 +109,14 @@ Fixtures in this directory:
   weather ramp). Generated — never hand-edit — by
   `fixtures/gen_heat_fixture.py` (deterministic, stdlib-only).
 - `power_fixture.json` — rtpowerflow: 5-bus 0.4-kV NAYY-chain feeder, 10
-  zones (3/2/2/3 over b1–b4), slack/generator/pv/wind/coupling_load devices,
-  one scripted 96-step day (double-peak zone demands 10–40 kW, midday PV
-  bell, varied wind, weather series). Generated — never hand-edit — by
-  `fixtures/gen_power_fixture.py` (deterministic, stdlib-only); the golden
-  window (final-step zone voltages + slack band) is calibrated against a
-  live rtpowerflow run.
+  zones (3/2/2/3 over b1–b4), slack/generator/pv/wind/coupling_load/battery
+  devices, one scripted 96-step day (double-peak zone demands 10–40 kW,
+  midday PV bell, varied wind, weather series; the battery bat1@b2 —
+  e_kwh 200, p_max_kw 100 — charges at midday and discharges into the
+  evening peak, back at 0 kW on the final step). Generated — never
+  hand-edit — by `fixtures/gen_power_fixture.py` (deterministic,
+  stdlib-only); the golden window (final-step zone voltages + slack band)
+  is calibrated against a live rtpowerflow run.
 
 ## Mock backend
 

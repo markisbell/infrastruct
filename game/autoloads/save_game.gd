@@ -1,19 +1,20 @@
 extends Node
-## SaveGame — versioned save/load envelope (ROADMAP Phase 1 task 3).
-## Persists the logical world model (ADR-002) + GameClock state. Solver-side
-## state is deliberately NOT saved: networks are rebuilt from the model via
-## /gb/net/reset on load (ROADMAP Phase 8 hardening owns device SoC replay).
+## SaveGame — versioned save/load envelope. v2 (Phase 3): world model v2 +
+## city state (money/happiness/outages/weather seed) + clock. Solver-side
+## state is NOT saved: networks rebuild from the model via /gb/net/reset on
+## load (device SoC replay is Phase 8 hardening).
 
-const ENVELOPE_VERSION := 1
+const ENVELOPE_VERSION := 2
 const DEFAULT_PATH := "user://save.json"
 
 
-func save_to(path: String, model: WorldModel) -> Error:
+func save_to(path: String, model: WorldModel = null) -> Error:
 	var envelope := {
 		"version": ENVELOPE_VERSION,
 		"saved_at_unix": int(Time.get_unix_time_from_system()),
 		"clock": GameClock.serialize(),
-		"model": JSON.parse_string(model.to_json()),
+		"model": JSON.parse_string((model if model else City.model).to_json()),
+		"city": City.serialize(),
 	}
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
@@ -24,7 +25,7 @@ func save_to(path: String, model: WorldModel) -> Error:
 
 
 ## Returns {"ok": bool, "model": WorldModel?, "error": String?}.
-## Restores GameClock as a side effect when ok.
+## Restores GameClock + City state as a side effect when ok.
 func load_from(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {"ok": false, "error": "no save at " + path}
@@ -37,4 +38,6 @@ func load_from(path: String) -> Dictionary:
 		return {"ok": false, "error": "unsupported save version %d" % version}
 	var model := WorldModel.from_json(JSON.stringify(envelope.get("model", {})))
 	GameClock.restore(envelope.get("clock", {}))
+	City.model = model
+	City.restore(envelope.get("city", {}))  # v1 saves: defaults
 	return {"ok": true, "model": model}
