@@ -395,12 +395,37 @@ func _build_building_visual(kind: String) -> Node3D:
 		"heat_storage":
 			return _instance_glb("city-kit-industrial/Models/GLB format/detail-tank.glb", 0.85)
 		"heat_exchanger":
-			return _instance_glb("factory-kit/Models/GLB format/machine-bed.glb", 0.7)
+			return _make_transfer_station()
 		_:
 			return _instance_glb("city-kit-industrial/Models/GLB format/building-a.glb", 1.9)
 
 
 # ─── procedural fills (no kit model exists; same flat-shaded style) ───
+
+## Heat transfer station (user pick from the model gallery): grey hut with
+## an orange roof band, vent, and red/blue stubs that plug into the double
+## pipe — rotate with R so the stubs face your line.
+func _make_transfer_station() -> Node3D:
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(0.55, 0.5, 0.45), Color(0.72, 0.74, 0.78),
+		Vector3(0, 0.25, 0)))
+	node.add_child(_box(Vector3(0.57, 0.08, 0.47), Color(0.85, 0.45, 0.2),
+		Vector3(0, 0.54, 0)))
+	node.add_child(_box(Vector3(0.12, 0.2, 0.12), Color(0.5, 0.52, 0.56),
+		Vector3(0.15, 0.68, 0.1)))
+	for pair: Array in [[PIPE_SUPPLY_COLOR, 0.13], [PIPE_RETURN_COLOR, -0.13]]:
+		var stub := MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.055
+		cyl.bottom_radius = 0.055
+		cyl.height = 0.5
+		stub.mesh = cyl
+		stub.rotation_degrees.x = 90
+		stub.position = Vector3(pair[1], PIPE_HEIGHT, 0.4)
+		stub.material_override = _flat(pair[0])
+		node.add_child(stub)
+	return node
+
 
 func _make_substation() -> Node3D:
 	var node := Node3D.new()

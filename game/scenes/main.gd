@@ -20,6 +20,8 @@ func _ready() -> void:
 			smoke = arg.trim_prefix("--smoke=")
 		elif arg.begins_with("--screenshot="):
 			_screenshot_path = arg.trim_prefix("--screenshot=")
+		elif arg.begins_with("--gallery="):
+			_gallery_path = arg.trim_prefix("--gallery=")
 
 	view = CityView.new()
 	add_child(view)
@@ -29,6 +31,9 @@ func _ready() -> void:
 		return
 	if _screenshot_path != "":
 		_take_screenshot()
+		return
+	if _gallery_path != "":
+		_take_gallery()
 		return
 	match smoke:
 		"sidecars":
@@ -221,6 +226,54 @@ func _take_screenshot() -> void:
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)
 	get_tree().quit(0)
+
+
+# ─── model gallery (art-direction picker, e.g. heat exchanger candidates) ───
+
+var _gallery_path := ""
+
+
+func _take_gallery() -> void:
+	var factory := "factory-kit/Models/GLB format/"
+	var candidates: Array = [
+		["1 machine-bed (current)", factory + "machine-bed.glb", 0.7],
+		["2 machine-connection-pipe", factory + "machine-connection-pipe.glb", 0.8],
+		["3 pipe-large-valve", factory + "pipe-large-valve.glb", 0.8],
+		["4 hopper-round", factory + "hopper-round.glb", 0.7],
+		["5 piston-round", factory + "piston-round.glb", 0.7],
+		["6 structure-yellow-short", factory + "structure-yellow-short.glb", 0.8],
+	]
+	var x := 118
+	# short lead-in double pipe so candidates are seen in context
+	for lead_x in range(x - 3, x + candidates.size() * 3 + 2):
+		City.model.set_heat_pipe(Vector2i(lead_x, 121), 1)
+	for entry: Array in candidates:
+		var node: Node3D = view._instance_glb(entry[1], entry[2])
+		node.position = Vector3(x + 0.5, 0, 120.5)
+		view.add_child(node)
+		_gallery_label(entry[0], Vector3(x + 0.5, 1.3, 120.5))
+		x += 3
+	# 7: the transfer station (now the shipped heat exchanger visual)
+	var station: Node3D = view._make_transfer_station()
+	station.position = Vector3(x + 0.5, 0, 120.5)
+	view.add_child(station)
+	_gallery_label("7 procedural transfer station", Vector3(x + 0.5, 1.3, 120.5))
+	view.redraw()
+	view.focus_tile(Vector2i(118 + candidates.size() * 3 / 2, 122), 13.0)
+	await get_tree().create_timer(1.0).timeout
+	get_viewport().get_texture().get_image().save_png(_gallery_path)
+	print("GALLERY saved to ", _gallery_path)
+	get_tree().quit(0)
+
+
+func _gallery_label(text: String, pos: Vector3) -> void:
+	var label := Label3D.new()
+	label.text = text
+	label.font_size = 110
+	label.outline_size = 22
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.position = pos
+	view.add_child(label)
 
 
 # ─── shared smoke helpers ───
