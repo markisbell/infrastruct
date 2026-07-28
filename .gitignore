@@ -15,3 +15,4 @@ venv/
 *.local.json
 tests/e2e/out/
 orchestration/logs/
+game/reports/
