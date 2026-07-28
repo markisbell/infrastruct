@@ -1,0 +1,49 @@
+{
+  "topology": {
+    "contract": "1.0",
+    "network_kind": "power",
+    "name": "contract_mock_fixture",
+    "steps_per_day": 96,
+    "native": {
+      "note": "the mock backend fabricates results and ignores `native`; a trivial placeholder keeps the document schema-valid"
+    },
+    "zones": [
+      {"id": "z0", "node": "b1"},
+      {"id": "z1", "node": "b2"}
+    ],
+    "devices": [
+      {"id": "slack", "kind": "slack", "node": "b0", "params": {"vm_pu": 1.0}},
+      {"id": "gen1", "kind": "generator", "node": "b1", "params": {"p_max_kw": 500}}
+    ]
+  },
+  "script": {
+    "steps": 8,
+    "dt_s": 900,
+    "zone_demand_kw": {
+      "z0": {"const": 120.0},
+      "z1": [40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0]
+    },
+    "device_setpoints": {
+      "gen1": {"p_kw": {"const": 100.0}}
+    },
+    "weather": {
+      "wind_ms": {"const": 6.0},
+      "ghi_wm2": {"const": 350.0},
+      "temp_c": {"const": 10.0}
+    }
+  },
+  "allowed_statuses": ["converged"],
+  "golden": {
+    "zones.z0.supplied": [1.0, 1.0],
+    "zones.z1.supplied": [1.0, 1.0],
+    "zones.z0.detail.v_pu": [0.9, 1.05],
+    "devices.gen1.output_kw": [99.9, 100.1],
+    "devices.slack.output_kw": [94.9, 95.1]
+  },
+  "patch_probe": {
+    "id": "probe_gen",
+    "kind": "generator",
+    "node": "b2",
+    "params": {"p_max_kw": 50}
+  }
+}

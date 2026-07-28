@@ -61,8 +61,13 @@ func _ready() -> void:
 			_bench_out = arg.trim_prefix("--out=")
 		elif arg.begins_with("--smoke="):
 			smoke = arg.trim_prefix("--smoke=")
+		elif arg.begins_with("--screenshot="):
+			_screenshot_path = arg.trim_prefix("--screenshot=")
 	if _bench:
 		cam.position = terrain_layer.map_to_local(_bench_cursor)
+		return
+	if _screenshot_path != "":
+		_take_screenshot()
 		return
 
 	match smoke:
@@ -72,6 +77,10 @@ func _ready() -> void:
 			_smoke_resilience()
 		"saveload":
 			_smoke_saveload()
+		"cosim":
+			_smoke_cosim(false)
+		"cosim-kill":
+			_smoke_cosim(true)
 		_:
 			# normal game run: supervise the backends + debug panel
 			if SidecarManager.load_config():
@@ -167,6 +176,33 @@ func _unhandled_input(event: InputEvent) -> void:
 				_save_to(_save_path())
 			KEY_F6:
 				_load_from(_save_path())
+			KEY_F1:
+				if _debug_panel:
+					_debug_panel.visible = not _debug_panel.visible
+			KEY_F2:
+				# debug console: dump the latest contract results per network
+				var dump := {}
+				for id: String in Orchestrator.networks:
+					dump[id] = Orchestrator.latest(id)
+				var f := FileAccess.open("user://debug_dump.json", FileAccess.WRITE)
+				f.store_string(JSON.stringify(dump, "  "))
+				f.close()
+				print("debug: results dumped to user://debug_dump.json")
+			KEY_F3:
+				# debug console: force one sim-step while paused
+				GameClock.total_minutes += GameClock.SIM_STEP_MINUTES
+				var forced := int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES)
+				Orchestrator._on_sim_step(forced)
+				print("debug: forced sim-step ", forced)
+			KEY_F4:
+				# debug console: toggle a cold-snap weather override
+				if Orchestrator.boundary_provider is FixtureProvider:
+					var provider: FixtureProvider = Orchestrator.boundary_provider
+					if provider.weather_override.is_empty():
+						provider.weather_override = {"temp_c": -12.0, "wind_ms": 1.0}
+					else:
+						provider.weather_override = {}
+					print("debug: weather override = ", provider.weather_override)
 
 
 func _mouse_tile() -> Vector2i:
@@ -197,6 +233,28 @@ func _load_from(path: String) -> void:
 	if loaded["ok"]:
 		model = loaded["model"]
 		_rebuild_network_view()
+
+
+# ─── screenshot mode (pre-alpha look, no sidecars) ───
+
+var _screenshot_path := ""
+
+
+func _take_screenshot() -> void:
+	# paint a small demo network so the shot shows content
+	for i in 42:
+		_paint_cable(Vector2i(118 + i, 128))
+	for i in 26:
+		_paint_cable(Vector2i(138, 110 + i))
+	for i in 18:
+		_paint_cable(Vector2i(150 + i, 118))
+	cam.position = terrain_layer.map_to_local(Vector2i(140, 124))
+	cam.zoom = Vector2(1.4, 1.4)
+	await get_tree().create_timer(1.0).timeout  # let a few frames render
+	var img := get_viewport().get_texture().get_image()
+	img.save_png(_screenshot_path)
+	print("SCREENSHOT saved to ", _screenshot_path)
+	get_tree().quit(0)
 
 
 # ─── sidecar supervision UI ───
@@ -239,15 +297,14 @@ func _smoke_sidecars() -> void:
 	var ok := true
 	var per_sidecar := {}
 	for id: String in SidecarManager.ids():
+		# spawn + health + handshake only — contract stepping (which requires a
+		# /gb/net/reset first) is covered end-to-end by --smoke=cosim
 		var handshake_ok: bool = await CosimBridge.handshake(id)
-		var frame := await CosimBridge.step(id)  # first step pays the numba JIT
-		var stepped: bool = frame.get("_status", 0) == 200 and frame.get("converged", false)
 		per_sidecar[id] = {
 			"handshake": handshake_ok,
-			"step_converged": stepped,
 			"solver": CosimBridge.info.get(id, {}).get("solver", "?"),
 		}
-		ok = ok and handshake_ok and stepped
+		ok = ok and handshake_ok
 	print("SMOKE_SIDECARS ", JSON.stringify({"ok": ok, "sidecars": per_sidecar}))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if ok else 1)
@@ -280,6 +337,139 @@ func _smoke_resilience() -> void:
 	print("SMOKE_RESILIENCE ", JSON.stringify({"ok": recovered, "saw_down": saw_down}))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if recovered else 1)
+
+
+## Phase 2 acceptance e2e (ROADMAP): boot with the fixture town, run a full
+## in-game day (96 sim-steps) against BOTH real backends, assert: no missed
+## steps (=> one-step lag held), statuses within the fixture's allowance,
+## golden ranges on the final results, coupling routed heat->power.
+## kill_mode: the harness kills the heat backend mid-run; assert disturbance
+## event + reset-recovery + post-recovery stepping, power unaffected.
+func _smoke_cosim(kill_mode: bool) -> void:
+	var provider := FixtureProvider.load_default(SidecarManager.repo_root)
+	if provider.fixtures.size() < 2:
+		print("SMOKE_COSIM ", JSON.stringify(
+			{"ok": false, "reason": "fixtures missing (need power+heat)"}))
+		get_tree().quit(1)
+		return
+	SidecarManager.load_config()
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(180.0):
+		print("SMOKE_COSIM ", JSON.stringify({"ok": false, "reason": "health timeout"}))
+		SidecarManager.stop_all()
+		get_tree().quit(1)
+		return
+
+	Orchestrator.boundary_provider = provider
+	var events: Array[Dictionary] = []
+	Orchestrator.supply_event.connect(
+		func(network: String, kind: String, severity: String, data: Dictionary) -> void:
+			events.append({"network": network, "kind": kind, "severity": severity,
+				"t": data.get("t", -1)}))
+	var n_steps := provider.steps("power")
+	var seen := {"power": [], "heat": []}  # per-network list of completed t (order check)
+	var statuses := {"power": {}, "heat": {}}
+	var final_results := {}  # network -> result at t == n_steps-1 (golden basis)
+	Orchestrator.step_completed.connect(
+		func(network: String, t: int, result: Dictionary) -> void:
+			seen[network].append(t)
+			if t == n_steps - 1:
+				final_results[network] = result
+			var status: String = result.get("status", "?")
+			statuses[network][status] = statuses[network].get(status, 0) + 1)
+
+	var registered := true
+	for id: String in ["power", "heat"]:
+		var handshake_ok := await CosimBridge.handshake(id)
+		if not handshake_ok:
+			print("register diag: handshake failed for ", id, ": ",
+				JSON.stringify(CosimBridge.info.get(id, {})))
+		var reset_ok := handshake_ok and await Orchestrator.register(id, provider.topology(id))
+		registered = registered and reset_ok
+	if not registered:
+		print("SMOKE_COSIM ", JSON.stringify({"ok": false, "reason": "register failed"}))
+		SidecarManager.stop_all()
+		get_tree().quit(1)
+		return
+
+	GameClock.restore({"total_minutes": 0.0, "speed": 0.0})
+	Orchestrator.start()
+	if kill_mode:
+		print("SMOKE_READY ", JSON.stringify({"ports": [8010, 8011]}))
+	# kill mode runs slower so the backend can restart inside the window
+	GameClock.speed = 15.0 if kill_mode else 60.0
+
+	var deadline := Time.get_ticks_msec() + (420_000 if kill_mode else 240_000)
+	while Time.get_ticks_msec() < deadline:
+		var power_done: bool = (seen["power"] as Array).size() >= n_steps
+		var heat_done: bool = (seen["heat"] as Array).size() >= n_steps \
+			or (kill_mode and GameClock.total_minutes >= n_steps * GameClock.SIM_STEP_MINUTES)
+		if power_done and heat_done:
+			break
+		await get_tree().create_timer(0.25).timeout
+	GameClock.pause()
+	Orchestrator.stop()
+	# drain any in-flight request without dispatching further steps
+	await get_tree().create_timer(2.0).timeout
+
+	var report := {"ok": true, "steps_target": n_steps, "events": events.size()}
+	for id: String in ["power", "heat"]:
+		var ts: Array = seen[id]
+		var monotonic := true
+		for i in range(1, ts.size()):
+			monotonic = monotonic and ts[i] > ts[i - 1]
+		var bad_status := 0
+		for status: String in statuses[id]:
+			if status not in provider.allowed_statuses(id):
+				bad_status += statuses[id][status]
+		var golden_fails := _golden_check(provider.golden(id),
+			final_results.get(id, Orchestrator.latest(id)))
+		report[id] = {
+			"completed": ts.size(), "missed": Orchestrator.networks[id]["missed"],
+			"monotonic": monotonic, "statuses": statuses[id],
+			"bad_status_steps": bad_status, "golden_fails": golden_fails,
+		}
+		if kill_mode and id == "heat":
+			var down := events.any(func(e: Dictionary) -> bool:
+				return e.kind == "backend_down" and e.network == "heat")
+			var recovered := events.any(func(e: Dictionary) -> bool:
+				return e.kind == "backend_recovered" and e.network == "heat")
+			var resumed: bool = not ts.is_empty() \
+				and ts.back() > (ts[0] + ts.size())  # stepped again after a gap
+			report["heat"]["down_event"] = down
+			report["heat"]["recovered_event"] = recovered
+			report["heat"]["resumed_after_gap"] = resumed
+			report["ok"] = report["ok"] and down and recovered and resumed and monotonic
+		else:
+			report["ok"] = report["ok"] and ts.size() >= n_steps \
+				and Orchestrator.networks[id]["missed"] == 0 and monotonic \
+				and bad_status == 0 and golden_fails.is_empty()
+	if kill_mode:
+		# power must have sailed through the heat outage untouched
+		report["ok"] = report["ok"] and report["power"]["completed"] >= n_steps - 2 \
+			and report["power"]["bad_status_steps"] == 0
+	var tag := "SMOKE_COSIM_KILL " if kill_mode else "SMOKE_COSIM "
+	print(tag, JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+func _golden_check(golden: Dictionary, result: Dictionary) -> Array:
+	var fails := []
+	for path: String in golden:
+		var bounds: Array = golden[path]
+		var value: Variant = result
+		for key: String in path.split("."):
+			if value is Dictionary and (value as Dictionary).has(key):
+				value = value[key]
+			else:
+				value = null
+				break
+		if value == null or not (value is float or value is int):
+			fails.append({"path": path, "error": "missing"})
+		elif float(value) < float(bounds[0]) or float(value) > float(bounds[1]):
+			fails.append({"path": path, "value": value, "bounds": bounds})
+	return fails
 
 
 func _smoke_saveload() -> void:

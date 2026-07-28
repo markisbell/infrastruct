@@ -1,0 +1,42 @@
+{
+  "backends": [
+    {
+      "id": "power",
+      "python": "../../.venv/Scripts/python.exe",
+      "module": "netzsim.main",
+      "cwd": "../../backends/rtpowerflow",
+      "port": 8020,
+      "env": {
+        "NETZSIM_EXTERNAL_CLOCK": "true",
+        "NETZSIM_PORT": "8020",
+        "NETZSIM_HOST": "127.0.0.1"
+      },
+      "fixture": "fixtures/power_fixture.json"
+    },
+    {
+      "id": "heat",
+      "python": "../../.venv-heat/Scripts/python.exe",
+      "module": "rtheatflow.main",
+      "cwd": "../../backends/rtheatflow",
+      "port": 8021,
+      "env": {
+        "RTHEATFLOW_EXTERNAL_CLOCK": "true",
+        "RTHEATFLOW_PORT": "8021",
+        "RTHEATFLOW_HOST": "127.0.0.1"
+      },
+      "fixture": "fixtures/heat_fixture.json"
+    },
+    {
+      "id": "mock",
+      "python": "../../.venv/Scripts/python.exe",
+      "module": "mock_backend",
+      "cwd": ".",
+      "port": 8025,
+      "env": {
+        "MOCK_PORT": "8025",
+        "MOCK_HOST": "127.0.0.1"
+      },
+      "fixture": "fixtures/mock_fixture.json"
+    }
+  ]
+}

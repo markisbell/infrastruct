@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "simgames/contract/v1/step-request",
+  "title": "Step request (POST /gb/step body; one WS /gb/ws text frame)",
+  "type": "object",
+  "required": ["t", "dt_s"],
+  "properties": {
+    "t": {"type": "integer", "minimum": 0, "description": "game sim-step counter; must be last_t or last_t+1 (any value after reset)"},
+    "dt_s": {"type": "integer", "minimum": 60, "maximum": 3600},
+    "weather": {
+      "type": "object",
+      "properties": {
+        "wind_ms": {"type": "number", "minimum": 0},
+        "ghi_wm2": {"type": "number", "minimum": 0},
+        "temp_c": {"type": "number", "minimum": -50, "maximum": 60}
+      }
+    },
+    "zone_demand": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["value"],
+        "properties": {"value": {"type": "number", "minimum": 0,
+          "description": "power: kW(el) · heat: kW(th) · water: m3/h. Missing zone => sample-and-hold."}}
+      }
+    },
+    "device_setpoints": {
+      "type": "object",
+      "additionalProperties": {"type": "object",
+        "description": "kind-specific, see v1.md §3.1 table (e.g. {p_kw} or {q_kw}); clamped to bounds with a 'clamped' violation"}
+    },
+    "coupling_in": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {"p_kw": {"type": "number"}},
+        "description": "routed onto coupling_load devices; positive = draws from this network"
+      }
+    }
+  }
+}

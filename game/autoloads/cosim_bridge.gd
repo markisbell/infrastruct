@@ -1,29 +1,42 @@
 extends Node
-## CosimBridge — the single game↔solver surface (ROADMAP §2.3, ADR-003).
-## Phase 1 slice: HTTP control plane (version handshake, /gb/step).
-## The persistent WebSocket step channel arrives with contract v1 (Phase 2);
-## per ADR-003 the HTTP step path stays as the debugging fallback.
+## CosimBridge — the single game↔solver surface (ROADMAP §2.3, contract v1).
+## Control plane over HTTP (handshake, net/reset, net/patch); step channel over
+## a persistent WebSocket /gb/ws per backend (ADR-003), with the HTTP step as
+## automatic fallback while the socket is down.
 
 signal handshake_completed(id: String, ok: bool, info: Dictionary)
 
-const EXPECTED_CONTRACT := "0.1"
+const EXPECTED_CONTRACT := "1.0"
 const STEP_TIMEOUT_S := 60.0  # first solve after net load pays the numba JIT
+const WS_CONNECT_TIMEOUT_S := 5.0
 
 ## id -> /gb/version payload of successfully handshaken backends
 var info := {}
+## id -> {peer: WebSocketPeer, pending: bool, buffer: String}
+var _ws := {}
+
+
+func _process(_delta: float) -> void:
+	for id: String in _ws:
+		var ws: Dictionary = _ws[id]
+		var peer: WebSocketPeer = ws["peer"]
+		peer.poll()
+		if peer.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			while peer.get_available_packet_count() > 0:
+				ws["buffer"] = peer.get_packet().get_string_from_utf8()
 
 
 func base_url(id: String) -> String:
 	return "http://127.0.0.1:%d" % SidecarManager.port_of(id)
 
 
-## GET /gb/version and verify the contract. The game refuses a backend on
-## mismatch (ROADMAP §5 rules).
+## GET /gb/version and verify the contract (game refuses on mismatch, §2).
 func handshake(id: String) -> bool:
-	var response := await _request(id, HTTPClient.METHOD_GET, "/gb/version", 10.0)
+	var response := await _http(id, HTTPClient.METHOD_GET, "/gb/version", "", 10.0)
 	var ok: bool = (
 		response.get("_status", 0) == 200
-		and response.get("contract", "") == EXPECTED_CONTRACT
+		and str(response.get("contract", "")).begins_with(
+			EXPECTED_CONTRACT.split(".")[0] + ".")
 		and response.get("external_clock", false) == true
 	)
 	if ok:
@@ -32,19 +45,95 @@ func handshake(id: String) -> bool:
 	return ok
 
 
-## Advance backend `id` by exactly one step; returns the wire frame
-## ({} with "_status" != 200 on failure — the caller maps failures to events).
-func step(id: String) -> Dictionary:
-	return await _request(id, HTTPClient.METHOD_POST, "/gb/step", STEP_TIMEOUT_S)
+## POST /gb/net/reset with a topology document (contract §3.1).
+func net_reset(id: String, topology: Dictionary) -> Dictionary:
+	_ws_close(id)  # a reset invalidates any half-open step channel
+	return await _http(id, HTTPClient.METHOD_POST, "/gb/net/reset",
+		JSON.stringify(topology), 120.0)  # includes the JIT warmup solve
 
 
-## One-shot HTTP request via a transient HTTPRequest node. Sequential-use
-## helper — Phase 2's orchestrator owns scheduling so calls never pile up.
-func _request(id: String, method: int, path: String, timeout_s: float) -> Dictionary:
+## POST /gb/net/patch with an op array (contract §3.2).
+func net_patch(id: String, ops: Array) -> Dictionary:
+	return await _http(id, HTTPClient.METHOD_POST, "/gb/net/patch",
+		JSON.stringify(ops), 30.0)
+
+
+## Step the backend: WS when open (ADR-003), HTTP fallback otherwise.
+## Returns the contract step-result; {"_status": 0, ...} on transport failure.
+func step(id: String, request: Dictionary) -> Dictionary:
+	var body := JSON.stringify(request)
+	if await _ws_ensure_open(id):
+		var response := await _ws_roundtrip(id, body)
+		if not response.is_empty():
+			response["_status"] = 200
+			response["_transport"] = "ws"
+			return response
+		_ws_close(id)  # broken socket — fall back to HTTP for this step
+	var http_response := await _http(id, HTTPClient.METHOD_POST, "/gb/step",
+		body, STEP_TIMEOUT_S)
+	http_response["_transport"] = "http"
+	return http_response
+
+
+func drop(id: String) -> void:
+	_ws_close(id)
+	info.erase(id)
+
+
+# ─── WebSocket step channel ───
+
+func _ws_ensure_open(id: String) -> bool:
+	if _ws.has(id):
+		var state: int = _ws[id]["peer"].get_ready_state()
+		if state == WebSocketPeer.STATE_OPEN:
+			return true
+		_ws_close(id)
+	var peer := WebSocketPeer.new()
+	var url := "ws://127.0.0.1:%d/gb/ws" % SidecarManager.port_of(id)
+	if peer.connect_to_url(url) != OK:
+		return false
+	_ws[id] = {"peer": peer, "pending": false, "buffer": ""}
+	var deadline := Time.get_ticks_msec() + int(WS_CONNECT_TIMEOUT_S * 1000)
+	while peer.get_ready_state() == WebSocketPeer.STATE_CONNECTING:
+		if Time.get_ticks_msec() > deadline:
+			_ws_close(id)
+			return false
+		await get_tree().process_frame  # _process polls the peer
+	return peer.get_ready_state() == WebSocketPeer.STATE_OPEN
+
+
+func _ws_roundtrip(id: String, body: String) -> Dictionary:
+	var ws: Dictionary = _ws[id]
+	ws["buffer"] = ""
+	if ws["peer"].send_text(body) != OK:
+		return {}
+	var deadline := Time.get_ticks_msec() + int(STEP_TIMEOUT_S * 1000)
+	while ws["buffer"] == "":
+		if Time.get_ticks_msec() > deadline:
+			return {}
+		if ws["peer"].get_ready_state() != WebSocketPeer.STATE_OPEN:
+			return {}
+		await get_tree().process_frame
+	var parsed: Variant = JSON.parse_string(ws["buffer"])
+	return parsed if parsed is Dictionary else {}
+
+
+func _ws_close(id: String) -> void:
+	if _ws.has(id):
+		_ws[id]["peer"].close()
+		_ws.erase(id)
+
+
+# ─── HTTP control plane ───
+
+func _http(id: String, method: int, path: String, body: String,
+		timeout_s: float) -> Dictionary:
 	var http := HTTPRequest.new()
 	http.timeout = timeout_s
 	add_child(http)
-	var err := http.request(base_url(id) + path, [], method)
+	var headers := PackedStringArray(["Content-Type: application/json"]) \
+		if body != "" else PackedStringArray()
+	var err := http.request(base_url(id) + path, headers, method, body)
 	if err != OK:
 		http.queue_free()
 		return {"_status": 0, "_error": "request() failed: %d" % err}
@@ -52,8 +141,8 @@ func _request(id: String, method: int, path: String, timeout_s: float) -> Dictio
 	http.queue_free()
 	if result[0] != HTTPRequest.RESULT_SUCCESS:
 		return {"_status": 0, "_error": "transport error: %d" % result[0]}
-	var body: PackedByteArray = result[3]
-	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	var parsed: Variant = JSON.parse_string(
+		(result[3] as PackedByteArray).get_string_from_utf8())
 	var out: Dictionary = parsed if parsed is Dictionary else {}
 	out["_status"] = result[1]
 	return out

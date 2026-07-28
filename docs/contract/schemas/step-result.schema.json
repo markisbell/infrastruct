@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "simgames/contract/v1/step-result",
+  "title": "Step result (POST /gb/step and WS /gb/ws response; GET /gb/result/latest)",
+  "type": "object",
+  "required": ["t", "status", "zones", "devices", "coupling_out", "violations"],
+  "properties": {
+    "t": {"type": "integer", "minimum": 0},
+    "status": {"enum": ["converged", "degraded", "failed", "error"]},
+    "error": {"type": "string", "description": "only with status=error (e.g. out_of_order on the WS channel)"},
+    "solve_ms": {"type": "number", "minimum": 0},
+    "zones": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["supplied"],
+        "properties": {
+          "supplied": {"type": "number", "minimum": 0, "maximum": 1},
+          "detail": {"type": "object",
+            "description": "power: v_pu · heat: t_supply_c, dp_bar · water: p_bar"}
+        }
+      }
+    },
+    "devices": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "output_kw": {"type": ["number", "null"]},
+          "soc": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "detail": {"type": "object"}
+        }
+      }
+    },
+    "coupling_out": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {"p_el_kw": {"type": "number",
+          "description": "electric coupling value; positive = draws from the power net (heat pump), negative = feeds it (CHP)"}}
+      }
+    },
+    "violations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["element", "kind", "severity"],
+        "properties": {
+          "element": {"type": "string"},
+          "kind": {"enum": ["overload", "voltage", "dp_low", "t_supply_low", "clamped"]},
+          "severity": {"enum": ["info", "warning", "critical"]},
+          "value": {"type": "number"}
+        }
+      }
+    }
+  }
+}

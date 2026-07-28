@@ -15,6 +15,7 @@ config/features=PackedStringArray("4.7")
 GameClock="*res://autoloads/game_clock.gd"
 SidecarManager="*res://autoloads/sidecar_manager.gd"
 CosimBridge="*res://autoloads/cosim_bridge.gd"
+Orchestrator="*res://autoloads/orchestrator.gd"
 SaveGame="*res://autoloads/save_game.gd"
 
 [editor_plugins]
