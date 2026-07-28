@@ -45,6 +45,14 @@ var _cam_yaw_target := 0.0   # Q/E rotate in 90° steps, smoothed in _process
 var _ghost: Node3D
 var _ghost_kind := ""
 var _ghost_rot := 0
+var _ghost_disc: MeshInstance3D
+
+# build feedback (user direction): coverage diamonds while placing zone
+# stations, disconnection markers on network buildings, orphan markers on
+# houses outside every service area
+var _range_discs := {}       # building id -> MeshInstance3D
+var _status_markers := {}    # building id -> Label3D
+var _orphan_markers := {}    # house pos -> Label3D
 
 # pos/id -> Node3D, one dict per layer (incremental diff in redraw)
 var _roads := {}
@@ -482,6 +490,63 @@ func _make_grid_connection() -> Node3D:
 
 # ─── power state + overlays ───
 
+## Coverage diamonds of PLACED zone stations, shown while the matching
+## placement tool is active (spacing aid, SimCity-style).
+func _update_placed_discs(ghost_kind: String) -> void:
+	var wanted := {}
+	if ghost_kind == "substation" or ghost_kind == "heat_exchanger":
+		var radius := int(BuildingDefs.DEFS[ghost_kind]["zone_radius"])
+		var color: Color = BuildingDefs.DEFS[ghost_kind]["color"]
+		for id: String in City.model.buildings_of_kind(ghost_kind):
+			wanted[id] = true
+			if not _range_discs.has(id):
+				var disc := _make_range_disc(radius, color)
+				var anchor: Vector2i = City.model.buildings[id]["anchor"]
+				disc.position = Vector3(anchor.x + 0.5, 0.012, anchor.y + 0.5)
+				add_child(disc)
+				_range_discs[id] = disc
+	for id: String in _range_discs.keys():
+		if not wanted.has(id):
+			_range_discs[id].queue_free()
+			_range_discs.erase(id)
+
+
+## Red "!" over network buildings that are not connected to their network's
+## source (slack-unreachable per the topology extraction).
+func _update_status_markers() -> void:
+	var wanted := {}
+	for id: String in City.model.buildings:
+		var def := BuildingDefs.get_def(City.model.buildings[id]["kind"])
+		if def.get("device", "") == "" and def.get("zone_radius", 0) == 0:
+			continue
+		var is_heat: bool = def.get("network", "power") == "heat"
+		var connected: bool = City.heat_topo.connected.get(id, false) if is_heat \
+			else City.topo.connected.get(id, false)
+		if connected or not _buildings.has(id):
+			continue
+		wanted[id] = true
+		if not _status_markers.has(id):
+			var marker := _make_marker("!", Color(1.0, 0.25, 0.2))
+			marker.position = Vector3(0, 1.6, 0)
+			_buildings[id].add_child(marker)
+			_status_markers[id] = marker
+	for id: String in _status_markers.keys():
+		if not wanted.has(id):
+			if is_instance_valid(_status_markers[id]):
+				_status_markers[id].queue_free()
+			_status_markers.erase(id)
+
+
+func _make_marker(text: String, color: Color) -> Label3D:
+	var label := Label3D.new()
+	label.text = text
+	label.font_size = 220
+	label.modulate = color
+	label.outline_size = 40
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	return label
+
+
 func _update_house_power() -> void:
 	for pos: Vector2i in _houses:
 		var zone: String = City.topo.house_zone.get(pos, "")
@@ -492,6 +557,21 @@ func _update_house_power() -> void:
 		# no power dominates visually; else cold homes render icy blue
 		_set_state_material(_houses[pos],
 			"dark" if not lit else ("cold" if cold else ""))
+		# yellow "!": no substation covers this house at all
+		var orphan := zone == ""
+		if orphan and not _orphan_markers.has(pos):
+			var marker := _make_marker("!", Color(1.0, 0.85, 0.2))
+			marker.position = Vector3(0, 1.0, 0)
+			_houses[pos].add_child(marker)
+			_orphan_markers[pos] = marker
+		elif not orphan and _orphan_markers.has(pos):
+			if is_instance_valid(_orphan_markers[pos]):
+				_orphan_markers[pos].queue_free()
+			_orphan_markers.erase(pos)
+	for pos: Vector2i in _orphan_markers.keys():
+		if not _houses.has(pos):
+			_orphan_markers.erase(pos)  # house gone; marker freed with it
+	_update_status_markers()
 
 
 func _set_state_material(node: Node3D, state: String) -> void:
@@ -600,11 +680,14 @@ func rotate_ghost() -> void:
 
 func _update_ghost() -> void:
 	var kind: String = TOOL_BUILDING.get(tool, "")
+	_update_placed_discs(kind)
 	if kind == "":
 		if _ghost:
 			_ghost.queue_free()
 			_ghost = null
 			_ghost_kind = ""
+		if _ghost_disc:
+			_ghost_disc.visible = false
 		_cursor.visible = true
 		return
 	if kind != _ghost_kind:
@@ -620,10 +703,52 @@ func _update_ghost() -> void:
 	_ghost.rotation_degrees.y = _ghost_rot * 90.0
 	var affordable: bool = City.money >= int(BuildingDefs.DEFS[kind]["cost"])
 	var valid: bool = City.model.can_place_building(kind, anchor) and affordable
-	var tint := _flat(Color(0.3, 0.9, 0.4, 0.5), true) if valid \
-		else _flat(Color(0.95, 0.25, 0.2, 0.5), true)
+	# amber: would place, but no line touches the footprint => disconnected
+	var linked := _footprint_touches_line(kind, anchor)
+	var tint := _flat(Color(0.95, 0.25, 0.2, 0.5), true)
+	if valid:
+		tint = _flat(Color(0.3, 0.9, 0.4, 0.5), true) if linked \
+			else _flat(Color(0.95, 0.75, 0.15, 0.55), true)
 	for mesh: MeshInstance3D in _ghost.find_children("*", "MeshInstance3D", true, false):
 		mesh.material_override = tint
+	# coverage preview for zone stations
+	var radius := int(BuildingDefs.DEFS[kind].get("zone_radius", 0))
+	if radius > 0:
+		if _ghost_disc == null:
+			_ghost_disc = _make_range_disc(radius,
+				BuildingDefs.DEFS[kind]["color"])
+			add_child(_ghost_disc)
+		_ghost_disc.position = Vector3(anchor.x + 0.5, 0.015, anchor.y + 0.5)
+		_ghost_disc.visible = true
+	elif _ghost_disc:
+		_ghost_disc.visible = false
+
+
+## Does any footprint-adjacent tile carry the building's network line?
+## (power buildings need a cable, heat buildings a pipe)
+func _footprint_touches_line(kind: String, anchor: Vector2i) -> bool:
+	var def := BuildingDefs.get_def(kind)
+	if def.get("device", "") == "" and def.get("zone_radius", 0) == 0:
+		return true  # not a network building
+	var lines: Dictionary = City.model.heat_pipes \
+		if def.get("network", "power") == "heat" else City.model.cables
+	for tile: Vector2i in BuildingDefs.footprint(kind, anchor):
+		for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if lines.has(tile + offset):
+				return true
+	return false
+
+
+## Manhattan service area = a diamond (honest to the assignment rule).
+func _make_range_disc(radius: int, color: Color) -> MeshInstance3D:
+	var disc := MeshInstance3D.new()
+	var quad := PlaneMesh.new()
+	var side := radius * sqrt(2.0)
+	quad.size = Vector2(side, side)
+	disc.mesh = quad
+	disc.rotation_degrees.y = 45.0
+	disc.material_override = _flat(Color(color.r, color.g, color.b, 0.14), true, true)
+	return disc
 
 
 func _pan_ground(screen_delta: Vector2) -> void:

@@ -183,8 +183,8 @@ func _take_screenshot() -> void:
 		City.build_cable(Vector2i(x, 121))
 	City.place_building("substation", Vector2i(134, 122))
 	City.place_building("wind_farm", Vector2i(124, 116))
-	for y in range(118, 121):
-		City.build_cable(Vector2i(126, y))
+	for y in range(117, 121):  # reaches (126,117), adjacent to the farm —
+		City.build_cable(Vector2i(126, y))  # the new "!" marker caught this gap
 	City.place_building("solar_park", Vector2i(139, 117))
 	for y in range(119, 121):
 		City.build_cable(Vector2i(140, y))
@@ -204,8 +204,19 @@ func _take_screenshot() -> void:
 	City.place_building("heat_storage", Vector2i(126, 130))
 	var subs := City.model.buildings_of_kind("substation")
 	City.spawn_houses_bulk(subs[0], 22)
+	# demo the build feedback: a disconnected plant (red !), orphan houses
+	# beyond any coverage (yellow !), and coverage diamonds (substation tool)
+	City.place_building("wind_farm", Vector2i(149, 118))
+	for x in range(147, 153):
+		City.build_road(Vector2i(x, 126))
+	for x in range(147, 153):
+		City.build_zone(Vector2i(x, 127))
+	City.model.spawn_house(Vector2i(148, 127))
+	City.model.spawn_house(Vector2i(151, 127))
+	City._refresh_topo_assignment()
+	view.tool = CityView.Tool.SUBSTATION
 	view.redraw()
-	view.focus_tile(Vector2i(131, 124), 19.0)
+	view.focus_tile(Vector2i(133, 124), 21.0)
 	await get_tree().create_timer(1.0).timeout
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)

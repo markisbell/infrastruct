@@ -37,7 +37,7 @@ func _ready() -> void:
 	_status = Label.new()
 	row.add_child(_status)
 	_tool_label = Label.new()
-	_tool_label.text = "Tool: none — 1-9/0 power+city · H/J/B/C/U/T heat · Q/E rotate · R rotate bld · SPACE pause · V overlays"
+	_tool_label.text = "Tool: none — 1-9/0 power+city · H/J/B/C/U/T heat · ghost: green=ok amber=no line red=blocked · Q/E rotate · SPACE pause · V overlays"
 	row.add_child(_tool_label)
 
 	var events_panel := PanelContainer.new()
