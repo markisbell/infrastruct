@@ -99,7 +99,6 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		GameClock.speed = maxf(GameClock.speed / 2.0, 0.25)
 	elif key.keycode == KEY_V:
 		view.overlays_visible = not view.overlays_visible
-		view.queue_redraw()
 
 
 static func _fmt_money(value: int) -> String:

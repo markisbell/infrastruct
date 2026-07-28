@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://dylrgip0j32fj"
+path="res://.godot/imported/conveyor-long-stripe-sides-part-end.obj-d3a572cf9d35d93a937cb5daf9ad1221.mesh"
+
+[deps]
+
+files=["res://.godot/imported/conveyor-long-stripe-sides-part-end.obj-d3a572cf9d35d93a937cb5daf9ad1221.mesh"]
+
+source_file="res://assets/kenney/factory-kit/Models/OBJ format/conveyor-long-stripe-sides-part-end.obj"
+dest_files=["res://.godot/imported/conveyor-long-stripe-sides-part-end.obj-d3a572cf9d35d93a937cb5daf9ad1221.mesh", "res://.godot/imported/conveyor-long-stripe-sides-part-end.obj-d3a572cf9d35d93a937cb5daf9ad1221.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

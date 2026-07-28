@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://cqmiccy5gjvg7"
+path="res://.godot/imported/screen-panel-flat.obj-7d832d05916731cbd80cc59552413d40.mesh"
+
+[deps]
+
+files=["res://.godot/imported/screen-panel-flat.obj-7d832d05916731cbd80cc59552413d40.mesh"]
+
+source_file="res://assets/kenney/factory-kit/Models/OBJ format/screen-panel-flat.obj"
+dest_files=["res://.godot/imported/screen-panel-flat.obj-7d832d05916731cbd80cc59552413d40.mesh", "res://.godot/imported/screen-panel-flat.obj-7d832d05916731cbd80cc59552413d40.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

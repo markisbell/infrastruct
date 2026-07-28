@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://oeee5nl8evb0"
+path="res://.godot/imported/hopper-high-round.obj-122e2c6d0e7b7fa83fd8656786ce1924.mesh"
+
+[deps]
+
+files=["res://.godot/imported/hopper-high-round.obj-122e2c6d0e7b7fa83fd8656786ce1924.mesh"]
+
+source_file="res://assets/kenney/factory-kit/Models/OBJ format/hopper-high-round.obj"
+dest_files=["res://.godot/imported/hopper-high-round.obj-122e2c6d0e7b7fa83fd8656786ce1924.mesh", "res://.godot/imported/hopper-high-round.obj-122e2c6d0e7b7fa83fd8656786ce1924.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

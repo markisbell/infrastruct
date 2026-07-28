@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://y2rnhws2bcht"
+path="res://.godot/imported/pipe-glass-large-bend.obj-fcc1ca6d797747dfa952b6cb06da1718.mesh"
+
+[deps]
+
+files=["res://.godot/imported/pipe-glass-large-bend.obj-fcc1ca6d797747dfa952b6cb06da1718.mesh"]
+
+source_file="res://assets/kenney/factory-kit/Models/OBJ format/pipe-glass-large-bend.obj"
+dest_files=["res://.godot/imported/pipe-glass-large-bend.obj-fcc1ca6d797747dfa952b6cb06da1718.mesh", "res://.godot/imported/pipe-glass-large-bend.obj-fcc1ca6d797747dfa952b6cb06da1718.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://dajibaebndr44"
+path="res://.godot/imported/structure-medium.obj-b6a7c830e9427cca6fcf57e09467d3fe.mesh"
+
+[deps]
+
+files=["res://.godot/imported/structure-medium.obj-b6a7c830e9427cca6fcf57e09467d3fe.mesh"]
+
+source_file="res://assets/kenney/factory-kit/Models/OBJ format/structure-medium.obj"
+dest_files=["res://.godot/imported/structure-medium.obj-b6a7c830e9427cca6fcf57e09467d3fe.mesh", "res://.godot/imported/structure-medium.obj-b6a7c830e9427cca6fcf57e09467d3fe.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

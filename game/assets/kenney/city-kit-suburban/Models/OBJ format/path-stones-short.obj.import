@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://bgwaadk2djebj"
+path="res://.godot/imported/path-stones-short.obj-6cf8ba3a938d8a343a859bb9921889a0.mesh"
+
+[deps]
+
+files=["res://.godot/imported/path-stones-short.obj-6cf8ba3a938d8a343a859bb9921889a0.mesh"]
+
+source_file="res://assets/kenney/city-kit-suburban/Models/OBJ format/path-stones-short.obj"
+dest_files=["res://.godot/imported/path-stones-short.obj-6cf8ba3a938d8a343a859bb9921889a0.mesh", "res://.godot/imported/path-stones-short.obj-6cf8ba3a938d8a343a859bb9921889a0.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

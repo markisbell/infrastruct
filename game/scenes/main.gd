@@ -144,7 +144,7 @@ func _process(delta: float) -> void:
 			cursor.y += 1
 		_bench_state["cursor"] = cursor
 	view.redraw()
-	view.cam.position = view._terrain.map_to_local(_bench_state["cursor"])
+	view.focus_tile(_bench_state["cursor"])
 	frames.append(delta)
 
 
@@ -186,14 +186,16 @@ func _take_screenshot() -> void:
 		City.build_cable(Vector2i(140, y))
 	for x in range(128, 143):
 		City.build_road(Vector2i(x, 124))
+	for y in range(125, 130):
+		City.build_road(Vector2i(142, y))  # bend + vertical leg: corner check
 	for x in range(128, 143):
 		for y in [125, 126]:
-			City.build_zone(Vector2i(x, y))
+			if not (x == 142):
+				City.build_zone(Vector2i(x, y))
 	var subs := City.model.buildings_of_kind("substation")
 	City.spawn_houses_bulk(subs[0], 22)
 	view.redraw()
-	view.cam.position = view._terrain.map_to_local(Vector2i(131, 121))
-	view.cam.zoom = Vector2(1.6, 1.6)
+	view.focus_tile(Vector2i(132, 122), 17.0)
 	await get_tree().create_timer(1.0).timeout
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)
