@@ -5,10 +5,11 @@ extends RefCounted
 ## v2 (Phase 3): roads, residential zoning, houses, buildings with
 ## footprints — on top of v1's cable layer.
 
-const SCHEMA_VERSION := 3
+const SCHEMA_VERSION := 4
 
 var cables: Dictionary = {}          # Vector2i -> int (kind; 1 = LV cable)
 var heat_pipes: Dictionary = {}      # Vector2i -> int (kind; 1 = DH pipe pair, v3)
+var water_pipes: Dictionary = {}     # Vector2i -> int (kind; 1 = water main, v4)
 var roads: Dictionary = {}           # Vector2i -> true
 var zoning: Dictionary = {}          # Vector2i -> int (1 = residential)
 var houses: Dictionary = {}          # Vector2i -> {"level": int}
@@ -23,7 +24,11 @@ var building_tiles: Dictionary = {}
 
 func is_tile_free(pos: Vector2i) -> bool:
 	return not (roads.has(pos) or houses.has(pos) or building_tiles.has(pos)
-		or cables.has(pos) or heat_pipes.has(pos))
+		or cables.has(pos) or heat_pipes.has(pos) or water_pipes.has(pos))
+
+
+func _line_blocked(pos: Vector2i) -> bool:
+	return roads.has(pos) or houses.has(pos) or building_tiles.has(pos)
 
 
 func can_place_building(kind: String, anchor: Vector2i) -> bool:
@@ -36,8 +41,7 @@ func can_place_building(kind: String, anchor: Vector2i) -> bool:
 # ─── mutations (all return success) ───
 
 func set_cable(pos: Vector2i, kind: int) -> bool:
-	if roads.has(pos) or houses.has(pos) or building_tiles.has(pos) \
-			or heat_pipes.has(pos):
+	if _line_blocked(pos) or heat_pipes.has(pos) or water_pipes.has(pos):
 		return false
 	cables[pos] = kind
 	return true
@@ -48,8 +52,7 @@ func remove_cable(pos: Vector2i) -> void:
 
 
 func set_heat_pipe(pos: Vector2i, kind: int) -> bool:
-	if roads.has(pos) or houses.has(pos) or building_tiles.has(pos) \
-			or cables.has(pos):
+	if _line_blocked(pos) or cables.has(pos) or water_pipes.has(pos):
 		return false
 	heat_pipes[pos] = kind
 	return true
@@ -57,6 +60,17 @@ func set_heat_pipe(pos: Vector2i, kind: int) -> bool:
 
 func remove_heat_pipe(pos: Vector2i) -> void:
 	heat_pipes.erase(pos)
+
+
+func set_water_pipe(pos: Vector2i, kind: int) -> bool:
+	if _line_blocked(pos) or cables.has(pos) or heat_pipes.has(pos):
+		return false
+	water_pipes[pos] = kind
+	return true
+
+
+func remove_water_pipe(pos: Vector2i) -> void:
+	water_pipes.erase(pos)
 
 
 func has_cable(pos: Vector2i) -> bool:
@@ -98,17 +112,27 @@ func remove_house(pos: Vector2i) -> void:
 	houses.erase(pos)
 
 
-func place_building(kind: String, anchor: Vector2i, rot: int = 0) -> String:
+func place_building(kind: String, anchor: Vector2i, rot: int = 0,
+		params_override: Dictionary = {}) -> String:
 	if not BuildingDefs.DEFS.has(kind) or not can_place_building(kind, anchor):
 		return ""
 	var id := "%s_%d" % [kind, next_building_id]
 	next_building_id += 1
-	# rot (0-3, quarter turns) is VISUAL only — footprints stay square-ish and
-	# the electrical topology never sees it
-	buildings[id] = {"kind": kind, "anchor": anchor, "rot": rot % 4}
+	# rot (0-3, quarter turns) is VISUAL only; params_override (v4) merges
+	# over the catalog params in the topology builders (per-building sizing)
+	buildings[id] = {"kind": kind, "anchor": anchor, "rot": rot % 4,
+		"params": params_override}
 	for tile: Vector2i in BuildingDefs.footprint(kind, anchor):
 		building_tiles[tile] = id
 	return id
+
+
+## Catalog params merged with the building's own overrides.
+func building_params(id: String) -> Dictionary:
+	var def := BuildingDefs.get_def(buildings[id]["kind"])
+	var params: Dictionary = def.get("params", {}).duplicate()
+	params.merge(buildings[id].get("params", {}), true)
+	return params
 
 
 func remove_building(id: String) -> void:
@@ -157,6 +181,7 @@ func to_json() -> String:
 		"version": SCHEMA_VERSION,
 		"cables": _dict_to_keys(cables),
 		"heat_pipes": _dict_to_keys(heat_pipes),
+		"water_pipes": _dict_to_keys(water_pipes),
 		"roads": _dict_to_keys(roads),
 		"zoning": _dict_to_keys(zoning),
 		"houses": _dict_to_keys(houses),
@@ -176,6 +201,7 @@ static func from_json(text: String) -> WorldModel:
 	if int(dict.get("version", 1)) < 2:
 		return model  # v1 saves carried cables only
 	model.heat_pipes = _keys_to_dict(dict.get("heat_pipes", {}), TYPE_INT)
+	model.water_pipes = _keys_to_dict(dict.get("water_pipes", {}), TYPE_INT)
 	model.roads = _keys_to_dict(dict.get("roads", {}), TYPE_BOOL)
 	model.zoning = _keys_to_dict(dict.get("zoning", {}), TYPE_INT)
 	model.houses = _keys_to_dict(dict.get("houses", {}), TYPE_DICTIONARY)
@@ -184,7 +210,8 @@ static func from_json(text: String) -> WorldModel:
 		var raw: Dictionary = dict["buildings"][id]
 		var anchor := _parse_key(str(raw.get("anchor", "0,0")))
 		model.buildings[id] = {"kind": str(raw["kind"]), "anchor": anchor,
-			"rot": int(raw.get("rot", 0))}
+			"rot": int(raw.get("rot", 0)),
+			"params": raw.get("params", {})}
 		for tile: Vector2i in BuildingDefs.footprint(str(raw["kind"]), anchor):
 			model.building_tiles[tile] = id
 	return model
@@ -192,8 +219,9 @@ static func from_json(text: String) -> WorldModel:
 
 func equals(other: WorldModel) -> bool:
 	return cables == other.cables and heat_pipes == other.heat_pipes \
-		and roads == other.roads and zoning == other.zoning \
-		and houses == other.houses and buildings == other.buildings
+		and water_pipes == other.water_pipes and roads == other.roads \
+		and zoning == other.zoning and houses == other.houses \
+		and buildings == other.buildings
 
 
 func _buildings_out() -> Dictionary:
@@ -202,7 +230,7 @@ func _buildings_out() -> Dictionary:
 		var entry: Dictionary = buildings[id]
 		out[id] = {"kind": entry["kind"],
 			"anchor": "%d,%d" % [entry["anchor"].x, entry["anchor"].y],
-			"rot": entry.get("rot", 0)}
+			"rot": entry.get("rot", 0), "params": entry.get("params", {})}
 	return out
 
 

@@ -8,7 +8,8 @@ extends Node3D
 ## ground plane, model centers at (x+0.5, 0, y+0.5).
 
 enum Tool { NONE, ROAD, ZONE, CABLE, SUBSTATION, GAS, WIND, SOLAR, BATTERY, GRID,
-	BULLDOZE, PIPE, HEAT_SUB, BOILER, CHP, HEATPUMP, HEATSTORE }
+	BULLDOZE, PIPE, HEAT_SUB, BOILER, CHP, HEATPUMP, HEATSTORE,
+	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER }
 
 const TOOL_BUILDING := {
 	Tool.SUBSTATION: "substation", Tool.GAS: "gas_plant", Tool.WIND: "wind_farm",
@@ -16,6 +17,8 @@ const TOOL_BUILDING := {
 	Tool.HEAT_SUB: "heat_exchanger", Tool.BOILER: "boiler_plant",
 	Tool.CHP: "chp_plant", Tool.HEATPUMP: "heat_pump_plant",
 	Tool.HEATSTORE: "heat_storage",
+	Tool.WATER_SUB: "water_station", Tool.WELL: "well",
+	Tool.PUMP: "pumping_station", Tool.WATER_TOWER: "water_tower",
 }
 
 const KENNEY := "res://assets/kenney/"
@@ -25,7 +28,7 @@ const KENNEY := "res://assets/kenney/"
 ## water (Phase 5) = green.
 const PIPE_SUPPLY_COLOR := Color(0.85, 0.22, 0.15)
 const PIPE_RETURN_COLOR := Color(0.2, 0.38, 0.85)
-const WATER_PIPE_COLOR := Color(0.2, 0.7, 0.35)  # reserved for Phase 5
+const WATER_PIPE_COLOR := Color(0.2, 0.7, 0.35)
 const PIPE_HEIGHT := 0.16
 const HOUSE_VARIANTS := ["a", "b", "c", "d", "e", "f", "g", "h", "l", "m", "n", "q"]
 
@@ -58,6 +61,7 @@ var _orphan_markers := {}    # house pos -> Label3D
 var _roads := {}
 var _cables := {}
 var _pipes := {}
+var _water_pipes := {}
 var _zones := {}
 var _houses := {}
 var _buildings := {}
@@ -89,6 +93,8 @@ func _ready() -> void:
 	City.heat_result.connect(func(_t: int, _r: Dictionary) -> void:
 		_update_overlays()
 		_update_house_power())
+	City.water_result.connect(func(_t: int, _r: Dictionary) -> void:
+		_update_overlays())
 	redraw()
 
 
@@ -148,6 +154,7 @@ func redraw() -> void:
 	_diff(_roads, model.roads, _make_road)
 	_diff(_cables, model.cables, _make_cable)
 	_diff(_pipes, model.heat_pipes, _make_pipe)
+	_diff(_water_pipes, model.water_pipes, _make_water_pipe)
 	_diff(_houses, model.houses, _make_house)
 	_diff(_buildings, model.buildings, _make_building)
 	# neighbor-dependent pieces refresh in place
@@ -157,6 +164,8 @@ func redraw() -> void:
 		_orient_cable(pos, _cables[pos])
 	for pos: Vector2i in _pipes:
 		_orient_pipe(pos, _pipes[pos])
+	for pos: Vector2i in _water_pipes:
+		_orient_water_pipe(pos, _water_pipes[pos])
 	_update_house_power()
 	_update_overlays()
 
@@ -335,6 +344,51 @@ func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
 			Vector3(-0.13, PIPE_HEIGHT, -0.13)))
 
 
+func _make_water_pipe(pos: Vector2i) -> Node3D:
+	var node := Node3D.new()
+	node.position = _center(pos)
+	return node  # segments set by _orient_water_pipe
+
+
+## Water main: a single green pipe on the same low supports as the heat
+## pair — one fatter cylinder per connected direction, center joint knuckle.
+func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
+	var connections := ""
+	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+	for i in 4:
+		if City.model.water_pipes.has(pos + directions[i]):
+			connections += str(i)
+	if node.get_meta("pipes", "") == connections:
+		return
+	node.set_meta("pipes", connections)
+	for child in node.get_children():
+		child.queue_free()
+	node.add_child(_box(Vector3(0.14, PIPE_HEIGHT - 0.05, 0.14),
+		Color(0.45, 0.46, 0.5), Vector3(0, (PIPE_HEIGHT - 0.05) / 2.0, 0)))
+	var any_connection := false
+	for i in 4:
+		var d := directions[i]
+		if not City.model.water_pipes.has(pos + d):
+			continue
+		any_connection = true
+		var seg := MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.07
+		cyl.bottom_radius = 0.07
+		cyl.height = 0.5
+		seg.mesh = cyl
+		if d.y == 0:
+			seg.rotation_degrees.z = 90.0
+		else:
+			seg.rotation_degrees.x = 90.0
+		seg.position = Vector3(d.x * 0.25, PIPE_HEIGHT, d.y * 0.25)
+		seg.material_override = _flat(WATER_PIPE_COLOR)
+		node.add_child(seg)
+	if any_connection:
+		node.add_child(_box(Vector3(0.17, 0.17, 0.17), WATER_PIPE_COLOR,
+			Vector3(0, PIPE_HEIGHT, 0)))
+
+
 func _make_house(pos: Vector2i) -> Node3D:
 	var variant: String = HOUSE_VARIANTS[abs(pos.x * 73856093 ^ pos.y * 19349663) % HOUSE_VARIANTS.size()]
 	var house := _instance_glb(
@@ -396,6 +450,14 @@ func _build_building_visual(kind: String) -> Node3D:
 			return _instance_glb("city-kit-industrial/Models/GLB format/detail-tank.glb", 0.85)
 		"heat_exchanger":
 			return _make_transfer_station()
+		"water_station":
+			return _make_water_station()
+		"well":
+			return _make_well()
+		"pumping_station":
+			return _make_pumping_station()
+		"water_tower":
+			return _make_water_tower()
 		_:
 			return _instance_glb("city-kit-industrial/Models/GLB format/building-a.glb", 1.9)
 
@@ -424,6 +486,108 @@ func _make_transfer_station() -> Node3D:
 		stub.position = Vector3(pair[1], PIPE_HEIGHT, 0.4)
 		stub.material_override = _flat(pair[0])
 		node.add_child(stub)
+	return node
+
+
+## District water station: sibling of the transfer station — grey hut with a
+## teal band and one green stub that plugs into the water main.
+func _make_water_station() -> Node3D:
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(0.55, 0.5, 0.45), Color(0.72, 0.74, 0.78),
+		Vector3(0, 0.25, 0)))
+	node.add_child(_box(Vector3(0.57, 0.08, 0.47), Color(0.2, 0.55, 0.8),
+		Vector3(0, 0.54, 0)))
+	var stub := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.07
+	cyl.bottom_radius = 0.07
+	cyl.height = 0.5
+	stub.mesh = cyl
+	stub.rotation_degrees.x = 90
+	stub.position = Vector3(0, PIPE_HEIGHT, 0.4)
+	stub.material_override = _flat(WATER_PIPE_COLOR)
+	node.add_child(stub)
+	return node
+
+
+## Well field: gravel pad, wellhead cap, hand-pump style arm — reads as
+## "water comes out of the ground here" at map zoom.
+func _make_well() -> Node3D:
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(0.85, 0.05, 0.85), Color(0.62, 0.6, 0.55),
+		Vector3(0, 0.025, 0)))
+	var head := MeshInstance3D.new()
+	var head_mesh := CylinderMesh.new()
+	head_mesh.top_radius = 0.16
+	head_mesh.bottom_radius = 0.18
+	head_mesh.height = 0.35
+	head.mesh = head_mesh
+	head.position.y = 0.22
+	head.material_override = _flat(Color(0.35, 0.5, 0.45))
+	node.add_child(head)
+	node.add_child(_box(Vector3(0.08, 0.08, 0.34), WATER_PIPE_COLOR,
+		Vector3(0, 0.42, 0.12)))
+	node.add_child(_box(Vector3(0.3, 0.3, 0.25), Color(0.72, 0.74, 0.78),
+		Vector3(0.25, 0.15, -0.22)))
+	return node
+
+
+## Pumping station: factory hall + intake tank + green discharge stub. The
+## building that ties water to power — place it next to a cable AND the main.
+func _make_pumping_station() -> Node3D:
+	var node := _instance_glb("factory-kit/Models/GLB format/machine.glb", 1.5)
+	var tank := _instance_glb("city-kit-industrial/Models/GLB format/detail-tank.glb", 0.6)
+	tank.position = Vector3(-0.6, 0, 0.55)
+	node.add_child(tank)
+	var stub := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.07
+	cyl.bottom_radius = 0.07
+	cyl.height = 0.7
+	stub.mesh = cyl
+	stub.rotation_degrees.x = 90
+	stub.position = Vector3(0.55, PIPE_HEIGHT, 0.75)
+	stub.material_override = _flat(WATER_PIPE_COLOR)
+	node.add_child(stub)
+	return node
+
+
+## Classic elevated tank: four legs, cylindrical tank with a conical cap —
+## the pressure boundary of the network, unmistakable on the skyline.
+func _make_water_tower() -> Node3D:
+	var node := Node3D.new()
+	for legs: Vector2 in [Vector2(-0.2, -0.2), Vector2(0.2, -0.2),
+			Vector2(-0.2, 0.2), Vector2(0.2, 0.2)]:
+		node.add_child(_box(Vector3(0.06, 1.1, 0.06), Color(0.55, 0.57, 0.6),
+			Vector3(legs.x, 0.55, legs.y)))
+	var tank := MeshInstance3D.new()
+	var tank_mesh := CylinderMesh.new()
+	tank_mesh.top_radius = 0.34
+	tank_mesh.bottom_radius = 0.3
+	tank_mesh.height = 0.55
+	tank.mesh = tank_mesh
+	tank.position.y = 1.35
+	tank.material_override = _flat(Color(0.55, 0.65, 0.75))
+	node.add_child(tank)
+	var cap := MeshInstance3D.new()
+	var cap_mesh := CylinderMesh.new()
+	cap_mesh.top_radius = 0.02
+	cap_mesh.bottom_radius = 0.36
+	cap_mesh.height = 0.22
+	cap.mesh = cap_mesh
+	cap.position.y = 1.73
+	cap.material_override = _flat(Color(0.45, 0.55, 0.65))
+	node.add_child(cap)
+	# riser pipe down the middle, in network green
+	var riser := MeshInstance3D.new()
+	var riser_mesh := CylinderMesh.new()
+	riser_mesh.top_radius = 0.05
+	riser_mesh.bottom_radius = 0.05
+	riser_mesh.height = 1.1
+	riser.mesh = riser_mesh
+	riser.position.y = 0.55
+	riser.material_override = _flat(WATER_PIPE_COLOR)
+	node.add_child(riser)
 	return node
 
 
@@ -519,7 +683,7 @@ func _make_grid_connection() -> Node3D:
 ## placement tool is active (spacing aid, SimCity-style).
 func _update_placed_discs(ghost_kind: String) -> void:
 	var wanted := {}
-	if ghost_kind == "substation" or ghost_kind == "heat_exchanger":
+	if ghost_kind in ["substation", "heat_exchanger", "water_station"]:
 		var radius := int(BuildingDefs.DEFS[ghost_kind]["zone_radius"])
 		var color: Color = BuildingDefs.DEFS[ghost_kind]["color"]
 		for id: String in City.model.buildings_of_kind(ghost_kind):
@@ -544,9 +708,14 @@ func _update_status_markers() -> void:
 		var def := BuildingDefs.get_def(City.model.buildings[id]["kind"])
 		if def.get("device", "") == "" and def.get("zone_radius", 0) == 0:
 			continue
-		var is_heat: bool = def.get("network", "power") == "heat"
-		var connected: bool = City.heat_topo.connected.get(id, false) if is_heat \
-			else City.topo.connected.get(id, false)
+		var connected := false
+		match def.get("network", "power"):
+			"heat":
+				connected = City.heat_topo.connected.get(id, false)
+			"water":
+				connected = City.water_topo.connected.get(id, false)
+			_:
+				connected = City.topo.connected.get(id, false)
 		if connected or not _buildings.has(id):
 			continue
 		wanted[id] = true
@@ -633,9 +802,11 @@ func _update_overlays() -> void:
 		for child in _cables[pos].get_children():
 			if child.has_meta("wire"):
 				(child as MeshInstance3D).material_override = _flat(color)
-	# voltage rings at substations, temperature rings at heat exchangers
+	# voltage rings at substations, temperature rings at heat exchangers,
+	# pressure rings at water stations
 	for key: Variant in _rings.keys():
-		if not (City.topo.zones_info.has(key) or City.heat_topo.zones_info.has(key)):
+		if not (City.topo.zones_info.has(key) or City.heat_topo.zones_info.has(key)
+				or City.water_topo.zones_info.has(key)):
 			_rings[key].queue_free()
 			_rings.erase(key)
 	for zone_id: String in City.topo.zones_info:
@@ -656,6 +827,16 @@ func _update_overlays() -> void:
 			# cold blue below the minimum, amber at 60-70, warm orange above
 			ring_color = Color(0.3, 0.5, 0.95) if t_supply < HeatTopology.T_SUPPLY_MIN_C \
 				else (Color(0.95, 0.75, 0.2) if t_supply < 70.0 else Color(1.0, 0.5, 0.1))
+		ring.material_override = _flat(ring_color, false, true)
+	for zone_id: String in City.water_topo.zones_info:
+		var ring := _ensure_ring(zone_id, City.water_topo.zones_info[zone_id]["center"])
+		var zone_result: Dictionary = City.last_water_result.get("zones", {}).get(zone_id, {})
+		var supplied := float(zone_result.get("supplied", -1.0))
+		var ring_color := Color(0.55, 0.55, 0.55)
+		if supplied >= 0.0:
+			# PDD fraction: green fully supplied, amber weak taps, red dry
+			ring_color = Color(0.2, 0.8, 0.4) if supplied >= 0.99 \
+				else (Color(0.95, 0.75, 0.2) if supplied >= 0.5 else Color(0.95, 0.15, 0.1))
 		ring.material_override = _flat(ring_color, false, true)
 
 
@@ -755,8 +936,12 @@ func _footprint_touches_line(kind: String, anchor: Vector2i) -> bool:
 	var def := BuildingDefs.get_def(kind)
 	if def.get("device", "") == "" and def.get("zone_radius", 0) == 0:
 		return true  # not a network building
-	var lines: Dictionary = City.model.heat_pipes \
-		if def.get("network", "power") == "heat" else City.model.cables
+	var lines: Dictionary = City.model.cables
+	match def.get("network", "power"):
+		"heat":
+			lines = City.model.heat_pipes
+		"water":
+			lines = City.model.water_pipes
 	for tile: Vector2i in BuildingDefs.footprint(kind, anchor):
 		for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			if lines.has(tile + offset):
@@ -827,6 +1012,8 @@ func _apply_tool(pos: Vector2i) -> void:
 			City.build_cable(pos)
 		Tool.PIPE:
 			City.build_heat_pipe(pos)
+		Tool.WATER_PIPE:
+			City.build_water_pipe(pos)
 		Tool.BULLDOZE:
 			City.bulldoze(pos)
 		_:

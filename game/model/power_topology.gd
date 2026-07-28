@@ -150,25 +150,27 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	_assign_houses(model)
 
 	var devices: Array[Dictionary] = []
-	var coupling_bus := ""
+	var coupling_bus := {}  # other network -> bus (first cable-connected device)
 	for id: String in model.buildings:
 		if not connected.get(id, false):
 			continue
 		var def := BuildingDefs.get_def(model.buildings[id]["kind"])
 		var device_kind: String = def.get("device", "")
-		if def.get("network", "power") == "heat":
-			# a cable-connected heat plant: its electric coupling (heat pump
-			# draw / CHP feed-in) lands here as the aggregated cpl_heat load
-			if device_kind != "" and coupling_bus == "":
-				coupling_bus = _bus_name(id)
+		var network: String = def.get("network", "power")
+		if network != "power":
+			# a cable-connected heat/water plant: its electric coupling (heat
+			# pump draw / CHP feed-in / water pump draw) lands here as the
+			# aggregated cpl_<network> load (Orchestrator._coupling_for)
+			if device_kind != "" and not coupling_bus.has(network):
+				coupling_bus[network] = _bus_name(id)
 			continue
 		if device_kind == "":
 			continue
 		devices.append({"id": id, "kind": device_kind, "node": _bus_name(id),
-			"params": def.get("params", {})})
-	if coupling_bus != "":
-		devices.append({"id": "cpl_heat", "kind": "coupling_load",
-			"node": coupling_bus, "params": {}})
+			"params": model.building_params(id)})
+	for network: String in coupling_bus:
+		devices.append({"id": "cpl_%s" % network, "kind": "coupling_load",
+			"node": coupling_bus[network], "params": {}})
 
 	doc = {
 		"contract": "1.0",

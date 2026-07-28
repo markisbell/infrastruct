@@ -27,6 +27,19 @@
       "fixture": "fixtures/heat_fixture.json"
     },
     {
+      "id": "water",
+      "python": "../../.venv-water/Scripts/python.exe",
+      "module": "rtwaterflow.main",
+      "cwd": "../../backends/rtwaterflow",
+      "port": 8022,
+      "env": {
+        "RTWATERFLOW_EXTERNAL_CLOCK": "true",
+        "RTWATERFLOW_PORT": "8022",
+        "RTWATERFLOW_HOST": "127.0.0.1"
+      },
+      "fixture": "fixtures/water_fixture.json"
+    },
+    {
       "id": "mock",
       "python": "../../.venv/Scripts/python.exe",
       "module": "mock_backend",

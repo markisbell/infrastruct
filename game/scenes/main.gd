@@ -56,6 +56,12 @@ func _ready() -> void:
 			_smoke_coldsnap()
 		"heatstorage":
 			_smoke_heatstorage()
+		"pumpblackout":
+			_smoke_pumpblackout()
+		"drought":
+			_smoke_drought()
+		"towerheight":
+			_smoke_towerheight()
 		_:
 			_boot_game()
 
@@ -115,7 +121,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				Orchestrator._on_sim_step(int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES))
 				print("debug: forced sim-step")
 			KEY_F4:
-				if City.weather._calm_from < 0:
+				if City.weather._wind_overrides.is_empty():
 					City.weather.force_calm(City.current_t, City.current_t + 96)
 					print("debug: cold calm forced for 24 h")
 				else:
@@ -182,6 +188,9 @@ func _bench_finish() -> void:
 # ─── screenshot (pre-alpha look; builds a demo town, no sidecars) ───
 
 func _take_screenshot() -> void:
+	var hud := Hud.new()  # status bar + build menu belong in the pre-alpha look
+	hud.view = view
+	add_child(hud)
 	City.money = 100_000_000
 	City.place_building("grid_connection", Vector2i(118, 120))
 	for x in range(120, 141):
@@ -207,6 +216,14 @@ func _take_screenshot() -> void:
 		City.build_heat_pipe(Vector2i(x, 129))
 	City.place_building("heat_exchanger", Vector2i(136, 130))
 	City.place_building("heat_storage", Vector2i(126, 130))
+	# water: tower-headed green main under the heat trunk, well feed + station
+	City.place_building("water_tower", Vector2i(120, 132))
+	for x in range(121, 136):
+		City.build_water_pipe(Vector2i(x, 132))
+	City.place_building("water_station", Vector2i(136, 132))
+	City.place_building("well", Vector2i(128, 134))
+	City.build_water_pipe(Vector2i(128, 133))
+	City.place_building("pumping_station", Vector2i(146, 131))
 	var subs := City.model.buildings_of_kind("substation")
 	City.spawn_houses_bulk(subs[0], 22)
 	# demo the build feedback: a disconnected plant (red !), orphan houses
@@ -221,7 +238,7 @@ func _take_screenshot() -> void:
 	City._refresh_topo_assignment()
 	view.tool = CityView.Tool.SUBSTATION
 	view.redraw()
-	view.focus_tile(Vector2i(133, 124), 21.0)
+	view.focus_tile(Vector2i(133, 125), 24.0)
 	await get_tree().create_timer(1.0).timeout
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)
@@ -579,8 +596,12 @@ func _wait_heat_registered(timeout_s: float) -> bool:
 
 func _run_steps(n: int, timeout_s: float) -> void:
 	# derive the target from the CLOCK: current_t only updates on sim-step
-	# emissions and is stale right after a GameClock.restore
-	var end_t := int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES) + n
+	# emissions and is stale right after a GameClock.restore — resync it too,
+	# or a BACKWARDS restore leaves current_t past end_t and the wait loop
+	# exits after zero steps (bit the pumpblackout smoke's phase B)
+	var start_t := int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES)
+	City.current_t = start_t
+	var end_t := start_t + n
 	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
 	GameClock.speed = 60.0
 	while City.current_t < end_t and Time.get_ticks_msec() < deadline:
@@ -794,6 +815,248 @@ func _smoke_heatstorage() -> void:
 		"statuses": discharge_kw["statuses"],
 	}
 	print("SMOKE_HEATSTORAGE ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+# ─── Phase 5 acceptance scenarios (water) ───
+
+func _wait_water_registered(timeout_s: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
+	while not City.water_registered:
+		if Time.get_ticks_msec() > deadline:
+			return false
+		await get_tree().create_timer(0.5).timeout
+	return true
+
+
+func _water_supplied(zone_id: String) -> float:
+	return float(City.last_water_result.get("zones", {}).get(zone_id, {})
+		.get("supplied", -1.0))
+
+
+func _water_p_bar(zone_id: String) -> float:
+	return float(City.last_water_result.get("zones", {}).get(zone_id, {})
+		.get("detail", {}).get("p_bar", -1.0))
+
+
+## Shared layout: pump-fed town, optionally buffered by an elevated tank.
+## Pump at (8,8) 2x2, cable column at x=7 down to the grid connection at
+## (8,16), water trunk y=9 x=10..20, station (21,9), houses on road y=12.
+func _build_pump_town(with_tower: bool, tower_params: Dictionary = {}) -> void:
+	City.place_building("pumping_station", Vector2i(8, 8))
+	for x in range(10, 21):
+		City.build_water_pipe(Vector2i(x, 9))
+	City.place_building("water_station", Vector2i(21, 9))
+	if with_tower:
+		City.place_building("water_tower", Vector2i(14, 5), 0, tower_params)
+		for y in range(6, 9):  # spur from the tower down to the trunk
+			City.build_water_pipe(Vector2i(14, y))
+	City.place_building("grid_connection", Vector2i(8, 16))
+	for y in range(8, 17):  # (7,16) touches the grid connection footprint
+		City.build_cable(Vector2i(7, y))
+	for x in range(14, 31):
+		City.build_road(Vector2i(x, 12))
+	for x in range(14, 31):
+		City.build_zone(Vector2i(x, 13))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("water_station")[0], 24)
+
+
+## THE cross-vector scenario: a blackout at the pumping station. Without a
+## tower the head collapses next step — instant dry taps. With a (small)
+## tower the town rides through on stored water until the tank runs dry:
+## water buys time, elevation is a battery.
+func _smoke_pumpblackout() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_PUMPBLACKOUT", "health timeout")
+		return
+
+	# ── phase A: pump-only network (the pump IS the pressure head)
+	City.reset_for_scenario(42)
+	City.weather.force_temp(0, 100_000, 15.0)
+	_build_pump_town(false)
+	City._topo_dirty = true
+	if not await _wait_registered(180.0) or not await _wait_water_registered(120.0):
+		_fail("SMOKE_PUMPBLACKOUT", "register timeout (A)")
+		return
+	var zone_id: String = "wz_" + City.model.buildings_of_kind("water_station")[0]
+	GameClock.restore({"total_minutes": 8.0 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	await _run_steps(8, 240.0)
+	var supplied_before := _water_supplied(zone_id)
+	City.grid_trip_until = 1_000_000  # scripted city-wide blackout
+	await _run_steps(8, 240.0)
+	var supplied_dark_a := _water_supplied(zone_id)
+	var dry_min_a := City.total_water_outage_minutes()
+
+	# ── phase B: same town + a small elevated tank (params_override shrinks
+	# the volume so the drain fits the smoke window)
+	City.reset_for_scenario(42)
+	City.weather.force_temp(0, 100_000, 15.0)
+	_build_pump_town(true, {"volume_m3": 0.6, "tower_height_m": 25.0})
+	City._topo_dirty = true
+	if not await _wait_registered(180.0) or not await _wait_water_registered(120.0):
+		_fail("SMOKE_PUMPBLACKOUT", "register timeout (B)")
+		return
+	zone_id = "wz_" + City.model.buildings_of_kind("water_station")[0]
+	var tower_id: String = City.model.buildings_of_kind("water_tower")[0]
+	var pump_id: String = City.model.buildings_of_kind("pumping_station")[0]
+	var trace: Array = []
+	City.water_result.connect(func(t: int, r: Dictionary) -> void:
+		trace.append("t%d soc=%.2f sp=%s trip=%s conn=%s pstat=%s" % [t,
+			float(r.get("devices", {}).get(tower_id, {}).get("soc", -1.0)),
+			str(City._water_setpoints(t).get(pump_id, {})),
+			str(City.grid_trip_until > t),
+			str(City.topo.connected.get(pump_id, false)),
+			str(City.last_result.get("status", "?"))]))
+	GameClock.restore({"total_minutes": 8.0 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	await _run_steps(8, 240.0)
+	var soc_full := float(City.last_water_result.get("devices", {})
+		.get(tower_id, {}).get("soc", -1.0))
+	var supplied_before_b := _water_supplied(zone_id)
+	City.grid_trip_until = 1_000_000
+	await _run_steps(4, 240.0)  # 1 h dark: tank draining, taps still wet
+	var soc_mid := float(City.last_water_result.get("devices", {})
+		.get(tower_id, {}).get("soc", -1.0))
+	var supplied_grace := _water_supplied(zone_id)
+	await _run_steps(20, 300.0)  # 5 more hours: tank runs dry
+	var soc_end := float(City.last_water_result.get("devices", {})
+		.get(tower_id, {}).get("soc", -1.0))
+	var supplied_dark_b := _water_supplied(zone_id)
+
+	var ok: bool = supplied_before >= 0.99 and supplied_dark_a < 0.5 \
+		and dry_min_a > 0 and supplied_before_b >= 0.99 and soc_full > 0.5 \
+		and supplied_grace >= 0.99 and soc_mid < soc_full - 0.02 \
+		and soc_end < soc_mid and supplied_dark_b < 0.99
+	var report := {
+		"ok": ok,
+		"A_supplied_before": snappedf(supplied_before, 0.01),
+		"A_supplied_dark": snappedf(supplied_dark_a, 0.01),
+		"A_dry_minutes": dry_min_a,
+		"B_supplied_before": snappedf(supplied_before_b, 0.01),
+		"B_soc_full": snappedf(soc_full, 0.03), "B_soc_mid": snappedf(soc_mid, 0.03),
+		"B_soc_end": snappedf(soc_end, 0.03),
+		"B_supplied_grace": snappedf(supplied_grace, 0.01),
+		"B_supplied_dark": snappedf(supplied_dark_b, 0.01),
+		"water_status": City.last_water_result.get("status", "?"),
+		"orch": Orchestrator.stats,
+	}
+	if not ok:  # per-step soc/setpoint trace — the debugging view
+		report["trace"] = trace
+	print("SMOKE_PUMPBLACKOUT ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+## Summer drought: the well's yield collapses (aquifer state via
+## yield_factor) while heat drives demand up — the tower drains, then the
+## taps weaken. Wagner PDD makes it gradual: weak taps before dry taps.
+func _smoke_drought() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_DROUGHT", "health timeout")
+		return
+	City.reset_for_scenario(42)
+	City.weather.force_temp(0, 100_000, 30.0)   # heat wave: +40% demand
+	City.weather.force_drought(0, 100_000, 1.0)  # healthy aquifer first
+	# tower head + well feed: well rated small via override so the balance
+	# tips when the drought hits (demand ~0.5 m³/h at 24 houses)
+	City.place_building("water_tower", Vector2i(8, 8), 0, {"volume_m3": 0.8})
+	for x in range(9, 21):
+		City.build_water_pipe(Vector2i(x, 8))
+	City.place_building("well", Vector2i(12, 6), 0, {"rated_m3_h": 1.5})
+	City.build_water_pipe(Vector2i(12, 7))  # well spur onto the main
+	City.place_building("water_station", Vector2i(21, 8))
+	for x in range(14, 31):
+		City.build_road(Vector2i(x, 11))
+	for x in range(14, 31):
+		City.build_zone(Vector2i(x, 12))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("water_station")[0], 24)
+	City._topo_dirty = true
+	if not await _wait_water_registered(180.0):
+		_fail("SMOKE_DROUGHT", "register timeout")
+		return
+	var zone_id: String = "wz_" + City.model.buildings_of_kind("water_station")[0]
+	var tower_id: String = City.model.buildings_of_kind("water_tower")[0]
+	var well_id: String = City.model.buildings_of_kind("well")[0]
+	GameClock.restore({"total_minutes": 10.0 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	await _run_steps(8, 240.0)
+	var soc_wet := float(City.last_water_result.get("devices", {})
+		.get(tower_id, {}).get("soc", -1.0))
+	var supplied_wet := _water_supplied(zone_id)
+	var well_q_wet := float(City.last_water_result.get("devices", {})
+		.get(well_id, {}).get("detail", {}).get("q_m3h", -1.0))
+	City.weather.force_drought(0, 100_000, 0.1)  # aquifer collapses
+	await _run_steps(24, 300.0)                  # 6 h of net drain
+	var soc_dry := float(City.last_water_result.get("devices", {})
+		.get(tower_id, {}).get("soc", -1.0))
+	var supplied_dry := _water_supplied(zone_id)
+	var well_q_dry := float(City.last_water_result.get("devices", {})
+		.get(well_id, {}).get("detail", {}).get("q_m3h", -1.0))
+	var report := {
+		# well_q_* stay diagnostic: full-tank throttling is backend machinery
+		"ok": supplied_wet >= 0.99 and soc_wet > 0.3
+			and soc_dry < soc_wet - 0.1 and supplied_dry < 0.99
+			and City.total_water_outage_minutes() > 0,
+		"soc_wet": snappedf(soc_wet, 0.01), "soc_dry": snappedf(soc_dry, 0.01),
+		"supplied_wet": snappedf(supplied_wet, 0.01),
+		"supplied_dry": snappedf(supplied_dry, 0.01),
+		"well_q_wet": snappedf(well_q_wet, 0.01), "well_q_dry": snappedf(well_q_dry, 0.01),
+		"dry_minutes": City.total_water_outage_minutes(),
+		"water_status": City.last_water_result.get("status", "?"),
+		"orch": Orchestrator.stats,
+	}
+	print("SMOKE_DROUGHT ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+## Hydraulics check the player can feel: the same town fed by a 25 m vs a
+## 45 m tower — the taller tower holds ~2 bar more at the taps (Δh≈20 m).
+func _smoke_towerheight() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_TOWERHEIGHT", "health timeout")
+		return
+	var p_bars := {}
+	for height: float in [25.0, 45.0]:
+		City.reset_for_scenario(42)
+		City.weather.force_temp(0, 100_000, 15.0)
+		City.place_building("water_tower", Vector2i(8, 8), 0,
+			{"tower_height_m": height})
+		for x in range(9, 21):
+			City.build_water_pipe(Vector2i(x, 8))
+		City.place_building("water_station", Vector2i(21, 8))
+		for x in range(14, 31):
+			City.build_road(Vector2i(x, 11))
+		for x in range(14, 31):
+			City.build_zone(Vector2i(x, 12))
+		City.spawn_houses_bulk(City.model.buildings_of_kind("water_station")[0], 12)
+		City._topo_dirty = true
+		if not await _wait_water_registered(180.0):
+			_fail("SMOKE_TOWERHEIGHT", "register timeout (%.0f m)" % height)
+			return
+		var zone_id: String = "wz_" + City.model.buildings_of_kind("water_station")[0]
+		GameClock.restore({"total_minutes": 8.0 * 60.0, "speed": 0.0})
+		Orchestrator.start()
+		await _run_steps(6, 240.0)
+		p_bars[height] = _water_p_bar(zone_id)
+	var p_25: float = p_bars[25.0]
+	var p_45: float = p_bars[45.0]
+	var report := {
+		"ok": p_25 > 0.0 and p_45 > p_25 + 1.5 and p_45 < p_25 + 2.5,
+		"p_bar_25m": snappedf(p_25, 0.01), "p_bar_45m": snappedf(p_45, 0.01),
+		"delta_bar": snappedf(p_45 - p_25, 0.01),
+		"expected_delta_bar": 1.96,
+		"water_status": City.last_water_result.get("status", "?"),
+	}
+	print("SMOKE_TOWERHEIGHT ", JSON.stringify(report))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if report["ok"] else 1)
 

@@ -1,51 +1,57 @@
-class_name HeatTopology
+class_name WaterTopology
 extends RefCounted
-## Extracts the district-heating network from the tile world and builds the
-## contract topology document for the heat backend (rtheatflow native
-## five-file bundle: network_structure/pipes/consumers/producers/weather).
-## Mirrors PowerTopology's tile-graph walk over model.heat_pipes.
+## Extracts the drinking-water network from the tile world and builds the
+## contract topology document for the water backend (rtwaterflow native
+## five-file bundle: network_structure/pipes/consumers/supply/environment).
+## Mirrors HeatTopology's tile-graph walk over model.water_pipes.
 ##
-## Rules:
-## - exactly one heat PLANT (boiler/chp/heat-pump) acts as the slack; it is
-##   ordered FIRST in doc.devices (the backend binds the first plant-kind
-##   device to the bundle's slack producer); further plants become
-##   heat-exchanger feed-ins, storages become buffer storages
-## - heat_exchanger buildings define heat zones (one consumer per zone);
-##   houses join the nearest slack-reachable heat exchanger within radius
+## Rules (contract v1.1 §3.1 water notes + gamebridge interface pin):
+## - the HEAD source provides the pressure boundary; preference
+##   water_tower > well > pumping_station, by id within a kind; it is
+##   ordered FIRST in doc.devices and mirrored as the single ext_grid in
+##   native.supply (p_bar 0.5 for towers — elevation carries the head —
+##   else 4.0 for a pressurized feed)
+## - tower_height_m is folded into the tower junction's elevation_m
+##   (tank bottom sits at node elevation); flat base elevation until hills
+## - water_station buildings define water zones (one consumer per zone,
+##   mapped by NAME); houses join the nearest head-reachable station
 
 const NEIGHBORS: Array[Vector2i] = [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-const STD_TYPE := "ISOPLUS_DRE50_STD"
-const T_SUPPLY_MIN_C := 60.0
-const TRETURN_K := 328.15  # 55 °C
+const BASE_ELEVATION_M := 300.0
+const PIPE_DIAMETER_MM := 150.0
+const PIPE_K_MM := 0.1
+const PN_BAR := 4.0
+## head preference order (index = priority)
+const SOURCE_PRIORITY: Array[String] = ["water_tower", "well", "pumping_station"]
 
-var doc := {}                    # contract topology document ({} if no plant)
+var doc := {}                    # contract topology document ({} if no source)
 var pipe_tiles := {}             # "P<idx>" -> Array[Vector2i]
 var zones_info := {}             # zone_id -> {sub: building_id, houses: int, center: Vector2i}
 var house_zone := {}             # Vector2i -> zone_id
-var connected := {}              # building_id -> bool (plant-reachable)
-var has_plant := false
+var connected := {}              # building_id -> bool (head-reachable)
+var has_source := false
 var warnings: Array[String] = []
 
 
-static func build(model: WorldModel, tripped: Dictionary) -> HeatTopology:
-	var topo := HeatTopology.new()
+static func build(model: WorldModel, tripped: Dictionary) -> WaterTopology:
+	var topo := WaterTopology.new()
 	topo._build(model, tripped)
 	return topo
 
 
 func _relevant(model: WorldModel, id: String) -> bool:
 	var kind: String = model.buildings[id]["kind"]
-	return BuildingDefs.get_def(kind).get("network", "") == "heat"
+	return BuildingDefs.get_def(kind).get("network", "") == "water"
 
 
 func _build(model: WorldModel, tripped: Dictionary) -> void:
 	var pipe := {}
-	for pos: Vector2i in model.heat_pipes:
+	for pos: Vector2i in model.water_pipes:
 		if not tripped.has(pos):
 			pipe[pos] = true
 
-	# 1. bus tiles: heat-building connection points + junctions
+	# 1. bus tiles: water-building connection points + junctions
 	var tile_building := {}
 	for id: String in model.buildings:
 		if not _relevant(model, id):
@@ -96,23 +102,22 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			if bus_tiles[pos] != bus_tiles[cur]:
 				raw_pipes.append({"a": bus_tiles[pos], "b": bus_tiles[cur], "path": path})
 
-	# 3. reachability from the slack plant
-	var plant_ids: Array[String] = []
-	for kind: String in BuildingDefs.HEAT_PLANT_KINDS:
-		plant_ids.append_array(model.buildings_of_kind(kind))
-	plant_ids.sort()  # deterministic slack choice: first by id
-	has_plant = not plant_ids.is_empty()
-	if not has_plant:
+	# 3. head choice + reachability from the head
+	var source_ids: Array[String] = []
+	for kind: String in SOURCE_PRIORITY:
+		source_ids.append_array(model.buildings_of_kind(kind))
+	has_source = not source_ids.is_empty()
+	if not has_source:
 		return
-	var slack_id: String = plant_ids[0]
+	var head_id: String = source_ids[0]
 	var adjacency := {}
 	for entry: Dictionary in raw_pipes:
 		for pair: Array in [[entry["a"], entry["b"]], [entry["b"], entry["a"]]]:
 			if not adjacency.has(pair[0]):
 				adjacency[pair[0]] = []
 			adjacency[pair[0]].append(pair[1])
-	var reachable := {slack_id: true}
-	var queue: Array = [slack_id]
+	var reachable := {head_id: true}
+	var queue: Array = [head_id]
 	while not queue.is_empty():
 		var key: Variant = queue.pop_back()
 		for neighbor: Variant in adjacency.get(key, []):
@@ -123,22 +128,28 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		if _relevant(model, id):
 			connected[id] = reachable.has(id)
 
-	# 4. junction/pipe/consumer/producer docs (reachable subgraph only)
+	# 4. junction/pipe/consumer/supply docs (reachable subgraph only)
 	var node_name := {}
 	var junctions: Array[Dictionary] = []
 	for key: Variant in reachable:
 		var name := _node_name(key)
 		node_name[key] = name
 		var kind := "node"
+		var elevation := BASE_ELEVATION_M
+		var anchor := _junction_pos(key)
 		if key is String and not str(key).begins_with("j:"):
 			var b_kind: String = model.buildings[key]["kind"]
-			kind = "plant" if key == slack_id \
-				else ("consumer" if b_kind == "heat_exchanger" else "node")
-		var anchor: Vector2i = model.buildings[key]["anchor"] \
-			if (key is String and not str(key).begins_with("j:")) else _junction_pos(key)
+			anchor = model.buildings[key]["anchor"]
+			if b_kind == "water_station":
+				kind = "consumer"
+			elif BuildingDefs.WATER_SOURCE_KINDS.has(b_kind):
+				kind = "source"
+			if b_kind == "water_tower":
+				# tank bottom at node elevation (contract §3.1 water notes)
+				elevation += float(model.building_params(key).get("tower_height_m", 25.0))
 		junctions.append({"name": name, "kind": kind,
 			"geo": [48.0 + anchor.y * 0.0004, 8.0 + anchor.x * 0.0004],
-			"pn_bar": 6.0})
+			"elevation_m": elevation, "pn_bar": PN_BAR})
 	var pipes_out: Array[Dictionary] = []
 	for entry: Dictionary in raw_pipes:
 		if not (reachable.has(entry["a"]) and reachable.has(entry["b"])):
@@ -148,66 +159,51 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		var tiles: int = (entry["path"] as Array).size()
 		pipes_out.append({
 			"from_node": node_name[entry["a"]], "to_node": node_name[entry["b"]],
-			"std_type": STD_TYPE,
 			"length_km": tiles * BuildingDefs.TILE_M / 1000.0,
-			"sections": maxi(1, tiles / 4),
+			"inner_diameter_mm": PIPE_DIAMETER_MM, "k_mm": PIPE_K_MM,
 		})
 
-	var zeros: Array[float] = []
-	var treturns: Array[float] = []
-	for i in 96:
-		zeros.append(0.0)
-		treturns.append(TRETURN_K)
 	var consumers: Array[Dictionary] = []
 	var zones: Array[Dictionary] = []
-	for sub_id: String in model.buildings_of_kind("heat_exchanger"):
+	for sub_id: String in model.buildings_of_kind("water_station"):
 		if not connected.get(sub_id, false):
 			continue
-		var zone_id := "hz_" + sub_id
+		var zone_id := "wz_" + sub_id
 		zones.append({"id": zone_id, "consumer": zone_id})
 		zones_info[zone_id] = {"sub": sub_id, "houses": 0,
 			"center": model.buildings[sub_id]["anchor"]}
+		# mdot placeholder (Field gt=0) — the per-step zone_demand rules
 		consumers.append({"node": node_name[sub_id], "name": zone_id,
-			"q_sh_w": zeros, "q_dhw_w": zeros, "treturn_k": treturns,
-			"q_design_w": 160_000.0, "t_supply_min_c": T_SUPPLY_MIN_C})
+			"mdot_kg_per_s": 0.01, "kind": "residential"})
 	_assign_houses(model)
 	if consumers.is_empty():
-		warnings.append("heat network has no connected heat exchangers")
+		warnings.append("water network has no connected water stations")
 		doc = {}
 		return
 
 	var devices: Array[Dictionary] = []
-	for id: String in plant_ids:      # slack plant FIRST (backend binds it)
+	for id: String in source_ids:     # head FIRST (backend binds the ext_grid)
 		if reachable.has(id):
 			var def := BuildingDefs.get_def(model.buildings[id]["kind"])
 			devices.append({"id": id, "kind": def["device"], "node": node_name[id],
 				"params": model.building_params(id)})
-	for id: String in model.buildings_of_kind("heat_storage"):
-		if reachable.has(id):
-			devices.append({"id": id, "kind": "storage_heat", "node": node_name[id],
-				"params": model.building_params(id)})
 
+	var head_is_tower: bool = model.buildings[head_id]["kind"] == "water_tower"
 	var temps: Array[float] = []
-	var grounds: Array[float] = []
 	for i in 96:
-		temps.append(5.0)   # placeholder — the per-step weather override rules
-		grounds.append(10.0)
+		temps.append(10.0)  # placeholder — the per-step weather override rules
 	doc = {
 		"contract": "1.0",
-		"network_kind": "heat",
-		"name": "city_heat",
+		"network_kind": "water",
+		"name": "city_water",
 		"steps_per_day": 96,
 		"native": {
-			"network_structure": {"name": "city_heat", "junctions": junctions},
+			"network_structure": {"name": "city_water", "junctions": junctions},
 			"pipes": {"pipes": pipes_out},
-			"consumers": {"resolution_minutes": 15, "steps": 96, "consumers": consumers},
-			"producers": {"producers": [{"node": node_name[slack_id],
-				"name": "plant", "kind": "slack", "p_flow_bar": 6.0,
-				"plift_bar": 2.0,
-				"t_flow_k": 273.15 + float(BuildingDefs.get_def(
-					model.buildings[slack_id]["kind"]).get("t_flow_c", 85.0))}]},
-			"weather": {"resolution_minutes": 15, "steps": 96,
-				"t_amb_c": temps, "t_ground_c": grounds},
+			"consumers": {"consumers": consumers},
+			"supply": {"supplies": [{"node": node_name[head_id], "name": "head",
+				"kind": "ext_grid", "p_bar": 0.5 if head_is_tower else 4.0}]},
+			"environment": {"resolution_minutes": 15, "steps": 96, "t_air_c": temps},
 		},
 		"zones": zones,
 		"devices": devices,
@@ -215,7 +211,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 
 
 func _assign_houses(model: WorldModel) -> void:
-	var radius: int = BuildingDefs.get_def("heat_exchanger")["zone_radius"]
+	var radius: int = BuildingDefs.get_def("water_station")["zone_radius"]
 	for pos: Vector2i in model.houses:
 		var best_zone := ""
 		var best_dist := 999
@@ -240,9 +236,9 @@ static func _degree(pipe: Dictionary, pos: Vector2i) -> int:
 
 static func _junction_pos(key: Variant) -> Vector2i:
 	var parts := str(key).trim_prefix("j:").split(",")
-	return Vector2i(int(parts[0]), int(parts[1]))
+	return Vector2i(int(parts[0]), int(parts[1])) if parts.size() == 2 else Vector2i.ZERO
 
 
 static func _node_name(key: Variant) -> String:
-	return "hn_%s" % key if not str(key).begins_with("j:") \
-		else "hj_%s" % str(key).trim_prefix("j:").replace(",", "_")
+	return "wn_%s" % key if not str(key).begins_with("j:") \
+		else "wj_%s" % str(key).trim_prefix("j:").replace(",", "_")

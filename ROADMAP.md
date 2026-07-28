@@ -370,6 +370,13 @@ Tasks:
 **Goal:** third network via the existing rtwaterflow backend; strongest cross-coupling
 (pumps need power).
 
+> **Status (2026-07-28): done** — all three acceptance scenarios pass with real
+> hydraulics (pumpblackout, drought, towerheight: Δp exactly 1.96 bar for 20 m of
+> tower). Elevation entered via `water_tower.tower_height_m` folded into junction
+> `elevation_m` (per-building `params_override`); **per-tile terrain heights (task 3,
+> "hills") are deferred to a follow-up** — the contract path is proven, terrain only
+> changes where the elevations come from. PRVs remain the noted stretch goal.
+
 Tasks:
 1. Add `backends/rtwaterflow` as a submodule; implement puppet mode + contract endpoints
    on a `gamebridge` branch — the same pattern as Phase 2 (its five-file bundle format

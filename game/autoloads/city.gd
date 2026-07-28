@@ -10,6 +10,7 @@ signal world_changed          # tiles changed -> views redraw
 signal event_logged(event: Dictionary)
 signal power_result(t: int, result: Dictionary)
 signal heat_result(t: int, result: Dictionary)
+signal water_result(t: int, result: Dictionary)
 
 const START_MONEY := 500_000
 const GROWTH_HAPPINESS_MIN := 60.0
@@ -30,16 +31,22 @@ var events: Array[Dictionary] = []
 
 var topo: PowerTopology = PowerTopology.new()
 var heat_topo: HeatTopology = HeatTopology.new()
+var water_topo: WaterTopology = WaterTopology.new()
 var tripped_tiles := {}           # Vector2i -> repair_at (sim-step)
 var grid_trip_until := -1
 var zone_supplied := {}           # power zone_id -> bool (latest step)
 var heat_zone_supplied := {}      # heat zone_id -> bool (latest step)
 var heat_outage_minutes := {}     # heat zone_id -> minutes cold
+var water_zone_supplied := {}     # water zone_id -> bool (latest step)
+var water_outage_minutes := {}    # water zone_id -> minutes dry
 var last_result := {}
 var last_heat_result := {}
+var last_water_result := {}
 var current_t := 0
 var heat_registered := false
+var water_registered := false
 var _last_heat_doc_json := ""
+var _last_water_doc_json := ""
 
 ## Scenario hook: overrides the grid connection's capacity_kw when > 0.
 var grid_capacity_override := -1.0
@@ -106,13 +113,19 @@ func build_heat_pipe(pos: Vector2i) -> bool:
 		and _after_build(true)
 
 
-func place_building(kind: String, anchor: Vector2i, rot: int = 0) -> bool:
+func build_water_pipe(pos: Vector2i) -> bool:
+	return _paid(BuildingDefs.COSTS["water_pipe"]) and model.set_water_pipe(pos, 1) \
+		and _after_build(true)
+
+
+func place_building(kind: String, anchor: Vector2i, rot: int = 0,
+		params_override: Dictionary = {}) -> bool:
 	var def := BuildingDefs.get_def(kind)
 	if def.is_empty() or not model.can_place_building(kind, anchor):
 		return false
 	if not _paid(def["cost"]):
 		return false
-	model.place_building(kind, anchor, rot)
+	model.place_building(kind, anchor, rot, params_override)
 	log_event("built", "info", "%s built" % kind)
 	return _after_build(true)
 
@@ -130,6 +143,9 @@ func bulldoze(pos: Vector2i) -> bool:
 		return _after_build(true)
 	if model.heat_pipes.has(pos):
 		model.remove_heat_pipe(pos)
+		return _after_build(true)
+	if model.water_pipes.has(pos):
+		model.remove_water_pipe(pos)
 		return _after_build(true)
 	if model.houses.has(pos):
 		model.remove_house(pos)
@@ -168,12 +184,14 @@ func _refresh_topo_assignment() -> void:
 	# for zone assignment + house counts, skip the backend resets
 	topo = PowerTopology.build(model, tripped_tiles)
 	heat_topo = HeatTopology.build(model, tripped_tiles)
+	water_topo = WaterTopology.build(model, tripped_tiles)
 
 
 func _sync_topology() -> void:
 	_topo_dirty = false
 	topo = PowerTopology.build(model, tripped_tiles)
 	heat_topo = HeatTopology.build(model, tripped_tiles)
+	water_topo = WaterTopology.build(model, tripped_tiles)
 	_syncing = true
 	_register_async()
 
@@ -203,7 +221,19 @@ func _register_async() -> void:
 				_last_heat_doc_json = heat_json
 			else:
 				heat_registered = false
-	if registered or heat_registered:
+	# water (independent of both)
+	if not water_topo.has_source or water_topo.doc.is_empty():
+		water_registered = false
+		_last_water_doc_json = ""
+	else:
+		var water_json := JSON.stringify(water_topo.doc)
+		if water_json != _last_water_doc_json or not water_registered:
+			if await _register_network("water", water_topo.doc):
+				water_registered = true
+				_last_water_doc_json = water_json
+			else:
+				water_registered = false
+	if registered or heat_registered or water_registered:
 		Orchestrator.start()
 	_syncing = false
 
@@ -263,6 +293,12 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 			out[zone_id] = {"value": snappedf(DemandModel.heat_zone_demand_kw(
 				heat_topo.zones_info[zone_id]["houses"], t, temp), 0.1)}
 		return out
+	if network == "water":
+		var temp_w := float(weather.sample(t)["temp_c"])
+		for zone_id: String in water_topo.zones_info:
+			out[zone_id] = {"value": snappedf(DemandModel.water_zone_demand_m3h(
+				water_topo.zones_info[zone_id]["houses"], t, temp_w), 0.001)}
+		return out
 	for zone_id: String in topo.zones_info:
 		out[zone_id] = {"value": DemandModel.zone_demand_kw(
 			topo.zones_info[zone_id]["houses"], t)}
@@ -272,6 +308,8 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 func get_device_setpoints(network: String, t: int) -> Dictionary:
 	if network == "heat":
 		return _heat_setpoints(t)
+	if network == "water":
+		return _water_setpoints(t)
 	var sample := weather.sample(t)
 	var total_demand := 0.0
 	for zone_id: String in topo.zones_info:
@@ -343,11 +381,32 @@ func _heat_setpoints(t: int) -> Dictionary:
 	return out
 
 
+## Water dispatch: wells follow the aquifer (drought factor), pumps run only
+## while their electric feed is alive — cable-connected to a slack-reachable
+## grid that is neither tripped nor failed. THE cross-vector consequence:
+## a blackout at the pumping station drains the tower, then taps run dry.
+func _water_setpoints(t: int) -> Dictionary:
+	var out := {}
+	var power_ok: bool = registered and grid_trip_until <= t \
+		and last_result.get("status", "failed") != "failed"
+	for device: Dictionary in water_topo.doc.get("devices", []):
+		match device["kind"]:
+			"well":
+				out[device["id"]] = {"yield_factor": snappedf(weather.drought_factor(t), 0.01)}
+			"water_pump":
+				var powered: bool = power_ok and topo.connected.get(device["id"], false)
+				out[device["id"]] = {"enabled": powered}
+	return out
+
+
 # ─── consequences (ROADMAP Phase 3 task 6) ───
 
 func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 	if network == "heat":
 		_on_heat_step(t, result)
+		return
+	if network == "water":
+		_on_water_step(t, result)
 		return
 	if network != "power":
 		return
@@ -438,6 +497,43 @@ func total_heat_outage_minutes() -> int:
 	var total := 0
 	for zone_id: String in heat_outage_minutes:
 		total += heat_outage_minutes[zone_id]
+	return total
+
+
+## Water consequences (ROADMAP Phase 5): `supplied` is the Wagner PDD
+## fraction — weak taps (fractional) before dry taps. No water is the
+## harshest of the three outages: hygiene, cooking, everything stops.
+func _on_water_step(t: int, result: Dictionary) -> void:
+	last_water_result = result
+	var failed: bool = result.get("status", "failed") == "failed"
+	var dry_weight := 0.0     # house-weighted shortfall across zones
+	var total := 0
+	water_zone_supplied.clear()
+	for zone_id: String in water_topo.zones_info:
+		var houses: int = water_topo.zones_info[zone_id]["houses"]
+		total += houses
+		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
+		var supplied := 0.0 if (failed or zone_result.is_empty()) \
+			else clampf(float(zone_result.get("supplied", 0.0)), 0.0, 1.0)
+		water_zone_supplied[zone_id] = supplied >= 0.95
+		if supplied < 0.95 and houses > 0:
+			water_outage_minutes[zone_id] = water_outage_minutes.get(zone_id, 0) \
+				+ GameClock.SIM_STEP_MINUTES
+			dry_weight += (1.0 - supplied) * houses
+	if total > 0 and dry_weight > 0.0:
+		happiness = clampf(happiness - 8.0 * dry_weight / total, 0.0, 100.0)
+		if t % 8 == 0:
+			log_event("dry_taps", "critical",
+				"Water pressure collapsed — %.0f%% of homes short of water"
+				% (100.0 * dry_weight / total))
+	state_changed.emit()
+	water_result.emit(t, result)
+
+
+func total_water_outage_minutes() -> int:
+	var total := 0
+	for zone_id: String in water_outage_minutes:
+		total += water_outage_minutes[zone_id]
 	return total
 
 
@@ -540,21 +636,26 @@ func reset_for_scenario(weather_seed: int) -> void:
 	weather = WeatherSystem.new(weather_seed)
 	outage_minutes = {}
 	heat_outage_minutes = {}
+	water_outage_minutes = {}
 	happiness = 100.0
 	tripped_tiles.clear()
 	grid_trip_until = -1
 	grid_capacity_override = -1.0
 	registered = false
 	heat_registered = false
+	water_registered = false
 	_last_doc_json = ""
 	_last_heat_doc_json = ""
+	_last_water_doc_json = ""
 	_line_streak.clear()
 	_slack_streak = 0
 	_heat_degraded_streak = 0
 	zone_supplied.clear()
 	heat_zone_supplied.clear()
+	water_zone_supplied.clear()
 	last_result = {}
 	last_heat_result = {}
+	last_water_result = {}
 	_topo_dirty = true
 	world_changed.emit()
 	state_changed.emit()
@@ -567,6 +668,7 @@ func serialize() -> Dictionary:
 		"money": money, "happiness": happiness,
 		"outage_minutes": outage_minutes.duplicate(),
 		"heat_outage_minutes": heat_outage_minutes.duplicate(),
+		"water_outage_minutes": water_outage_minutes.duplicate(),
 		"weather_seed": weather.seed_value,
 	}
 
@@ -576,6 +678,7 @@ func restore(data: Dictionary) -> void:
 	happiness = float(data.get("happiness", 100.0))
 	outage_minutes = data.get("outage_minutes", {})
 	heat_outage_minutes = data.get("heat_outage_minutes", {})
+	water_outage_minutes = data.get("water_outage_minutes", {})
 	weather = WeatherSystem.new(int(data.get("weather_seed", 42)))
 	tripped_tiles.clear()
 	grid_trip_until = -1

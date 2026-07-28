@@ -41,6 +41,7 @@ func force_wind(from_t: int, to_t: int, wind: float) -> void:
 func clear_calm() -> void:
 	_wind_overrides.clear()
 	_temp_overrides.clear()
+	_drought_overrides.clear()
 
 
 func wind_ms(t: int) -> float:
@@ -85,6 +86,28 @@ func temp_c(t: int) -> float:
 	var diurnal := 4.0 * sin(TAU * (day_frac - 0.4))
 	var noise := 3.0 * _temp_noise.get_noise_1d(t / (STEPS_PER_DAY * 2.0) * 100.0)
 	return lerpf(-2.0, 19.0, season) + diurnal + noise
+
+
+# ─── drought (Phase 5): slow aquifer state driving well yields. 1.0 = full
+# yield; late summer dips naturally, force_drought scripts scenarios ───
+
+var _drought_overrides: Array[Dictionary] = []
+
+
+func force_drought(from_t: int, to_t: int, factor: float) -> void:
+	_drought_overrides.append({"from": from_t, "to": to_t, "factor": factor})
+
+
+## Well yield_factor ∈ [0,1] (contract §3.1 `well` setpoint). Uses the cloud
+## noise channel at a very low frequency — dry spells span weeks.
+func drought_factor(t: int) -> float:
+	for i in range(_drought_overrides.size() - 1, -1, -1):
+		var override: Dictionary = _drought_overrides[i]
+		if t >= override["from"] and t < override["to"]:
+			return override["factor"]
+	var season := _season_factor(t)  # aquifers lowest in late summer
+	var wetness := clampf(_cloud_noise.get_noise_1d(t / (STEPS_PER_DAY * 20.0) * 100.0) * 0.5 + 0.5, 0.0, 1.0)
+	return clampf(1.0 - 0.35 * season * (1.0 - wetness), 0.3, 1.0)
 
 
 func sample(t: int) -> Dictionary:

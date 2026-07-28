@@ -23,6 +23,18 @@
         "RTHEATFLOW_PORT": "8011",
         "RTHEATFLOW_HOST": "127.0.0.1"
       }
+    },
+    {
+      "id": "water",
+      "python": ".venv-water/Scripts/python.exe",
+      "module": "rtwaterflow.main",
+      "cwd": "backends/rtwaterflow",
+      "port": 8012,
+      "env": {
+        "RTWATERFLOW_EXTERNAL_CLOCK": "true",
+        "RTWATERFLOW_PORT": "8012",
+        "RTWATERFLOW_HOST": "127.0.0.1"
+      }
     }
   ]
 }

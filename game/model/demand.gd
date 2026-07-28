@@ -44,3 +44,30 @@ static func heat_zone_demand_kw(n_houses: int, t: int, temp_c: float) -> float:
 		else (1.5 if (dhw_hour >= 18 and dhw_hour < 21) else 0.7)
 	return n_houses * (HOUSE_HEAT_DESIGN_KW * sh_factor * night_setback
 		+ HOUSE_DHW_KW * dhw_factor)
+
+
+# ─── water (Phase 5): ~120 l/person·d, diversified household. Morning and
+# evening peaks like DVGW W 410 residential curves; hot summer days add
+# garden/shower demand (the drought pincer: demand up while yields drop) ───
+
+## Diversified average per house, m³/h (≈ 300 l/d per 2.5-person household).
+const HOUSE_WATER_M3H := 0.0125
+
+## 24 hourly factors around 1.0 (residential double peak, W 410-ish).
+const WATER_HOURLY: Array[float] = [
+	0.35, 0.30, 0.28, 0.28, 0.35, 0.70,
+	1.40, 1.90, 1.60, 1.20, 1.05, 1.15,
+	1.30, 1.10, 0.95, 0.95, 1.05, 1.30,
+	1.60, 1.75, 1.45, 1.05, 0.70, 0.45,
+]
+
+
+static func water_zone_demand_m3h(n_houses: int, t: int, temp_c: float) -> float:
+	var minute := (t * 15) % 1440
+	var hour := minute / 60
+	var next_hour := (hour + 1) % 24
+	var within := float(minute % 60) / 60.0
+	var factor := lerpf(WATER_HOURLY[hour], WATER_HOURLY[next_hour], within)
+	# summer surcharge: +40% at 30 °C, none below 20 °C
+	var summer := 1.0 + clampf((temp_c - 20.0) / 25.0, 0.0, 0.4)
+	return n_houses * HOUSE_WATER_M3H * factor * summer
