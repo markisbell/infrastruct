@@ -47,6 +47,10 @@ func _ready() -> void:
 			_smoke_overload()
 		"stress":
 			_smoke_stress()
+		"coldsnap":
+			_smoke_coldsnap()
+		"heatstorage":
+			_smoke_heatstorage()
 		_:
 			_boot_game()
 
@@ -192,10 +196,16 @@ func _take_screenshot() -> void:
 		for y in [125, 126]:
 			if not (x == 142):
 				City.build_zone(Vector2i(x, y))
+	# district heating: boiler -> trunk under the houses -> heat exchanger
+	City.place_building("boiler_plant", Vector2i(120, 128))
+	for x in range(122, 141):
+		City.build_heat_pipe(Vector2i(x, 129))
+	City.place_building("heat_exchanger", Vector2i(136, 130))
+	City.place_building("heat_storage", Vector2i(126, 130))
 	var subs := City.model.buildings_of_kind("substation")
 	City.spawn_houses_bulk(subs[0], 22)
 	view.redraw()
-	view.focus_tile(Vector2i(132, 122), 17.0)
+	view.focus_tile(Vector2i(131, 124), 19.0)
 	await get_tree().create_timer(1.0).timeout
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)
@@ -492,6 +502,238 @@ func _stress_wait(seconds: float, name: String) -> void:
 	_stall["worst_ms"][name] = snappedf(worst, 0.1)
 
 
+# ─── Phase 4 acceptance scenarios (district heating) ───
+
+func _wait_heat_registered(timeout_s: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
+	while not City.heat_registered:
+		if Time.get_ticks_msec() > deadline:
+			return false
+		await get_tree().create_timer(0.5).timeout
+	return true
+
+
+func _run_steps(n: int, timeout_s: float) -> void:
+	# derive the target from the CLOCK: current_t only updates on sim-step
+	# emissions and is stale right after a GameClock.restore
+	var end_t := int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES) + n
+	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
+	GameClock.speed = 60.0
+	while City.current_t < end_t and Time.get_ticks_msec() < deadline:
+		await get_tree().create_timer(0.25).timeout
+	GameClock.pause()
+	await get_tree().create_timer(1.5).timeout
+
+
+func _heat_zone_t(zone_id: String) -> float:
+	return float(City.last_heat_result.get("zones", {}).get(zone_id, {})
+		.get("detail", {}).get("t_supply_c", 0.0))
+
+
+## January cold snap: undersized network → the FAR zone at the end of a long
+## thin spur goes cold first (pandapipes gradient); adding a CHP near the far
+## end fixes the heat AND relieves the grid (coupling); a heat-pump town on a
+## weak grid connection blacks itself out.
+func _smoke_coldsnap() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_COLDSNAP", "health timeout")
+		return
+
+	# ── phase A: boiler + near cluster (24 houses) + tiny far zone at the
+	# end of a ~850 m trunk — deep cold forced the whole run
+	City.reset_for_scenario(42)
+	City.weather.force_temp(0, 100_000, -18.0)
+	City.weather.force_wind(0, 100_000, 7.0)
+	City.place_building("boiler_plant", Vector2i(8, 8))
+	for x in range(10, 61):  # ~1.25 km trunk — the far end is FAR
+		City.build_heat_pipe(Vector2i(x, 9))
+	City.place_building("heat_exchanger", Vector2i(14, 10))
+	City.place_building("heat_exchanger", Vector2i(60, 10))
+	for x in range(10, 27):
+		City.build_road(Vector2i(x, 12))
+	for x in range(10, 27):
+		City.build_zone(Vector2i(x, 13))
+	for x in range(56, 65):
+		City.build_road(Vector2i(x, 12))
+	for x in range(56, 65):
+		City.build_zone(Vector2i(x, 13))
+	# power net for the near cluster (needed for the coupling checks)
+	City.place_building("grid_connection", Vector2i(8, 16))
+	for x in range(10, 47):
+		City.build_cable(Vector2i(x, 17))
+	City.place_building("substation", Vector2i(20, 18))
+	var heat_subs := City.model.buildings_of_kind("heat_exchanger")
+	City.spawn_houses_bulk(heat_subs[0], 24)  # near
+	City.spawn_houses_bulk(heat_subs[1], 2)   # far: tiny flow -> deep temp drop
+	City._topo_dirty = true
+	if not await _wait_registered(180.0) or not await _wait_heat_registered(60.0):
+		_fail("SMOKE_COLDSNAP", "register timeout (A)")
+		return
+	var near_zone := "hz_" + heat_subs[0]
+	var far_zone := "hz_" + heat_subs[1]
+	GameClock.restore({"total_minutes": 8.0 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	await _run_steps(10, 240.0)
+	var near_a := _heat_zone_t(near_zone)
+	var far_a := _heat_zone_t(far_zone)
+	var slack_id: String = City.model.buildings_of_kind("grid_connection")[0]
+	var import_a := float(City.last_result.get("devices", {})
+		.get(slack_id, {}).get("output_kw", 0.0))
+	var far_cold_minutes: int = City.heat_outage_minutes.get(far_zone, 0)
+
+	# ── phase B: CHP feed near the far end, cable-connected to the grid
+	# the CHP must touch the trunk DIRECTLY: a dead-end stub is rejected by
+	# the heat contract (leaf junctions without consumers carry no flow)
+	City.place_building("chp_plant", Vector2i(44, 7))  # footprint row (44-45,8) touches the trunk at y=9
+	# cable route NORTH of the pipe trunk (cables cannot cross pipes):
+	# CHP top (44,7) -> west along y=6 -> south along x=7 -> grid connection
+	for x in range(8, 45):
+		City.build_cable(Vector2i(x, 6))
+	for y in range(7, 17):
+		City.build_cable(Vector2i(7, y))
+	# explicit awaited re-registration (the debounce path is fire-and-forget)
+	City._topo_dirty = false
+	City.topo = PowerTopology.build(City.model, City.tripped_tiles)
+	City.heat_topo = HeatTopology.build(City.model, City.tripped_tiles)
+	City._syncing = true
+	await City._register_async()
+	Orchestrator.start()
+	await _run_steps(12, 240.0)
+	var far_b := _heat_zone_t(far_zone)
+	var cpl := float(City.last_result.get("devices", {})
+		.get("cpl_heat", {}).get("output_kw", 0.0))
+	var import_b := float(City.last_result.get("devices", {})
+		.get(slack_id, {}).get("output_kw", 0.0))
+	var debug_b := {
+		"registered": [City.registered, City.heat_registered],
+		"heat_devices": City.heat_topo.doc.get("devices", []).map(
+			func(d: Dictionary) -> String: return "%s:%s" % [d["id"], d["kind"]]),
+		"power_has_cpl": City.topo.doc.get("devices", []).any(
+			func(d: Dictionary) -> bool: return d["id"] == "cpl_heat"),
+		"heat_result_devices": City.last_heat_result.get("devices", {}).keys(),
+		"events_tail": City.events.slice(maxi(0, City.events.size() - 4)).map(
+			func(e: Dictionary) -> String: return str(e["kind"])),
+	}
+
+	# ── phase C: heat-pump town on a weak grid connection → blackout
+	City.reset_for_scenario(42)
+	City.weather.force_temp(0, 100_000, -18.0)
+	City.weather.force_wind(0, 100_000, 7.0)
+	City.grid_capacity_override = 25.0
+	City.place_building("heat_pump_plant", Vector2i(8, 8))
+	for x in range(10, 21):  # pipe reaches (20,9), adjacent to the exchanger
+		City.build_heat_pipe(Vector2i(x, 9))
+	City.place_building("heat_exchanger", Vector2i(20, 10))
+	for x in range(12, 29):
+		City.build_road(Vector2i(x, 12))
+	for x in range(12, 29):
+		City.build_zone(Vector2i(x, 13))
+	City.place_building("grid_connection", Vector2i(8, 16))
+	for x in range(10, 24):
+		City.build_cable(Vector2i(x, 17))
+	for y in range(10, 16):
+		# vertical run at x=9: touches the heat pump at (9,9) above and the
+		# grid connection footprint at (9,16) below — the coupling path
+		City.build_cable(Vector2i(9, y))
+	City.place_building("substation", Vector2i(23, 18))  # touches cable (23,17)
+	City.spawn_houses_bulk(City.model.buildings_of_kind("heat_exchanger")[0], 24)
+	var trip_seen := {"grid": false}
+	City.event_logged.connect(func(event: Dictionary) -> void:
+		if event["kind"] == "grid_trip":
+			trip_seen["grid"] = true)
+	City._topo_dirty = true
+	if not await _wait_registered(180.0) or not await _wait_heat_registered(60.0):
+		_fail("SMOKE_COLDSNAP", "register timeout (C)")
+		return
+	GameClock.restore({"total_minutes": 32.0 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	await _run_steps(14, 240.0)
+
+	var report := {
+		"ok": far_a < near_a - 2.0 and far_a < HeatTopology.T_SUPPLY_MIN_C
+			and near_a >= HeatTopology.T_SUPPLY_MIN_C and far_cold_minutes > 0
+			and far_b >= HeatTopology.T_SUPPLY_MIN_C
+			and cpl < -30.0 and import_b < import_a - 20.0
+			and trip_seen["grid"] and City.total_outage_minutes() > 0,
+		"near_t_A": snappedf(near_a, 0.1), "far_t_A": snappedf(far_a, 0.1),
+		"far_cold_min_A": far_cold_minutes,
+		"far_t_B": snappedf(far_b, 0.1), "cpl_heat_kw_B": snappedf(cpl, 0.1),
+		"grid_import_A": snappedf(import_a, 0.1), "grid_import_B": snappedf(import_b, 0.1),
+		"hp_grid_trip_C": trip_seen["grid"],
+		"power_outage_min_C": City.total_outage_minutes(),
+		"debug_b": debug_b,
+	}
+	print("SMOKE_COLDSNAP ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+## Buffer storage: charged at night, bridges the morning demand peak
+## (assert on the SoC trajectory from the step results).
+func _smoke_heatstorage() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_HEATSTORAGE", "health timeout")
+		return
+	City.reset_for_scenario(42)
+	City.weather.force_temp(0, 100_000, -5.0)
+	City.place_building("boiler_plant", Vector2i(8, 8))
+	for x in range(10, 26):  # pipe reaches (25,9), adjacent to the exchanger
+		City.build_heat_pipe(Vector2i(x, 9))
+	City.place_building("heat_exchanger", Vector2i(25, 10))
+	City.place_building("heat_storage", Vector2i(16, 10))  # adjacent to the trunk
+	for x in range(14, 34):
+		City.build_road(Vector2i(x, 12))
+	for x in range(14, 34):
+		City.build_zone(Vector2i(x, 13))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("heat_exchanger")[0], 20)
+	City._topo_dirty = true
+	if not await _wait_heat_registered(180.0):
+		_fail("SMOKE_HEATSTORAGE", "register timeout")
+		return
+	var storage_id: String = City.model.buildings_of_kind("heat_storage")[0]
+	var soc_series := {}
+	var discharge_kw := {"max": 0.0, "probe": {}, "statuses": {}}
+	City.heat_result.connect(func(t: int, result: Dictionary) -> void:
+		var status: String = result.get("status", "?")
+		discharge_kw["statuses"][status] = discharge_kw["statuses"].get(status, 0) + 1
+		var device: Dictionary = result.get("devices", {}).get(storage_id, {})
+		if not device.is_empty() and device.get("soc") != null:
+			soc_series[t % 96] = float(device["soc"])
+			var hour := (t * 15 % 1440) / 60
+			if hour >= 6 and hour < 10:
+				discharge_kw["max"] = maxf(discharge_kw["max"],
+					float(device.get("output_kw", 0.0)))
+				if (discharge_kw["probe"] as Dictionary).is_empty():
+					discharge_kw["probe"] = {"t": t, "hour": hour, "device": device})
+	# start 23:00, run through the night charge + morning discharge to 10:30
+	GameClock.restore({"total_minutes": 23.0 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	await _run_steps(46, 360.0)
+	var soc_00: float = soc_series.get(1, -1.0)
+	var soc_05: float = soc_series.get(21, -1.0)
+	var soc_10: float = soc_series.get(41, -1.0)
+	var report := {
+		"ok": soc_00 >= 0.0 and soc_05 > soc_00 + 0.1
+			and soc_10 < soc_05 - 0.1 and discharge_kw["max"] > 20.0,
+		"soc_midnight": snappedf(soc_00, 0.01), "soc_5am": snappedf(soc_05, 0.01),
+		"soc_10am": snappedf(soc_10, 0.01),
+		"max_morning_discharge_kw": snappedf(discharge_kw["max"], 0.1),
+		"samples": soc_series.size(), "storage_id": storage_id,
+		"result_status": City.last_heat_result.get("status", "?"),
+		"storage_entry": City.last_heat_result.get("devices", {}).get(storage_id, {}),
+		"orch": Orchestrator.stats,
+		"morning_probe": discharge_kw["probe"],
+		"statuses": discharge_kw["statuses"],
+	}
+	print("SMOKE_HEATSTORAGE ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
 # ─── Phase 3 acceptance scenarios ───
 
 ## Wind-only town behind a tiny grid connection: outages must occur exactly
@@ -520,14 +762,7 @@ func _smoke_windless_week() -> void:
 
 
 func _run_windless_phase(weather_seed: int, with_battery: bool) -> Dictionary:
-	# fresh city
-	City.model = WorldModel.new()
-	City.money = 100_000_000
-	City.weather = WeatherSystem.new(weather_seed)
-	City.outage_minutes = {}
-	City.happiness = 100.0
-	City.tripped_tiles.clear()
-	City.grid_trip_until = -1
+	City.reset_for_scenario(weather_seed)
 	City.grid_capacity_override = 3.0  # kW — below even the night minimum
 	City.place_building("grid_connection", Vector2i(10, 10))
 	for x in range(12, 31):

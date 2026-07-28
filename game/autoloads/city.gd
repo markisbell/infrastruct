@@ -9,6 +9,7 @@ signal state_changed          # money/happiness/HUD refresh
 signal world_changed          # tiles changed -> views redraw
 signal event_logged(event: Dictionary)
 signal power_result(t: int, result: Dictionary)
+signal heat_result(t: int, result: Dictionary)
 
 const START_MONEY := 500_000
 const GROWTH_HAPPINESS_MIN := 60.0
@@ -28,11 +29,17 @@ var outage_minutes := {}          # zone_id -> minutes
 var events: Array[Dictionary] = []
 
 var topo: PowerTopology = PowerTopology.new()
+var heat_topo: HeatTopology = HeatTopology.new()
 var tripped_tiles := {}           # Vector2i -> repair_at (sim-step)
 var grid_trip_until := -1
-var zone_supplied := {}           # zone_id -> bool (latest step)
+var zone_supplied := {}           # power zone_id -> bool (latest step)
+var heat_zone_supplied := {}      # heat zone_id -> bool (latest step)
+var heat_outage_minutes := {}     # heat zone_id -> minutes cold
 var last_result := {}
+var last_heat_result := {}
 var current_t := 0
+var heat_registered := false
+var _last_heat_doc_json := ""
 
 ## Scenario hook: overrides the grid connection's capacity_kw when > 0.
 var grid_capacity_override := -1.0
@@ -51,6 +58,13 @@ func _ready() -> void:
 	# overwrite this after boot)
 	Orchestrator.boundary_provider = self
 	Orchestrator.step_completed.connect(_on_step_completed)
+	# surface orchestrator failures in the event feed — a silent reset
+	# failure cost a debugging session once
+	Orchestrator.supply_event.connect(
+		func(network: String, kind: String, severity: String, data: Dictionary) -> void:
+			if severity != "info" and kind != "violation":
+				log_event(kind, severity, "%s (%s): %s" % [kind, network,
+					str(data.get("detail", data.get("error", "")))]))
 	GameClock.sim_step.connect(func(t: int) -> void: current_t = t)
 
 
@@ -87,6 +101,11 @@ func build_cable(pos: Vector2i) -> bool:
 		and _after_build(true)
 
 
+func build_heat_pipe(pos: Vector2i) -> bool:
+	return _paid(BuildingDefs.COSTS["heat_pipe"]) and model.set_heat_pipe(pos, 1) \
+		and _after_build(true)
+
+
 func place_building(kind: String, anchor: Vector2i, rot: int = 0) -> bool:
 	var def := BuildingDefs.get_def(kind)
 	if def.is_empty() or not model.can_place_building(kind, anchor):
@@ -108,6 +127,9 @@ func bulldoze(pos: Vector2i) -> bool:
 	if model.cables.has(pos):
 		model.remove_cable(pos)
 		tripped_tiles.erase(pos)
+		return _after_build(true)
+	if model.heat_pipes.has(pos):
+		model.remove_heat_pipe(pos)
 		return _after_build(true)
 	if model.houses.has(pos):
 		model.remove_house(pos)
@@ -142,43 +164,64 @@ func _after_build(topology_relevant: bool) -> bool:
 # ─── topology sync (model -> solver; reset only on real change) ───
 
 func _refresh_topo_assignment() -> void:
-	# houses/zones changed but the electrical doc did not: re-extract locally
-	# for zone assignment + house counts, skip the backend reset
+	# houses/zones changed but the network docs did not: re-extract locally
+	# for zone assignment + house counts, skip the backend resets
 	topo = PowerTopology.build(model, tripped_tiles)
+	heat_topo = HeatTopology.build(model, tripped_tiles)
 
 
 func _sync_topology() -> void:
 	_topo_dirty = false
 	topo = PowerTopology.build(model, tripped_tiles)
+	heat_topo = HeatTopology.build(model, tripped_tiles)
+	_syncing = true
+	_register_async()
+
+
+func _register_async() -> void:
+	# power
 	if not topo.has_slack or topo.doc.is_empty():
 		registered = false
 		_last_doc_json = ""
-		return
-	var doc_json := JSON.stringify(topo.doc)
-	if doc_json == _last_doc_json and registered:
-		return
-	if SidecarManager.state_of("power") != SidecarManager.State.HEALTHY:
-		_topo_dirty = true  # retry once the backend is back
-		return
-	_syncing = true
-	_register_async(doc_json)
-
-
-func _register_async(doc_json: String) -> void:
-	if not CosimBridge.info.has("power"):
-		if not await CosimBridge.handshake("power"):
-			_syncing = false
-			_topo_dirty = true
-			return
-	var ok: bool = await Orchestrator.register("power", topo.doc)
-	registered = ok
-	if ok:
-		_last_doc_json = doc_json
+	else:
+		var doc_json := JSON.stringify(topo.doc)
+		if doc_json != _last_doc_json or not registered:
+			if await _register_network("power", topo.doc):
+				registered = true
+				_last_doc_json = doc_json
+			else:
+				registered = false
+	# heat (independent of power failures)
+	if not heat_topo.has_plant or heat_topo.doc.is_empty():
+		heat_registered = false
+		_last_heat_doc_json = ""
+	else:
+		var heat_json := JSON.stringify(heat_topo.doc)
+		if heat_json != _last_heat_doc_json or not heat_registered:
+			if await _register_network("heat", heat_topo.doc):
+				heat_registered = true
+				_last_heat_doc_json = heat_json
+			else:
+				heat_registered = false
+	if registered or heat_registered:
 		Orchestrator.start()
+	_syncing = false
+
+
+func _register_network(id: String, doc: Dictionary) -> bool:
+	if SidecarManager.state_of(id) != SidecarManager.State.HEALTHY:
+		_topo_dirty = true  # retry once the backend is back
+		return false
+	if not CosimBridge.info.has(id):
+		if not await CosimBridge.handshake(id):
+			_topo_dirty = true
+			return false
+	var ok: bool = await Orchestrator.register(id, doc)
+	if ok:
 		# instant feedback: solve once right now instead of waiting for the
 		# next clock-driven sim step
-		Orchestrator._dispatch("power", current_t)
-	_syncing = false
+		Orchestrator._dispatch(id, current_t)
+	return ok
 
 
 func is_syncing() -> bool:
@@ -212,15 +255,23 @@ func warmup_backend() -> void:
 
 # ─── BoundaryProvider (duck-typed, see Orchestrator) ───
 
-func get_zone_demand(_network: String, t: int) -> Dictionary:
+func get_zone_demand(network: String, t: int) -> Dictionary:
 	var out := {}
+	if network == "heat":
+		var temp := float(weather.sample(t)["temp_c"])
+		for zone_id: String in heat_topo.zones_info:
+			out[zone_id] = {"value": snappedf(DemandModel.heat_zone_demand_kw(
+				heat_topo.zones_info[zone_id]["houses"], t, temp), 0.1)}
+		return out
 	for zone_id: String in topo.zones_info:
 		out[zone_id] = {"value": DemandModel.zone_demand_kw(
 			topo.zones_info[zone_id]["houses"], t)}
 	return out
 
 
-func get_device_setpoints(_network: String, t: int) -> Dictionary:
+func get_device_setpoints(network: String, t: int) -> Dictionary:
+	if network == "heat":
+		return _heat_setpoints(t)
 	var sample := weather.sample(t)
 	var total_demand := 0.0
 	for zone_id: String in topo.zones_info:
@@ -257,9 +308,47 @@ func get_weather(t: int) -> Dictionary:
 	return weather.sample(t)
 
 
+## Heat network dispatch: secondary plants (feed-ins) run their configured
+## constant output; storages charge at night and discharge into the morning
+## peak (the Phase 4 storage acceptance behavior).
+func _heat_setpoints(t: int) -> Dictionary:
+	var out := {}
+	var first := true
+	# discharging MORE than the net currently consumes is hydraulically
+	# infeasible (the pressure slack cannot absorb reverse flow — the solver
+	# rightly fails); cap discharge well below live demand
+	var temp := float(weather.sample(t)["temp_c"])
+	var total_demand := 0.0
+	for zone_id: String in heat_topo.zones_info:
+		total_demand += DemandModel.heat_zone_demand_kw(
+			heat_topo.zones_info[zone_id]["houses"], t, temp)
+	for device: Dictionary in heat_topo.doc.get("devices", []):
+		var def_kind: String = device["kind"]
+		if def_kind == "storage_heat":
+			var p_max := float(device["params"].get("p_max_kw", 100.0))
+			var hour := (t * 15 % 1440) / 60
+			var setpoint := 0.0
+			if hour >= 0 and hour < 5:
+				setpoint = -p_max          # charge from the net at night
+			elif hour >= 6 and hour < 10:
+				setpoint = minf(p_max, 0.6 * total_demand)
+			out[device["id"]] = {"q_kw": snappedf(setpoint, 0.1)}
+		elif not first and def_kind in ["chp", "boiler", "heat_pump"]:
+			# secondary plants are heat-exchanger feed-ins with constant dispatch
+			var b_kind: String = model.buildings[device["id"]]["kind"]
+			out[device["id"]] = {"q_kw": float(
+				BuildingDefs.get_def(b_kind).get("dispatch_q_kw", 100.0))}
+		if def_kind in ["chp", "boiler", "heat_pump"]:
+			first = false
+	return out
+
+
 # ─── consequences (ROADMAP Phase 3 task 6) ───
 
 func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
+	if network == "heat":
+		_on_heat_step(t, result)
+		return
 	if network != "power":
 		return
 	last_result = result
@@ -295,6 +384,61 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 	_grow(t)
 	state_changed.emit()
 	power_result.emit(t, result)
+
+
+## Heat consequences (ROADMAP Phase 4 task 4): a zone is warm when supplied
+## AND its supply temperature clears the consumer's minimum; cold homes hurt
+## happiness scaled by the outdoor temperature — a heat outage in July is a
+## shrug, in January a catastrophe.
+var _heat_degraded_streak := 0
+
+
+func _on_heat_step(t: int, result: Dictionary) -> void:
+	last_heat_result = result
+	var status: String = result.get("status", "failed")
+	if status == "degraded":
+		_heat_degraded_streak += 1
+		if _heat_degraded_streak == 1:
+			log_event("heat_degraded", "warning",
+				"Heat solver degraded — network near its limits")
+	else:
+		_heat_degraded_streak = 0
+	var failed := status == "failed"
+	var temp := float(weather.sample(t)["temp_c"])
+	var cold_factor := clampf((18.0 - temp) / 24.0, 0.15, 1.25)
+	var cold_houses := 0
+	var total := 0
+	heat_zone_supplied.clear()
+	for zone_id: String in heat_topo.zones_info:
+		var houses: int = heat_topo.zones_info[zone_id]["houses"]
+		total += houses
+		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
+		var t_supply := float(zone_result.get("detail", {}).get("t_supply_c", 0.0))
+		var warm: bool = (
+			not failed and not zone_result.is_empty()
+			and float(zone_result.get("supplied", 0.0)) >= 0.99
+			and t_supply >= HeatTopology.T_SUPPLY_MIN_C
+		)
+		heat_zone_supplied[zone_id] = warm
+		if not warm and houses > 0:
+			heat_outage_minutes[zone_id] = heat_outage_minutes.get(zone_id, 0) \
+				+ GameClock.SIM_STEP_MINUTES
+			cold_houses += houses
+	if total > 0 and cold_houses > 0:
+		happiness = clampf(
+			happiness - 5.0 * cold_factor * float(cold_houses) / total, 0.0, 100.0)
+		if cold_houses > 0 and t % 8 == 0:
+			log_event("cold_homes", "warning",
+				"%d houses without adequate heat (%.0f°C outside)" % [cold_houses, temp])
+	state_changed.emit()
+	heat_result.emit(t, result)
+
+
+func total_heat_outage_minutes() -> int:
+	var total := 0
+	for zone_id: String in heat_outage_minutes:
+		total += heat_outage_minutes[zone_id]
+	return total
 
 
 func _check_protection(t: int, result: Dictionary) -> void:
@@ -389,12 +533,40 @@ func total_outage_minutes() -> int:
 	return total
 
 
+## Fresh-slate reset for scripted scenarios/tests.
+func reset_for_scenario(weather_seed: int) -> void:
+	model = WorldModel.new()
+	money = 100_000_000
+	weather = WeatherSystem.new(weather_seed)
+	outage_minutes = {}
+	heat_outage_minutes = {}
+	happiness = 100.0
+	tripped_tiles.clear()
+	grid_trip_until = -1
+	grid_capacity_override = -1.0
+	registered = false
+	heat_registered = false
+	_last_doc_json = ""
+	_last_heat_doc_json = ""
+	_line_streak.clear()
+	_slack_streak = 0
+	_heat_degraded_streak = 0
+	zone_supplied.clear()
+	heat_zone_supplied.clear()
+	last_result = {}
+	last_heat_result = {}
+	_topo_dirty = true
+	world_changed.emit()
+	state_changed.emit()
+
+
 # ─── persistence ───
 
 func serialize() -> Dictionary:
 	return {
 		"money": money, "happiness": happiness,
 		"outage_minutes": outage_minutes.duplicate(),
+		"heat_outage_minutes": heat_outage_minutes.duplicate(),
 		"weather_seed": weather.seed_value,
 	}
 
@@ -403,6 +575,7 @@ func restore(data: Dictionary) -> void:
 	money = int(data.get("money", START_MONEY))
 	happiness = float(data.get("happiness", 100.0))
 	outage_minutes = data.get("outage_minutes", {})
+	heat_outage_minutes = data.get("heat_outage_minutes", {})
 	weather = WeatherSystem.new(int(data.get("weather_seed", 42)))
 	tripped_tiles.clear()
 	grid_trip_until = -1

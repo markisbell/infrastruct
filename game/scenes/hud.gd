@@ -13,6 +13,12 @@ const TOOL_KEYS := {
 	KEY_8: [CityView.Tool.BATTERY, "Battery"],
 	KEY_9: [CityView.Tool.GRID, "Grid connection"],
 	KEY_0: [CityView.Tool.BULLDOZE, "Bulldoze"],
+	KEY_H: [CityView.Tool.PIPE, "Heat pipe"],
+	KEY_J: [CityView.Tool.HEAT_SUB, "Heat exchanger (heat zone)"],
+	KEY_B: [CityView.Tool.BOILER, "Boiler plant"],
+	KEY_C: [CityView.Tool.CHP, "CHP plant (heat + power)"],
+	KEY_U: [CityView.Tool.HEATPUMP, "Heat pump plant (draws power)"],
+	KEY_T: [CityView.Tool.HEATSTORE, "Heat storage tank"],
 }
 
 var view: CityView
@@ -31,7 +37,7 @@ func _ready() -> void:
 	_status = Label.new()
 	row.add_child(_status)
 	_tool_label = Label.new()
-	_tool_label.text = "Tool: none — 1-9 tools, 0 bulldoze · RMB erase · Q/E rotate view · R rotate building · SPACE pause · +/- speed · V overlays"
+	_tool_label.text = "Tool: none — 1-9/0 power+city · H/J/B/C/U/T heat · Q/E rotate · R rotate bld · SPACE pause · V overlays"
 	row.add_child(_tool_label)
 
 	var events_panel := PanelContainer.new()
@@ -59,11 +65,12 @@ func _refresh() -> void:
 		demand += DemandModel.zone_demand_kw(
 			City.topo.zones_info[zone_id]["houses"], City.current_t)
 	var houses := City.model.houses.size()
-	_status.text = "Day %d %s (%s) · %s · €%s · Happiness %.0f%% · %d houses · %.0f kW demand · Outage %d min%s" % [
+	_status.text = "Day %d %s (%s, %.0f°C) · %s · €%s · Happy %.0f%% · %d houses · %.0f kW el · Outage %d min el / %d min heat%s" % [
 		GameClock.day(), GameClock.time_of_day_string(), GameClock.season_name(),
+		float(City.weather.sample(City.current_t)["temp_c"]),
 		("PAUSED" if GameClock.speed == 0.0 else "%.0fx" % GameClock.speed),
 		_fmt_money(City.money), City.happiness, houses, demand,
-		City.total_outage_minutes(),
+		City.total_outage_minutes(), City.total_heat_outage_minutes(),
 		("  ·  ⟳ rebuilding grid…" if City.is_syncing() else "")]
 
 

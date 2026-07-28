@@ -40,6 +40,7 @@ func force_wind(from_t: int, to_t: int, wind: float) -> void:
 
 func clear_calm() -> void:
 	_wind_overrides.clear()
+	_temp_overrides.clear()
 
 
 func wind_ms(t: int) -> float:
@@ -65,7 +66,20 @@ func ghi_wm2(t: int) -> float:
 	return clear_sky * lerpf(0.22, 1.0, cloud)
 
 
+## Scripted temperature overrides (cold-snap scenarios), same semantics as
+## the wind overrides: last matching entry wins.
+var _temp_overrides: Array[Dictionary] = []
+
+
+func force_temp(from_t: int, to_t: int, temp: float) -> void:
+	_temp_overrides.append({"from": from_t, "to": to_t, "temp": temp})
+
+
 func temp_c(t: int) -> float:
+	for i in range(_temp_overrides.size() - 1, -1, -1):
+		var override: Dictionary = _temp_overrides[i]
+		if t >= override["from"] and t < override["to"]:
+			return override["temp"]
 	var season := _season_factor(t)
 	var day_frac := float(t % STEPS_PER_DAY) / STEPS_PER_DAY
 	var diurnal := 4.0 * sin(TAU * (day_frac - 0.4))

@@ -5,9 +5,10 @@ extends RefCounted
 ## v2 (Phase 3): roads, residential zoning, houses, buildings with
 ## footprints — on top of v1's cable layer.
 
-const SCHEMA_VERSION := 2
+const SCHEMA_VERSION := 3
 
 var cables: Dictionary = {}          # Vector2i -> int (kind; 1 = LV cable)
+var heat_pipes: Dictionary = {}      # Vector2i -> int (kind; 1 = DH pipe pair, v3)
 var roads: Dictionary = {}           # Vector2i -> true
 var zoning: Dictionary = {}          # Vector2i -> int (1 = residential)
 var houses: Dictionary = {}          # Vector2i -> {"level": int}
@@ -22,7 +23,7 @@ var building_tiles: Dictionary = {}
 
 func is_tile_free(pos: Vector2i) -> bool:
 	return not (roads.has(pos) or houses.has(pos) or building_tiles.has(pos)
-		or cables.has(pos))
+		or cables.has(pos) or heat_pipes.has(pos))
 
 
 func can_place_building(kind: String, anchor: Vector2i) -> bool:
@@ -35,7 +36,8 @@ func can_place_building(kind: String, anchor: Vector2i) -> bool:
 # ─── mutations (all return success) ───
 
 func set_cable(pos: Vector2i, kind: int) -> bool:
-	if roads.has(pos) or houses.has(pos) or building_tiles.has(pos):
+	if roads.has(pos) or houses.has(pos) or building_tiles.has(pos) \
+			or heat_pipes.has(pos):
 		return false
 	cables[pos] = kind
 	return true
@@ -43,6 +45,18 @@ func set_cable(pos: Vector2i, kind: int) -> bool:
 
 func remove_cable(pos: Vector2i) -> void:
 	cables.erase(pos)
+
+
+func set_heat_pipe(pos: Vector2i, kind: int) -> bool:
+	if roads.has(pos) or houses.has(pos) or building_tiles.has(pos) \
+			or cables.has(pos):
+		return false
+	heat_pipes[pos] = kind
+	return true
+
+
+func remove_heat_pipe(pos: Vector2i) -> void:
+	heat_pipes.erase(pos)
 
 
 func has_cable(pos: Vector2i) -> bool:
@@ -142,6 +156,7 @@ func to_json() -> String:
 	return JSON.stringify({
 		"version": SCHEMA_VERSION,
 		"cables": _dict_to_keys(cables),
+		"heat_pipes": _dict_to_keys(heat_pipes),
 		"roads": _dict_to_keys(roads),
 		"zoning": _dict_to_keys(zoning),
 		"houses": _dict_to_keys(houses),
@@ -160,6 +175,7 @@ static func from_json(text: String) -> WorldModel:
 	model.cables = _keys_to_dict(dict.get("cables", {}), TYPE_INT)
 	if int(dict.get("version", 1)) < 2:
 		return model  # v1 saves carried cables only
+	model.heat_pipes = _keys_to_dict(dict.get("heat_pipes", {}), TYPE_INT)
 	model.roads = _keys_to_dict(dict.get("roads", {}), TYPE_BOOL)
 	model.zoning = _keys_to_dict(dict.get("zoning", {}), TYPE_INT)
 	model.houses = _keys_to_dict(dict.get("houses", {}), TYPE_DICTIONARY)
@@ -175,9 +191,9 @@ static func from_json(text: String) -> WorldModel:
 
 
 func equals(other: WorldModel) -> bool:
-	return cables == other.cables and roads == other.roads \
-		and zoning == other.zoning and houses == other.houses \
-		and buildings == other.buildings
+	return cables == other.cables and heat_pipes == other.heat_pipes \
+		and roads == other.roads and zoning == other.zoning \
+		and houses == other.houses and buildings == other.buildings
 
 
 func _buildings_out() -> Dictionary:

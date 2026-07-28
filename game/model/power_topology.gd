@@ -150,15 +150,25 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	_assign_houses(model)
 
 	var devices: Array[Dictionary] = []
+	var coupling_bus := ""
 	for id: String in model.buildings:
 		if not connected.get(id, false):
 			continue
 		var def := BuildingDefs.get_def(model.buildings[id]["kind"])
 		var device_kind: String = def.get("device", "")
+		if def.get("network", "power") == "heat":
+			# a cable-connected heat plant: its electric coupling (heat pump
+			# draw / CHP feed-in) lands here as the aggregated cpl_heat load
+			if device_kind != "" and coupling_bus == "":
+				coupling_bus = _bus_name(id)
+			continue
 		if device_kind == "":
 			continue
 		devices.append({"id": id, "kind": device_kind, "node": _bus_name(id),
 			"params": def.get("params", {})})
+	if coupling_bus != "":
+		devices.append({"id": "cpl_heat", "kind": "coupling_load",
+			"node": coupling_bus, "params": {}})
 
 	doc = {
 		"contract": "1.0",

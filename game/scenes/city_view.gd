@@ -7,11 +7,15 @@ extends Node3D
 ## One tile = 1.0 world unit; tile (x, y) occupies [x, x+1)×[y, y+1) on the
 ## ground plane, model centers at (x+0.5, 0, y+0.5).
 
-enum Tool { NONE, ROAD, ZONE, CABLE, SUBSTATION, GAS, WIND, SOLAR, BATTERY, GRID, BULLDOZE }
+enum Tool { NONE, ROAD, ZONE, CABLE, SUBSTATION, GAS, WIND, SOLAR, BATTERY, GRID,
+	BULLDOZE, PIPE, HEAT_SUB, BOILER, CHP, HEATPUMP, HEATSTORE }
 
 const TOOL_BUILDING := {
 	Tool.SUBSTATION: "substation", Tool.GAS: "gas_plant", Tool.WIND: "wind_farm",
 	Tool.SOLAR: "solar_park", Tool.BATTERY: "battery", Tool.GRID: "grid_connection",
+	Tool.HEAT_SUB: "heat_exchanger", Tool.BOILER: "boiler_plant",
+	Tool.CHP: "chp_plant", Tool.HEATPUMP: "heat_pump_plant",
+	Tool.HEATSTORE: "heat_storage",
 }
 
 const KENNEY := "res://assets/kenney/"
@@ -37,6 +41,7 @@ var _ghost_rot := 0
 # pos/id -> Node3D, one dict per layer (incremental diff in redraw)
 var _roads := {}
 var _cables := {}
+var _pipes := {}
 var _zones := {}
 var _houses := {}
 var _buildings := {}
@@ -46,12 +51,14 @@ var _painting := false
 var _erasing := false
 
 var _dark_material := StandardMaterial3D.new()
+var _cold_material := StandardMaterial3D.new()
 var _house_scene_cache := {}
 
 
 func _ready() -> void:
 	_build_environment()
 	_dark_material.albedo_color = Color(0.16, 0.17, 0.22)
+	_cold_material.albedo_color = Color(0.55, 0.68, 0.88)  # cold homes: icy blue
 	_cursor = MeshInstance3D.new()
 	var cursor_mesh := PlaneMesh.new()
 	cursor_mesh.size = Vector2(1.0, 1.0)
@@ -60,7 +67,12 @@ func _ready() -> void:
 	_cursor.position.y = 0.02
 	add_child(_cursor)
 	City.world_changed.connect(redraw)
-	City.power_result.connect(func(_t: int, _r: Dictionary) -> void: _update_overlays())
+	City.power_result.connect(func(_t: int, _r: Dictionary) -> void:
+		_update_overlays()
+		_update_house_power())
+	City.heat_result.connect(func(_t: int, _r: Dictionary) -> void:
+		_update_overlays()
+		_update_house_power())
 	redraw()
 
 
@@ -119,6 +131,7 @@ func redraw() -> void:
 	_diff(_zones, model.zoning, _make_zone)
 	_diff(_roads, model.roads, _make_road)
 	_diff(_cables, model.cables, _make_cable)
+	_diff(_pipes, model.heat_pipes, _make_pipe)
 	_diff(_houses, model.houses, _make_house)
 	_diff(_buildings, model.buildings, _make_building)
 	# neighbor-dependent pieces refresh in place
@@ -126,6 +139,8 @@ func redraw() -> void:
 		_orient_road(pos, _roads[pos])
 	for pos: Vector2i in _cables:
 		_orient_cable(pos, _cables[pos])
+	for pos: Vector2i in _pipes:
+		_orient_pipe(pos, _pipes[pos])
 	_update_house_power()
 	_update_overlays()
 
@@ -248,6 +263,50 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 		node.add_child(wire)
 
 
+func _make_pipe(pos: Vector2i) -> Node3D:
+	var node := Node3D.new()
+	node.position = _center(pos)
+	return node  # child mesh set by _orient_pipe
+
+
+func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
+	var mask := 0
+	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+	for i in 4:
+		if City.model.heat_pipes.has(pos + directions[i]):
+			mask |= 1 << i
+	var pick := _pipe_piece(mask)
+	var wanted: String = "%s|%d" % [pick[0], pick[1]]
+	if node.get_meta("piece", "") == wanted:
+		return
+	node.set_meta("piece", wanted)
+	for child in node.get_children():
+		child.queue_free()
+	var piece := _instance_glb("factory-kit/Models/GLB format/%s.glb" % pick[0], 0.95)
+	piece.rotation_degrees.y = pick[1]
+	node.add_child(piece)
+
+
+func _pipe_piece(mask: int) -> Array:
+	# same mask/yaw convention as roads (Kenney pieces run along X at yaw 0)
+	match mask:
+		0, 1: return ["pipe-large", 270]
+		2: return ["pipe-large", 180]
+		4: return ["pipe-large", 90]
+		8: return ["pipe-large", 0]
+		5: return ["pipe-large-long", 90]
+		10: return ["pipe-large-long", 0]
+		3: return ["pipe-large-curve", 270]
+		6: return ["pipe-large-curve", 180]
+		12: return ["pipe-large-curve", 90]
+		9: return ["pipe-large-curve", 0]
+		7: return ["pipe-large-junction", 180]
+		14: return ["pipe-large-junction", 90]
+		13: return ["pipe-large-junction", 0]
+		11: return ["pipe-large-junction", 270]
+		_: return ["pipe-large-cross", 0]
+
+
 func _make_house(pos: Vector2i) -> Node3D:
 	var variant: String = HOUSE_VARIANTS[abs(pos.x * 73856093 ^ pos.y * 19349663) % HOUSE_VARIANTS.size()]
 	var house := _instance_glb(
@@ -291,6 +350,24 @@ func _build_building_visual(kind: String) -> Node3D:
 			return _make_battery()
 		"grid_connection":
 			return _make_grid_connection()
+		"boiler_plant":
+			var boiler := _instance_glb("factory-kit/Models/GLB format/machine.glb", 1.6)
+			var stack := _instance_glb("city-kit-industrial/Models/GLB format/chimney-medium.glb", 0.7)
+			stack.position = Vector3(0.6, 0, 0.6)
+			boiler.add_child(stack)
+			return boiler
+		"chp_plant":
+			var chp := _instance_glb("factory-kit/Models/GLB format/machine-fortified.glb", 1.7)
+			var stack2 := _instance_glb("city-kit-industrial/Models/GLB format/chimney-small.glb", 0.6)
+			stack2.position = Vector3(0.55, 0, -0.55)
+			chp.add_child(stack2)
+			return chp
+		"heat_pump_plant":
+			return _instance_glb("factory-kit/Models/GLB format/machine-window.glb", 1.7)
+		"heat_storage":
+			return _instance_glb("city-kit-industrial/Models/GLB format/detail-tank.glb", 0.85)
+		"heat_exchanger":
+			return _instance_glb("factory-kit/Models/GLB format/machine-bed.glb", 0.7)
 		_:
 			return _instance_glb("city-kit-industrial/Models/GLB format/building-a.glb", 1.9)
 
@@ -389,15 +466,25 @@ func _update_house_power() -> void:
 	for pos: Vector2i in _houses:
 		var zone: String = City.topo.house_zone.get(pos, "")
 		var lit: bool = zone != "" and City.zone_supplied.get(zone, true)
-		_set_dark(_houses[pos], not lit)
+		var heat_zone: String = City.heat_topo.house_zone.get(pos, "")
+		var cold: bool = heat_zone != "" \
+			and not City.heat_zone_supplied.get(heat_zone, true)
+		# no power dominates visually; else cold homes render icy blue
+		_set_state_material(_houses[pos],
+			"dark" if not lit else ("cold" if cold else ""))
 
 
-func _set_dark(node: Node3D, dark: bool) -> void:
-	if node.get_meta("dark", false) == dark:
+func _set_state_material(node: Node3D, state: String) -> void:
+	if node.get_meta("state", "") == state:
 		return
-	node.set_meta("dark", dark)
+	node.set_meta("state", state)
+	var material: StandardMaterial3D = null
+	if state == "dark":
+		material = _dark_material
+	elif state == "cold":
+		material = _cold_material
 	for mesh: MeshInstance3D in node.find_children("*", "MeshInstance3D", true, false):
-		mesh.material_override = _dark_material if dark else null
+		mesh.material_override = material
 
 
 func _update_overlays() -> void:
@@ -421,28 +508,43 @@ func _update_overlays() -> void:
 		for child in _cables[pos].get_children():
 			if child.has_meta("wire"):
 				(child as MeshInstance3D).material_override = _flat(color)
-	# voltage rings at substations
+	# voltage rings at substations, temperature rings at heat exchangers
 	for key: Variant in _rings.keys():
-		if not City.topo.zones_info.has(key):
+		if not (City.topo.zones_info.has(key) or City.heat_topo.zones_info.has(key)):
 			_rings[key].queue_free()
 			_rings.erase(key)
 	for zone_id: String in City.topo.zones_info:
-		if not _rings.has(zone_id):
-			var ring := MeshInstance3D.new()
-			var torus := TorusMesh.new()
-			torus.inner_radius = 0.55
-			torus.outer_radius = 0.68
-			ring.mesh = torus
-			ring.position = _center(City.topo.zones_info[zone_id]["center"]) + Vector3(0, 0.03, 0)
-			add_child(ring)
-			_rings[zone_id] = ring
+		var ring := _ensure_ring(zone_id, City.topo.zones_info[zone_id]["center"])
 		var zone_result: Dictionary = City.last_result.get("zones", {}).get(zone_id, {})
 		var v_pu := float(zone_result.get("detail", {}).get("v_pu", 0.0))
 		var ring_color := Color(0.55, 0.55, 0.55)
 		if v_pu > 0.0:
 			var deviation := clampf(absf(v_pu - 1.0) / 0.1, 0.0, 1.0)
 			ring_color = Color(deviation, 1.0 - deviation, 0.1)
-		_rings[zone_id].material_override = _flat(ring_color, false, true)
+		ring.material_override = _flat(ring_color, false, true)
+	for zone_id: String in City.heat_topo.zones_info:
+		var ring := _ensure_ring(zone_id, City.heat_topo.zones_info[zone_id]["center"])
+		var zone_result: Dictionary = City.last_heat_result.get("zones", {}).get(zone_id, {})
+		var t_supply := float(zone_result.get("detail", {}).get("t_supply_c", 0.0))
+		var ring_color := Color(0.55, 0.55, 0.55)
+		if t_supply > 0.0:
+			# cold blue below the minimum, amber at 60-70, warm orange above
+			ring_color = Color(0.3, 0.5, 0.95) if t_supply < HeatTopology.T_SUPPLY_MIN_C \
+				else (Color(0.95, 0.75, 0.2) if t_supply < 70.0 else Color(1.0, 0.5, 0.1))
+		ring.material_override = _flat(ring_color, false, true)
+
+
+func _ensure_ring(zone_id: String, center: Vector2i) -> MeshInstance3D:
+	if not _rings.has(zone_id):
+		var ring := MeshInstance3D.new()
+		var torus := TorusMesh.new()
+		torus.inner_radius = 0.55
+		torus.outer_radius = 0.68
+		ring.mesh = torus
+		ring.position = _center(center) + Vector3(0, 0.03, 0)
+		add_child(ring)
+		_rings[zone_id] = ring
+	return _rings[zone_id]
 
 
 func _apply_overlay_visibility() -> void:
@@ -553,6 +655,8 @@ func _apply_tool(pos: Vector2i) -> void:
 			City.build_zone(pos)
 		Tool.CABLE:
 			City.build_cable(pos)
+		Tool.PIPE:
+			City.build_heat_pipe(pos)
 		Tool.BULLDOZE:
 			City.bulldoze(pos)
 		_:
