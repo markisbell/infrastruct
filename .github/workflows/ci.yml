@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  GODOT_VERSION: 4.7.1
+
+jobs:
+  game-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: .tools/godot
+          key: godot-${{ env.GODOT_VERSION }}-${{ runner.os }}
+
+      - name: Download Godot (Linux)
+        if: steps.cache-godot.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          mkdir -p .tools/godot
+          curl -sL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip -d .tools/godot
+          mv .tools/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 .tools/godot/godot
+
+      - name: Download Godot (Windows)
+        if: steps.cache-godot.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p .tools/godot
+          curl -sL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_win64.exe.zip"
+          unzip -q godot.zip -d .tools/godot
+          mv ".tools/godot/Godot_v${GODOT_VERSION}-stable_win64_console.exe" .tools/godot/godot.exe
+
+      - name: Import project
+        shell: bash
+        run: |
+          GODOT=.tools/godot/godot
+          [ "${{ runner.os }}" = "Windows" ] && GODOT=.tools/godot/godot.exe
+          $GODOT --headless --import --path game
+
+      - name: GdUnit4 tests (headless)
+        shell: bash
+        run: |
+          GODOT=.tools/godot/godot
+          [ "${{ runner.os }}" = "Windows" ] && GODOT=.tools/godot/godot.exe
+          $GODOT --headless --path game -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://tests --ignoreHeadlessMode
+
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install rtpowerflow
+        run: pip install -e "./backends/rtpowerflow[dev]" numba
+
+      - name: Backend tests (incl. gamebridge puppet mode)
+        working-directory: backends/rtpowerflow
+        run: python -m pytest -q

@@ -1,0 +1,16 @@
+# local tooling (Godot editor binary lives here, see docs/build.md)
+.tools/
+
+# Godot
+game/.godot/
+*.translation
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# spike outputs / reports
+*.local.json
+tests/e2e/out/
