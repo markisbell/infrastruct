@@ -1,0 +1,16 @@
+﻿{
+  "sidecars": [
+    {
+      "id": "power",
+      "python": ".venv/Scripts/python.exe",
+      "module": "netzsim.main",
+      "cwd": "backends/rtpowerflow",
+      "port": 8014,
+      "env": {
+        "NETZSIM_EXTERNAL_CLOCK": "true",
+        "NETZSIM_PORT": "8014",
+        "NETZSIM_HOST": "127.0.0.1"
+      }
+    }
+  ]
+}

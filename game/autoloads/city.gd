@@ -15,7 +15,10 @@ const GROWTH_HAPPINESS_MIN := 60.0
 const TRIP_STREAK := 3            # consecutive critical overloads before a line trips
 const GRID_TRIP_STREAK := 2       # consecutive capacity busts before the slack trips
 const REPAIR_STEPS := 8           # 2 in-game hours
-const TOPO_DEBOUNCE_S := 0.6
+# Idle-based: the countdown RESTARTS on every build action, so a building
+# spree costs ONE reset at the end, not one per click (reset storms froze
+# the world in the first playtest).
+const TOPO_DEBOUNCE_S := 2.5
 
 var model := WorldModel.new()
 var weather := WeatherSystem.new(42)
@@ -51,7 +54,14 @@ func _ready() -> void:
 	GameClock.sim_step.connect(func(t: int) -> void: current_t = t)
 
 
+var _assign_dirty := false
+
+
 func _process(delta: float) -> void:
+	if _assign_dirty and not _topo_dirty:
+		# cheap local re-extraction (house→zone assignment), max once per frame
+		_assign_dirty = false
+		_refresh_topo_assignment()
 	if not _topo_dirty or _syncing:
 		return
 	_topo_timer += delta
@@ -122,7 +132,8 @@ func _after_build(topology_relevant: bool) -> bool:
 	if topology_relevant:
 		_topo_dirty = true
 	else:
-		_refresh_topo_assignment()
+		_assign_dirty = true  # zone/house reassignment is deferred to _process
+	_topo_timer = 0.0  # restart the idle countdown — see TOPO_DEBOUNCE_S
 	world_changed.emit()
 	state_changed.emit()
 	return true
@@ -164,7 +175,39 @@ func _register_async(doc_json: String) -> void:
 	if ok:
 		_last_doc_json = doc_json
 		Orchestrator.start()
+		# instant feedback: solve once right now instead of waiting for the
+		# next clock-driven sim step
+		Orchestrator._dispatch("power", current_t)
 	_syncing = false
+
+
+func is_syncing() -> bool:
+	return _syncing or _topo_dirty
+
+
+## Absorb the one-time numba JIT (~3-8 s backend-side) at BOOT with a
+## throwaway 2-bus network, so the player's first real build doesn't stall.
+func warmup_backend() -> void:
+	if registered or _syncing or not CosimBridge.info.has("power"):
+		return
+	var warmup_doc := {
+		"contract": "1.0", "network_kind": "power", "name": "jit_warmup",
+		"steps_per_day": 96,
+		"native": {
+			"grid_structure": {"name": "warmup", "f_hz": 50,
+				"buses": [{"name": "w0", "vn_kv": 0.4}, {"name": "w1", "vn_kv": 0.4}]},
+			"lines": {"lines": [{"name": "wl", "from_bus": 0, "to_bus": 1,
+				"length_km": 0.1, "std_type": "NAYY 4x50 SE"}], "transformers": []},
+			"load": {"resolution_minutes": 15, "steps": 96, "loads": []},
+			"generation": {"resolution_minutes": 15, "steps": 96, "generation": []},
+			"substation": {"resolution_minutes": 15, "steps": 96, "substations": []},
+		},
+		"zones": [],
+		"devices": [{"id": "wslack", "kind": "slack", "node": "w0",
+			"params": {"vm_pu": 1.0}}],
+	}
+	await CosimBridge.net_reset("power", warmup_doc)
+	log_event("ready", "info", "Power solver warmed up — build away")
 
 
 # ─── BoundaryProvider (duck-typed, see Orchestrator) ───

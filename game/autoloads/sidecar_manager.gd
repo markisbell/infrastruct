@@ -31,8 +31,8 @@ func _ready() -> void:
 	add_child(_poll_timer)
 
 
-func load_config() -> bool:
-	var path := repo_root.path_join("orchestration/sidecars.json")
+func load_config(config_rel_path: String = "orchestration/sidecars.json") -> bool:
+	var path := repo_root.path_join(config_rel_path)
 	if not FileAccess.file_exists(path):
 		push_error("SidecarManager: config not found: " + path)
 		return false
@@ -103,7 +103,9 @@ func _start(id: String) -> void:
 	parts.append('"%s" -m %s >> "%s" 2>&1' % [
 		repo_root.path_join(cfg["python"]),
 		cfg["module"],
-		log_dir.path_join(id + ".log"),
+		# port in the name: parallel instances (live game + stress run) must
+		# never interleave in one file
+		log_dir.path_join("%s_%d.log" % [id, port_of(id)]),
 	])
 	var pid := OS.create_process("cmd.exe", ["/c", " && ".join(parts)])
 	s["pid"] = pid

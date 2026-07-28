@@ -45,6 +45,8 @@ func _ready() -> void:
 			_smoke_windless_week()
 		"overload":
 			_smoke_overload()
+		"stress":
+			_smoke_stress()
 		_:
 			_boot_game()
 
@@ -57,12 +59,14 @@ func _boot_game() -> void:
 		SidecarManager.start_all()
 		SidecarManager.state_changed.connect(_on_sidecar_state)
 		_add_debug_panel()
-	GameClock.speed = 1.0
+	# lively default: one sim step every ~2 s of play (SPACE pauses, +/- adjust)
+	GameClock.speed = 8.0
 
 
 func _on_sidecar_state(id: String, state: SidecarManager.State) -> void:
 	if state == SidecarManager.State.HEALTHY and not CosimBridge.info.has(id):
-		CosimBridge.handshake(id)
+		if await CosimBridge.handshake(id) and id == "power":
+			City.warmup_backend()  # absorb the numba JIT before the first build
 
 
 var _debug_panel: PanelContainer
@@ -408,12 +412,90 @@ func _golden_check(golden: Dictionary, result: Dictionary) -> Array:
 	return fails
 
 
+## Freeze hunt: build like a player (tile drags, then plants) with the clock
+## running against the real backend; measure the worst frame stall per phase.
+var _stall := {"phase": "", "worst_ms": {}}
+
+
+func _smoke_stress() -> void:
+	# own ports (8014/8015) so a live play session on 8010/8011 is untouched
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_power_healthy(180.0):
+		_fail("SMOKE_STRESS", "power health timeout")
+		return
+	City.money = 100_000_000
+	GameClock.restore({"total_minutes": 8.0 * 60.0, "speed": 4.0})
+	Orchestrator.start()
+	_stall["worst_ms"] = {}
+	await _stress_phase("gc+substations", func() -> void:
+		City.place_building("grid_connection", Vector2i(10, 10))
+		City.place_building("substation", Vector2i(30, 10))
+		City.place_building("substation", Vector2i(30, 24)))
+	await _stress_phase("cable_drag", func() -> void:
+		for x in range(12, 30):
+			City.build_cable(Vector2i(x, 10))
+		for y in range(11, 25):
+			City.build_cable(Vector2i(20, y))
+		for x in range(21, 30):
+			City.build_cable(Vector2i(x, 24)))
+	await _stress_phase("road_drag", func() -> void:
+		for x in range(24, 44):
+			City.build_road(Vector2i(x, 12))
+			City.build_road(Vector2i(x, 15))
+			City.build_road(Vector2i(x, 26)))
+	await _stress_phase("zone_drag", func() -> void:
+		for x in range(24, 44):
+			for y in [13, 14, 27]:
+				City.build_zone(Vector2i(x, y)))
+	await _stress_phase("houses", func() -> void:
+		for sub_id: String in City.model.buildings_of_kind("substation"):
+			City.spawn_houses_bulk(sub_id, 30))
+	# plants one by one, waiting between them like a human would
+	for plant: Array in [["wind_farm", Vector2i(14, 6)], ["solar_park", Vector2i(24, 6)],
+			["gas_plant", Vector2i(34, 6)], ["battery", Vector2i(17, 8)]]:
+		await _stress_phase("plant_" + plant[0], func() -> void:
+			City.place_building(plant[0], plant[1])
+			for y in range(7, 10):
+				City.build_cable(Vector2i(plant[1].x + 1, y)))
+		await _stress_wait(2.0, "after_" + plant[0])
+	await _stress_wait(8.0, "running")
+	var report := {"ok": true, "worst_ms": _stall["worst_ms"],
+		"registered": City.registered, "houses": City.model.houses.size()}
+	for phase: String in _stall["worst_ms"]:
+		if float(_stall["worst_ms"][phase]) > 250.0:
+			report["ok"] = false
+	print("SMOKE_STRESS ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+func _stress_phase(name: String, action: Callable) -> void:
+	var t0 := Time.get_ticks_usec()
+	action.call()
+	var blocking_ms := (Time.get_ticks_usec() - t0) / 1000.0
+	_stall["worst_ms"][name] = snappedf(blocking_ms, 0.1)
+	await get_tree().process_frame
+
+
+func _stress_wait(seconds: float, name: String) -> void:
+	var worst := 0.0
+	var deadline := Time.get_ticks_msec() + int(seconds * 1000)
+	var last := Time.get_ticks_usec()
+	while Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+		var now := Time.get_ticks_usec()
+		worst = maxf(worst, (now - last) / 1000.0)
+		last = now
+	_stall["worst_ms"][name] = snappedf(worst, 0.1)
+
+
 # ─── Phase 3 acceptance scenarios ───
 
 ## Wind-only town behind a tiny grid connection: outages must occur exactly
 ## during the forced calm window; a battery bridges it (ROADMAP Phase 3).
 func _smoke_windless_week() -> void:
-	SidecarManager.load_config()
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
 	SidecarManager.start_all()
 	if not await _wait_power_healthy(180.0):
 		_fail("SMOKE_WINDLESS", "power health timeout")
@@ -519,7 +601,7 @@ func _run_windless_phase(weather_seed: int, with_battery: bool) -> Dictionary:
 ## Two feeders from the grid connection; the heavy one (140 houses behind two
 ## substations) overloads past 120 %, trips, and blacks out ONLY its zones.
 func _smoke_overload() -> void:
-	SidecarManager.load_config()
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
 	SidecarManager.start_all()
 	if not await _wait_power_healthy(180.0):
 		_fail("SMOKE_OVERLOAD", "power health timeout")

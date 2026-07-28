@@ -45,6 +45,11 @@ func _ready() -> void:
 	City.state_changed.connect(_refresh)
 	City.event_logged.connect(_on_event)
 	GameClock.speed_changed.connect(func(_s: float) -> void: _refresh())
+	var ticker := Timer.new()  # keeps clock + syncing indicator moving
+	ticker.wait_time = 0.5
+	ticker.autostart = true
+	ticker.timeout.connect(_refresh)
+	add_child(ticker)
 	_refresh()
 
 
@@ -54,11 +59,12 @@ func _refresh() -> void:
 		demand += DemandModel.zone_demand_kw(
 			City.topo.zones_info[zone_id]["houses"], City.current_t)
 	var houses := City.model.houses.size()
-	_status.text = "Day %d %s (%s) · %s · €%s · Happiness %.0f%% · %d houses · %.0f kW demand · Outage %d min" % [
+	_status.text = "Day %d %s (%s) · %s · €%s · Happiness %.0f%% · %d houses · %.0f kW demand · Outage %d min%s" % [
 		GameClock.day(), GameClock.time_of_day_string(), GameClock.season_name(),
 		("PAUSED" if GameClock.speed == 0.0 else "%.0fx" % GameClock.speed),
 		_fmt_money(City.money), City.happiness, houses, demand,
-		City.total_outage_minutes()]
+		City.total_outage_minutes(),
+		("  ·  ⟳ rebuilding grid…" if City.is_syncing() else "")]
 
 
 func _on_event(event: Dictionary) -> void:
