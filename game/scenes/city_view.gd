@@ -74,6 +74,18 @@ var _dark_material := StandardMaterial3D.new()
 var _cold_material := StandardMaterial3D.new()
 var _house_scene_cache := {}
 
+var _terrain_mesh: MeshInstance3D
+var _terrain_fingerprint := ""
+
+## Grass ramp by height level (0 = valley, MAX = rocky top); skirts earthen.
+const TERRAIN_COLORS: Array[Color] = [
+	Color(0.34, 0.50, 0.28), Color(0.38, 0.53, 0.28), Color(0.44, 0.55, 0.29),
+	Color(0.50, 0.55, 0.30), Color(0.55, 0.52, 0.35), Color(0.58, 0.55, 0.45)]
+## bright warm earth: skirts face away from the sun, so the bluish ambient
+## dominates them — a dark brown reads as water there, this stays soil
+const TERRAIN_SKIRT_COLOR := Color(0.72, 0.58, 0.4)
+const WORLD_TILES := 256
+
 
 func _ready() -> void:
 	_build_environment()
@@ -109,18 +121,13 @@ func _build_environment() -> void:
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.55, 0.7, 0.82)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.68, 0.72, 0.82)
-	env.ambient_light_energy = 0.42
+	# near-neutral fill: a blue ambient turned every shadow-side face (esp.
+	# terrain skirts) into "water" — keep just a hint of sky in it
+	env.ambient_light_color = Color(0.78, 0.78, 0.8)
+	env.ambient_light_energy = 0.5
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
-	var ground := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(256, 256)
-	ground.mesh = plane
-	ground.position = Vector3(128, -0.01, 128)
-	ground.material_override = _flat(Color(0.36, 0.52, 0.29))
-	add_child(ground)
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	add_child(camera)
@@ -150,6 +157,7 @@ func focus_tile(tile: Vector2i, zoom: float = 18.0) -> void:
 
 func redraw() -> void:
 	var model: WorldModel = City.model
+	_rebuild_terrain()
 	_diff(_zones, model.zoning, _make_zone)
 	_diff(_roads, model.roads, _make_road)
 	_diff(_cables, model.cables, _make_cable)
@@ -182,6 +190,92 @@ func _diff(nodes: Dictionary, source: Dictionary, maker: Callable) -> void:
 			nodes[key] = node
 
 
+# ─── terrain (stepped plateaus, one static ArrayMesh, rebuilt on change) ───
+
+func _ground_y(pos: Vector2i) -> float:
+	return City.model.terrain.visual_y(pos)
+
+
+func _rebuild_terrain() -> void:
+	var terrain: Terrain = City.model.terrain
+	if terrain.fingerprint() == _terrain_fingerprint:
+		return
+	_terrain_fingerprint = terrain.fingerprint()
+	if _terrain_mesh:
+		_terrain_mesh.queue_free()
+	# heights moved under everything: flush all layers so _diff recreates
+	# them at the new ground levels (matters after loading a save)
+	for layer: Dictionary in [_roads, _cables, _pipes, _water_pipes, _zones,
+			_houses, _buildings, _rings, _range_discs]:
+		for key: Variant in layer:
+			if is_instance_valid(layer[key]):
+				layer[key].queue_free()
+		layer.clear()
+	_status_markers.clear()   # children of freed buildings
+	_orphan_markers.clear()   # children of freed houses
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+	for x in WORLD_TILES:
+		for z in WORLD_TILES:
+			var pos := Vector2i(x, z)
+			var h := terrain.height(pos)
+			var y := h * Terrain.VISUAL_STEP
+			var color := TERRAIN_COLORS[clampi(h, 0, TERRAIN_COLORS.size() - 1)]
+			_emit_quad(verts, normals, colors, indices,
+				[Vector3(x, y, z), Vector3(x + 1, y, z),
+					Vector3(x + 1, y, z + 1), Vector3(x, y, z + 1)],
+				Vector3.UP, color)
+			# skirts where this plateau stands above a neighbor (each tile
+			# emits only its own descending faces — no doubles)
+			for side: Array in [
+				[Vector2i(1, 0), Vector3(x + 1, 0, z), Vector3(x + 1, 0, z + 1), Vector3.RIGHT],
+				[Vector2i(-1, 0), Vector3(x, 0, z + 1), Vector3(x, 0, z), Vector3.LEFT],
+				[Vector2i(0, 1), Vector3(x + 1, 0, z + 1), Vector3(x, 0, z + 1), Vector3.BACK],
+				[Vector2i(0, -1), Vector3(x, 0, z), Vector3(x + 1, 0, z), Vector3.FORWARD],
+			]:
+				var neighbor_y: float = terrain.height(pos + side[0]) * Terrain.VISUAL_STEP
+				if neighbor_y >= y:
+					continue
+				var a: Vector3 = side[1]
+				var b: Vector3 = side[2]
+				_emit_quad(verts, normals, colors, indices,
+					[Vector3(a.x, y, a.z), Vector3(b.x, y, b.z),
+						Vector3(b.x, neighbor_y, b.z), Vector3(a.x, neighbor_y, a.z)],
+					side[3], TERRAIN_SKIRT_COLOR)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_terrain_mesh = MeshInstance3D.new()
+	_terrain_mesh.mesh = mesh
+	_terrain_mesh.position.y = -0.01  # tile decals at ground level stay on top
+	var material := StandardMaterial3D.new()
+	material.vertex_color_use_as_albedo = true
+	# skirt quads are wound per-side; skip the culling bookkeeping entirely —
+	# lighting stays correct via the explicit face normals
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_terrain_mesh.material_override = material
+	add_child(_terrain_mesh)
+
+
+func _emit_quad(verts: PackedVector3Array, normals: PackedVector3Array,
+		colors: PackedColorArray, indices: PackedInt32Array,
+		corners: Array, normal: Vector3, color: Color) -> void:
+	var base := verts.size()
+	for corner: Vector3 in corners:
+		verts.append(corner)
+		normals.append(normal)
+		colors.append(color)
+	for i: int in [0, 1, 2, 0, 2, 3]:
+		indices.append(base + i)
+
+
 # ─── makers ───
 
 func _make_zone(pos: Vector2i) -> Node3D:
@@ -202,9 +296,12 @@ func _make_road(pos: Vector2i) -> Node3D:
 
 func _orient_road(pos: Vector2i, node: Node3D) -> void:
 	var mask := 0
+	var height := City.model.terrain.height(pos)
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	for i in 4:
-		if City.model.roads.has(pos + directions[i]):
+		# roads only join on the same plateau — a step is a wall, not a ramp
+		var n: Vector2i = pos + directions[i]
+		if City.model.roads.has(n) and City.model.terrain.height(n) == height:
 			mask |= 1 << i
 	var pick := _road_piece(mask)  # [model, yaw_deg]
 	var wanted: String = "%s|%d" % [pick[0], pick[1]]
@@ -267,23 +364,30 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 	for i in 4:
 		if City.model.cables.has(pos + directions[i]):
 			connections += str(i)
-	if node.get_meta("wires", "") == connections:
+	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
+	if node.get_meta("wires", "") == wanted:
 		return
-	node.set_meta("wires", connections)
+	node.set_meta("wires", wanted)
 	for child in node.get_children():
 		if child.has_meta("wire"):
 			child.queue_free()
 	for i in 4:
-		if not City.model.cables.has(pos + directions[i]):
+		var d := directions[i]
+		if not City.model.cables.has(pos + d):
 			continue
+		# half-span from own pole top to the tile edge; across a terrain step
+		# the wire slopes up/down to meet the neighbor's half at the edge
+		var dh := (_ground_y(pos + d) - _ground_y(pos)) / 2.0
+		var from := Vector3(0, 0.74, 0)
+		var to := Vector3(d.x * 0.5, 0.74 + dh, d.y * 0.5)
 		var wire := MeshInstance3D.new()
 		wire.set_meta("wire", true)
 		var wire_mesh := BoxMesh.new()
-		wire_mesh.size = Vector3(0.03, 0.03, 0.5)
+		wire_mesh.size = Vector3(0.03, 0.03, from.distance_to(to))
 		wire.mesh = wire_mesh
-		wire.position = Vector3(directions[i].x * 0.25, 0.74, directions[i].y * 0.25)
-		if i == 1 or i == 3:
-			wire.rotation_degrees.y = 90
+		wire.transform = Transform3D(
+			Basis.looking_at((to - from).normalized(), Vector3.UP),
+			(from + to) / 2.0)
 		wire.material_override = _flat(Color(0.2, 0.2, 0.22))
 		node.add_child(wire)
 
@@ -305,9 +409,10 @@ func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
 	for i in 4:
 		if City.model.heat_pipes.has(pos + directions[i]):
 			connections += str(i)
-	if node.get_meta("pipes", "") == connections:
+	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
+	if node.get_meta("pipes", "") == wanted:
 		return
-	node.set_meta("pipes", connections)
+	node.set_meta("pipes", wanted)
 	for child in node.get_children():
 		child.queue_free()
 	# support foot
@@ -321,6 +426,7 @@ func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
 		any_connection = true
 		var horizontal := d.y == 0  # segment runs along world X
 		var perp := Vector3(0, 0, 0.13) if horizontal else Vector3(0.13, 0, 0)
+		var dh := _ground_y(pos + d) - _ground_y(pos)
 		for pair: Array in [[PIPE_SUPPLY_COLOR, 1.0], [PIPE_RETURN_COLOR, -1.0]]:
 			var seg := MeshInstance3D.new()
 			var cyl := CylinderMesh.new()
@@ -336,6 +442,17 @@ func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
 				+ perp * pair[1]
 			seg.material_override = _flat(pair[0])
 			node.add_child(seg)
+			if dh > 0.0:  # climbing a plateau step: riser at the shared edge
+				var riser := MeshInstance3D.new()
+				var riser_mesh := CylinderMesh.new()
+				riser_mesh.top_radius = 0.055
+				riser_mesh.bottom_radius = 0.055
+				riser_mesh.height = dh
+				riser.mesh = riser_mesh
+				riser.position = Vector3(d.x * 0.5, PIPE_HEIGHT + dh / 2.0, d.y * 0.5) \
+					+ perp * pair[1]
+				riser.material_override = _flat(pair[0])
+				node.add_child(riser)
 	# per-color joint flanges bridge the corner gaps
 	if any_connection:
 		node.add_child(_box(Vector3(0.15, 0.15, 0.15), PIPE_SUPPLY_COLOR,
@@ -358,9 +475,10 @@ func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
 	for i in 4:
 		if City.model.water_pipes.has(pos + directions[i]):
 			connections += str(i)
-	if node.get_meta("pipes", "") == connections:
+	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
+	if node.get_meta("pipes", "") == wanted:
 		return
-	node.set_meta("pipes", connections)
+	node.set_meta("pipes", wanted)
 	for child in node.get_children():
 		child.queue_free()
 	node.add_child(_box(Vector3(0.14, PIPE_HEIGHT - 0.05, 0.14),
@@ -384,6 +502,17 @@ func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
 		seg.position = Vector3(d.x * 0.25, PIPE_HEIGHT, d.y * 0.25)
 		seg.material_override = _flat(WATER_PIPE_COLOR)
 		node.add_child(seg)
+		var dh := _ground_y(pos + d) - _ground_y(pos)
+		if dh > 0.0:  # climbing a plateau step: riser at the shared edge
+			var riser := MeshInstance3D.new()
+			var riser_mesh := CylinderMesh.new()
+			riser_mesh.top_radius = 0.07
+			riser_mesh.bottom_radius = 0.07
+			riser_mesh.height = dh
+			riser.mesh = riser_mesh
+			riser.position = Vector3(d.x * 0.5, PIPE_HEIGHT + dh / 2.0, d.y * 0.5)
+			riser.material_override = _flat(WATER_PIPE_COLOR)
+			node.add_child(riser)
 	if any_connection:
 		node.add_child(_box(Vector3(0.17, 0.17, 0.17), WATER_PIPE_COLOR,
 			Vector3(0, PIPE_HEIGHT, 0)))
@@ -408,7 +537,8 @@ func _make_building(id: String) -> Node3D:
 	var anchor: Vector2i = entry["anchor"]
 	var size: Vector2i = BuildingDefs.DEFS[kind]["size"]
 	var node := _build_building_visual(kind)
-	node.position = Vector3(anchor.x + size.x / 2.0, 0, anchor.y + size.y / 2.0)
+	node.position = Vector3(anchor.x + size.x / 2.0, _ground_y(anchor),
+		anchor.y + size.y / 2.0)
 	node.rotation_degrees.y = int(entry.get("rot", 0)) * 90.0
 	return node
 
@@ -691,7 +821,8 @@ func _update_placed_discs(ghost_kind: String) -> void:
 			if not _range_discs.has(id):
 				var disc := _make_range_disc(radius, color)
 				var anchor: Vector2i = City.model.buildings[id]["anchor"]
-				disc.position = Vector3(anchor.x + 0.5, 0.012, anchor.y + 0.5)
+				disc.position = Vector3(anchor.x + 0.5, _ground_y(anchor) + 0.012,
+					anchor.y + 0.5)
 				add_child(disc)
 				_range_discs[id] = disc
 	for id: String in _range_discs.keys():
@@ -868,7 +999,7 @@ func _process(delta: float) -> void:
 		_cam_yaw = rad_to_deg(lerp_angle(deg_to_rad(_cam_yaw),
 			deg_to_rad(_cam_yaw_target), minf(10.0 * delta, 1.0)))
 		_place_camera()
-	_cursor.position = Vector3(mouse_tile().x + 0.5, 0.02, mouse_tile().y + 0.5)
+	_cursor.position = _center(mouse_tile()) + Vector3(0, 0.02, 0)
 	_update_ghost()
 	# spin the wind rotors — the world should feel alive
 	for id: String in _buildings:
@@ -905,7 +1036,8 @@ func _update_ghost() -> void:
 	_cursor.visible = false
 	var anchor := mouse_tile()
 	var size: Vector2i = BuildingDefs.DEFS[kind]["size"]
-	_ghost.position = Vector3(anchor.x + size.x / 2.0, 0.01, anchor.y + size.y / 2.0)
+	_ghost.position = Vector3(anchor.x + size.x / 2.0, _ground_y(anchor) + 0.01,
+		anchor.y + size.y / 2.0)
 	_ghost.rotation_degrees.y = _ghost_rot * 90.0
 	var affordable: bool = City.money >= int(BuildingDefs.DEFS[kind]["cost"])
 	var valid: bool = City.model.can_place_building(kind, anchor) and affordable
@@ -924,7 +1056,8 @@ func _update_ghost() -> void:
 			_ghost_disc = _make_range_disc(radius,
 				BuildingDefs.DEFS[kind]["color"])
 			add_child(_ghost_disc)
-		_ghost_disc.position = Vector3(anchor.x + 0.5, 0.015, anchor.y + 0.5)
+		_ghost_disc.position = Vector3(anchor.x + 0.5, _ground_y(anchor) + 0.015,
+			anchor.y + 0.5)
 		_ghost_disc.visible = true
 	elif _ghost_disc:
 		_ghost_disc.visible = false
@@ -1028,14 +1161,24 @@ func mouse_tile() -> Vector2i:
 	var direction := camera.project_ray_normal(mouse)
 	if absf(direction.y) < 0.0001:
 		return Vector2i.ZERO
-	var hit := origin - direction * (origin.y / direction.y)
-	return Vector2i(int(floor(hit.x)), int(floor(hit.z)))
+	# fixed-point iteration against the tile's own height plane: project on
+	# y=0, look the hit tile's height up, re-project — converges in a step
+	# or two on plateau terrain
+	var tile := Vector2i.ZERO
+	for i in 4:
+		var plane_y := _ground_y(tile) if i > 0 else 0.0
+		var hit := origin - direction * ((origin.y - plane_y) / direction.y)
+		var next := Vector2i(int(floor(hit.x)), int(floor(hit.z)))
+		if next == tile and i > 0:
+			break
+		tile = next
+	return tile
 
 
 # ─── helpers ───
 
 func _center(pos: Vector2i) -> Vector3:
-	return Vector3(pos.x + 0.5, 0, pos.y + 0.5)
+	return Vector3(pos.x + 0.5, _ground_y(pos), pos.y + 0.5)
 
 
 var _material_cache := {}

@@ -5,8 +5,9 @@ extends RefCounted
 ## v2 (Phase 3): roads, residential zoning, houses, buildings with
 ## footprints — on top of v1's cable layer.
 
-const SCHEMA_VERSION := 4
+const SCHEMA_VERSION := 5
 
+var terrain := Terrain.new()         # per-tile heights (v5; seed 0 = flat)
 var cables: Dictionary = {}          # Vector2i -> int (kind; 1 = LV cable)
 var heat_pipes: Dictionary = {}      # Vector2i -> int (kind; 1 = DH pipe pair, v3)
 var water_pipes: Dictionary = {}     # Vector2i -> int (kind; 1 = water main, v4)
@@ -32,8 +33,10 @@ func _line_blocked(pos: Vector2i) -> bool:
 
 
 func can_place_building(kind: String, anchor: Vector2i) -> bool:
+	# buildings need level ground: every footprint tile at the anchor's height
+	var level := terrain.height(anchor)
 	for tile: Vector2i in BuildingDefs.footprint(kind, anchor):
-		if not is_tile_free(tile):
+		if not is_tile_free(tile) or terrain.height(tile) != level:
 			return false
 	return true
 
@@ -153,8 +156,10 @@ func buildings_of_kind(kind: String) -> Array[String]:
 
 
 func _adjacent_to_road(pos: Vector2i) -> bool:
+	# a road across a terrain step doesn't serve this lot (no driveway up a cliff)
 	for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-		if roads.has(pos + offset):
+		var n := pos + offset
+		if roads.has(n) and terrain.height(n) == terrain.height(pos):
 			return true
 	return false
 
@@ -179,6 +184,7 @@ func spawn_candidates(center: Vector2i, radius: int) -> Array[Vector2i]:
 func to_json() -> String:
 	return JSON.stringify({
 		"version": SCHEMA_VERSION,
+		"terrain": terrain.serialize(),
 		"cables": _dict_to_keys(cables),
 		"heat_pipes": _dict_to_keys(heat_pipes),
 		"water_pipes": _dict_to_keys(water_pipes),
@@ -197,6 +203,7 @@ static func from_json(text: String) -> WorldModel:
 		push_error("WorldModel.from_json: invalid JSON")
 		return model
 	var dict: Dictionary = parsed
+	model.terrain = Terrain.deserialize(dict.get("terrain", {}))  # pre-v5: flat
 	model.cables = _keys_to_dict(dict.get("cables", {}), TYPE_INT)
 	if int(dict.get("version", 1)) < 2:
 		return model  # v1 saves carried cables only
@@ -221,7 +228,7 @@ func equals(other: WorldModel) -> bool:
 	return cables == other.cables and heat_pipes == other.heat_pipes \
 		and water_pipes == other.water_pipes and roads == other.roads \
 		and zoning == other.zoning and houses == other.houses \
-		and buildings == other.buildings
+		and buildings == other.buildings and terrain.equals(other.terrain)
 
 
 func _buildings_out() -> Dictionary:

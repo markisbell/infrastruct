@@ -141,6 +141,7 @@ func _ready() -> void:
 	events_panel.add_child(_events_box)
 
 	_make_build_menu()
+	_render_thumbnails()  # async: icons replace the monograms as they render
 
 	City.state_changed.connect(_refresh)
 	City.event_logged.connect(_on_event)
@@ -198,16 +199,21 @@ func _make_tile(item: Dictionary) -> Button:
 	button.focus_mode = Control.FOCUS_NONE  # keep TAB for the menu toggle
 	button.tooltip_text = "%s (%s) — %s\n%s" % [item["label"], item["key"],
 		("€%d" % cost) if cost > 0 else "free", item["desc"]]
+	# neutral slate: the 3D thumbnail carries the identity, the item color
+	# survives as a slim bottom accent (network color language at a glance)
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = color.darkened(0.25)
+	normal.bg_color = Color(0.16, 0.18, 0.22)
 	normal.set_corner_radius_all(6)
-	normal.set_content_margin_all(4)
+	normal.set_content_margin_all(3)
+	normal.border_color = color
+	normal.border_width_bottom = 3
 	var hover: StyleBoxFlat = normal.duplicate()
-	hover.bg_color = color
+	hover.bg_color = Color(0.24, 0.27, 0.33)
 	var pressed: StyleBoxFlat = normal.duplicate()
-	pressed.bg_color = color.lightened(0.15)
+	pressed.bg_color = Color(0.28, 0.32, 0.4)
 	pressed.border_color = Color.WHITE
 	pressed.set_border_width_all(2)
+	pressed.border_width_bottom = 3
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("pressed", pressed)
@@ -217,6 +223,114 @@ func _make_tile(item: Dictionary) -> Button:
 	button.pressed.connect(func() -> void: _select_tool(item["tool"]))
 	_tool_buttons[item["tool"]] = button
 	return button
+
+
+# ─── palette thumbnails: each tool's real 3D visual, rendered once into a
+# button icon via an offscreen viewport (stays true to the map look) ───
+
+func _render_thumbnails() -> void:
+	var vp := SubViewport.new()
+	vp.size = Vector2i(96, 96)
+	vp.transparent_bg = true
+	vp.own_world_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(vp)
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-50, -30, 0)
+	sun.light_energy = 1.2
+	vp.add_child(sun)
+	var env := Environment.new()
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.75, 0.78, 0.85)
+	env.ambient_light_energy = 0.9
+	var world_env := WorldEnvironment.new()
+	world_env.environment = env
+	vp.add_child(world_env)
+	var cam := Camera3D.new()
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	vp.add_child(cam)
+	for tool: CityView.Tool in _tool_buttons:
+		var sample := _thumbnail_scene(tool)
+		if sample == null:
+			continue  # no model — the monogram tile stays
+		sample.position = Vector3.ZERO
+		vp.add_child(sample)
+		var bounds: AABB = view._aabb_of(sample)
+		var center := bounds.position + bounds.size / 2.0
+		cam.size = maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z)) * 1.2
+		cam.position = center + Vector3(-1, 0.85, -1).normalized() * 10.0
+		cam.look_at(center, Vector3.UP)
+		vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+		await RenderingServer.frame_post_draw
+		var texture := ImageTexture.create_from_image(vp.get_texture().get_image())
+		vp.remove_child(sample)
+		sample.queue_free()
+		if not is_instance_valid(_tool_buttons[tool]):
+			continue
+		var button: Button = _tool_buttons[tool]
+		button.text = ""
+		button.icon = texture
+		button.expand_icon = true
+		button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vp.queue_free()
+
+
+## The sample rendered for a tool's thumbnail — building visuals verbatim,
+## hand-built minis for the line tools.
+func _thumbnail_scene(tool: CityView.Tool) -> Node3D:
+	var item: Dictionary = _items_by_tool.get(tool, {})
+	if item.has("kind"):
+		return view._build_building_visual(item["kind"])
+	match tool:
+		CityView.Tool.ROAD:
+			return view._instance_glb(
+				"city-kit-roads/Models/GLB format/road-straight.glb", 1.0)
+		CityView.Tool.ZONE:
+			var lot := Node3D.new()
+			var pad := MeshInstance3D.new()
+			var pad_mesh := PlaneMesh.new()
+			pad_mesh.size = Vector2(1.1, 1.1)
+			pad.mesh = pad_mesh
+			pad.material_override = view._flat(Color(0.45, 0.8, 0.4))
+			lot.add_child(pad)
+			var house := view._instance_glb(
+				"city-kit-suburban/Models/GLB format/building-type-a.glb", 0.8)
+			lot.add_child(house)
+			return lot
+		CityView.Tool.CABLE:
+			return view._make_cable(Vector2i.ZERO)
+		CityView.Tool.PIPE:
+			return _pipe_sample([[CityView.PIPE_SUPPLY_COLOR, 0.13],
+				[CityView.PIPE_RETURN_COLOR, -0.13]], 0.055)
+		CityView.Tool.WATER_PIPE:
+			return _pipe_sample([[CityView.WATER_PIPE_COLOR, 0.0]], 0.07)
+		CityView.Tool.BULLDOZE:
+			return view._instance_glb(
+				"factory-kit/Models/GLB format/crane-magnet.glb", 1.0)
+	return null
+
+
+func _pipe_sample(runs: Array, radius: float) -> Node3D:
+	var node := Node3D.new()
+	var foot := MeshInstance3D.new()
+	var foot_mesh := BoxMesh.new()
+	foot_mesh.size = Vector3(0.14, 0.11, 0.14)
+	foot.mesh = foot_mesh
+	foot.position = Vector3(0, 0.055, 0)
+	foot.material_override = view._flat(Color(0.45, 0.46, 0.5))
+	node.add_child(foot)
+	for run: Array in runs:
+		var seg := MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = radius
+		cyl.bottom_radius = radius
+		cyl.height = 0.9
+		seg.mesh = cyl
+		seg.rotation_degrees.z = 90.0
+		seg.position = Vector3(0, 0.16, run[1])
+		seg.material_override = view._flat(run[0])
+		node.add_child(seg)
+	return node
 
 
 func _select_tool(tool: CityView.Tool) -> void:

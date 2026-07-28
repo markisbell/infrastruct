@@ -11,8 +11,9 @@ extends RefCounted
 ##   ordered FIRST in doc.devices and mirrored as the single ext_grid in
 ##   native.supply (p_bar 0.5 for towers — elevation carries the head —
 ##   else 4.0 for a pressurized feed)
-## - tower_height_m is folded into the tower junction's elevation_m
-##   (tank bottom sits at node elevation); flat base elevation until hills
+## - junction elevation_m = BASE + terrain elevation (per-tile heights,
+##   Terrain.STEP_M per level) + tower_height_m folded in for towers
+##   (tank bottom sits at node elevation) — hilltop towers genuinely help
 ## - water_station buildings define water zones (one consumer per zone,
 ##   mapped by NAME); houses join the nearest head-reachable station
 
@@ -135,11 +136,12 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		var name := _node_name(key)
 		node_name[key] = name
 		var kind := "node"
-		var elevation := BASE_ELEVATION_M
 		var anchor := _junction_pos(key)
 		if key is String and not str(key).begins_with("j:"):
-			var b_kind: String = model.buildings[key]["kind"]
 			anchor = model.buildings[key]["anchor"]
+		var elevation := BASE_ELEVATION_M + model.terrain.elevation_m(anchor)
+		if key is String and not str(key).begins_with("j:"):
+			var b_kind: String = model.buildings[key]["kind"]
 			if b_kind == "water_station":
 				kind = "consumer"
 			elif BuildingDefs.WATER_SOURCE_KINDS.has(b_kind):
