@@ -31,8 +31,10 @@ func test_v2_roundtrip() -> void:
 	model.spawn_house(Vector2i(1, 0))
 	model.set_cable(Vector2i(3, 3), 1)
 	model.place_building("substation", Vector2i(4, 3))
+	var rotated_id := model.place_building("gas_plant", Vector2i(8, 8), 3)
 	var restored := WorldModel.from_json(model.to_json())
 	assert_bool(restored.equals(model)).is_true()
+	assert_int(restored.buildings[rotated_id]["rot"]).is_equal(3)
 	# derived index rebuilt on load
 	assert_bool(restored.building_tiles.has(Vector2i(4, 3))).is_true()
 	# building ids keep counting after a roundtrip (no id reuse)

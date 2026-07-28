@@ -26,6 +26,13 @@ var overlays_visible := true:
 var camera: Camera3D
 var _zoom := 18.0
 var _cam_focus := Vector3(128.5, 0, 128.5)
+var _cam_yaw := 0.0          # current, degrees
+var _cam_yaw_target := 0.0   # Q/E rotate in 90° steps, smoothed in _process
+
+# ghost placement preview (adapted from Kenney's Starter-Kit-City-Builder, MIT)
+var _ghost: Node3D
+var _ghost_kind := ""
+var _ghost_rot := 0
 
 # pos/id -> Node3D, one dict per layer (incremental diff in redraw)
 var _roads := {}
@@ -89,9 +96,14 @@ func _build_environment() -> void:
 
 func _place_camera() -> void:
 	camera.size = _zoom
-	var direction := Vector3(-1, 1.15, -1).normalized()  # classic iso-ish
+	var direction := Vector3(-1, 1.15, -1).normalized() \
+		.rotated(Vector3.UP, deg_to_rad(_cam_yaw))
 	camera.position = _cam_focus + direction * 90.0
 	camera.look_at(_cam_focus, Vector3.UP)
+
+
+func rotate_view(steps: int) -> void:
+	_cam_yaw_target += steps * 90.0
 
 
 func focus_tile(tile: Vector2i, zoom: float = 18.0) -> void:
@@ -254,27 +266,33 @@ func _make_building(id: String) -> Node3D:
 	var kind: String = entry["kind"]
 	var anchor: Vector2i = entry["anchor"]
 	var size: Vector2i = BuildingDefs.DEFS[kind]["size"]
-	var node: Node3D
+	var node := _build_building_visual(kind)
+	node.position = Vector3(anchor.x + size.x / 2.0, 0, anchor.y + size.y / 2.0)
+	node.rotation_degrees.y = int(entry.get("rot", 0)) * 90.0
+	return node
+
+
+## Shared by real buildings and the placement ghost.
+func _build_building_visual(kind: String) -> Node3D:
 	match kind:
 		"gas_plant":
-			node = _instance_glb("city-kit-industrial/Models/GLB format/building-d.glb", 1.9)
+			var node := _instance_glb("city-kit-industrial/Models/GLB format/building-d.glb", 1.9)
 			var chimney := _instance_glb("city-kit-industrial/Models/GLB format/chimney-large.glb", 1.0)
 			chimney.position = Vector3(0.55, 0, 0.55)
 			node.add_child(chimney)
+			return node
 		"substation":
-			node = _make_substation()
+			return _make_substation()
 		"wind_farm":
-			node = _make_wind_farm()
+			return _make_wind_farm()
 		"solar_park":
-			node = _make_solar_park()
+			return _make_solar_park()
 		"battery":
-			node = _make_battery()
+			return _make_battery()
 		"grid_connection":
-			node = _make_grid_connection()
+			return _make_grid_connection()
 		_:
-			node = _instance_glb("city-kit-industrial/Models/GLB format/building-a.glb", 1.9)
-	node.position = Vector3(anchor.x + size.x / 2.0, 0, anchor.y + size.y / 2.0)
-	return node
+			return _instance_glb("city-kit-industrial/Models/GLB format/building-a.glb", 1.9)
 
 
 # ─── procedural fills (no kit model exists; same flat-shaded style) ───
@@ -438,13 +456,52 @@ func _process(delta: float) -> void:
 		Input.get_axis(&"ui_up", &"ui_down"))
 	if pan != Vector2.ZERO:
 		_pan_ground(pan * 20.0 * delta * (_zoom / 18.0))
+	if absf(angle_difference(deg_to_rad(_cam_yaw), deg_to_rad(_cam_yaw_target))) > 0.001:
+		_cam_yaw = rad_to_deg(lerp_angle(deg_to_rad(_cam_yaw),
+			deg_to_rad(_cam_yaw_target), minf(10.0 * delta, 1.0)))
+		_place_camera()
 	_cursor.position = Vector3(mouse_tile().x + 0.5, 0.02, mouse_tile().y + 0.5)
+	_update_ghost()
 	# spin the wind rotors — the world should feel alive
 	for id: String in _buildings:
 		if City.model.buildings[id]["kind"] == "wind_farm":
 			for rotor: Node3D in _buildings[id].find_children("*", "Node3D", true, false):
 				if rotor.has_meta("rotor"):
 					rotor.rotation_degrees.z += 90.0 * delta
+
+
+# ─── ghost placement preview ───
+
+func rotate_ghost() -> void:
+	_ghost_rot = (_ghost_rot + 1) % 4
+
+
+func _update_ghost() -> void:
+	var kind: String = TOOL_BUILDING.get(tool, "")
+	if kind == "":
+		if _ghost:
+			_ghost.queue_free()
+			_ghost = null
+			_ghost_kind = ""
+		_cursor.visible = true
+		return
+	if kind != _ghost_kind:
+		if _ghost:
+			_ghost.queue_free()
+		_ghost = _build_building_visual(kind)
+		add_child(_ghost)
+		_ghost_kind = kind
+	_cursor.visible = false
+	var anchor := mouse_tile()
+	var size: Vector2i = BuildingDefs.DEFS[kind]["size"]
+	_ghost.position = Vector3(anchor.x + size.x / 2.0, 0.01, anchor.y + size.y / 2.0)
+	_ghost.rotation_degrees.y = _ghost_rot * 90.0
+	var affordable: bool = City.money >= int(BuildingDefs.DEFS[kind]["cost"])
+	var valid: bool = City.model.can_place_building(kind, anchor) and affordable
+	var tint := _flat(Color(0.3, 0.9, 0.4, 0.5), true) if valid \
+		else _flat(Color(0.95, 0.25, 0.2, 0.5), true)
+	for mesh: MeshInstance3D in _ghost.find_children("*", "MeshInstance3D", true, false):
+		mesh.material_override = tint
 
 
 func _pan_ground(screen_delta: Vector2) -> void:
@@ -500,7 +557,7 @@ func _apply_tool(pos: Vector2i) -> void:
 			City.bulldoze(pos)
 		_:
 			if TOOL_BUILDING.has(tool):
-				City.place_building(TOOL_BUILDING[tool], pos)
+				City.place_building(TOOL_BUILDING[tool], pos, _ghost_rot)
 				_painting = false
 
 

@@ -31,7 +31,7 @@ func _ready() -> void:
 	_status = Label.new()
 	row.add_child(_status)
 	_tool_label = Label.new()
-	_tool_label.text = "Tool: none — keys 1-9, 0 bulldoze · RMB erase · SPACE pause · +/- speed · V overlays"
+	_tool_label.text = "Tool: none — 1-9 tools, 0 bulldoze · RMB erase · Q/E rotate view · R rotate building · SPACE pause · +/- speed · V overlays"
 	row.add_child(_tool_label)
 
 	var events_panel := PanelContainer.new()
@@ -99,6 +99,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		GameClock.speed = maxf(GameClock.speed / 2.0, 0.25)
 	elif key.keycode == KEY_V:
 		view.overlays_visible = not view.overlays_visible
+	elif key.keycode == KEY_Q:
+		view.rotate_view(-1)
+	elif key.keycode == KEY_E:
+		view.rotate_view(1)
+	elif key.keycode == KEY_R:
+		view.rotate_ghost()
 
 
 static func _fmt_money(value: int) -> String:

@@ -87,13 +87,13 @@ func build_cable(pos: Vector2i) -> bool:
 		and _after_build(true)
 
 
-func place_building(kind: String, anchor: Vector2i) -> bool:
+func place_building(kind: String, anchor: Vector2i, rot: int = 0) -> bool:
 	var def := BuildingDefs.get_def(kind)
 	if def.is_empty() or not model.can_place_building(kind, anchor):
 		return false
 	if not _paid(def["cost"]):
 		return false
-	model.place_building(kind, anchor)
+	model.place_building(kind, anchor, rot)
 	log_event("built", "info", "%s built" % kind)
 	return _after_build(true)
 

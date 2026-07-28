@@ -84,12 +84,14 @@ func remove_house(pos: Vector2i) -> void:
 	houses.erase(pos)
 
 
-func place_building(kind: String, anchor: Vector2i) -> String:
+func place_building(kind: String, anchor: Vector2i, rot: int = 0) -> String:
 	if not BuildingDefs.DEFS.has(kind) or not can_place_building(kind, anchor):
 		return ""
 	var id := "%s_%d" % [kind, next_building_id]
 	next_building_id += 1
-	buildings[id] = {"kind": kind, "anchor": anchor}
+	# rot (0-3, quarter turns) is VISUAL only — footprints stay square-ish and
+	# the electrical topology never sees it
+	buildings[id] = {"kind": kind, "anchor": anchor, "rot": rot % 4}
 	for tile: Vector2i in BuildingDefs.footprint(kind, anchor):
 		building_tiles[tile] = id
 	return id
@@ -165,7 +167,8 @@ static func from_json(text: String) -> WorldModel:
 	for id: String in dict.get("buildings", {}):
 		var raw: Dictionary = dict["buildings"][id]
 		var anchor := _parse_key(str(raw.get("anchor", "0,0")))
-		model.buildings[id] = {"kind": str(raw["kind"]), "anchor": anchor}
+		model.buildings[id] = {"kind": str(raw["kind"]), "anchor": anchor,
+			"rot": int(raw.get("rot", 0))}
 		for tile: Vector2i in BuildingDefs.footprint(str(raw["kind"]), anchor):
 			model.building_tiles[tile] = id
 	return model
@@ -182,7 +185,8 @@ func _buildings_out() -> Dictionary:
 	for id: String in buildings:
 		var entry: Dictionary = buildings[id]
 		out[id] = {"kind": entry["kind"],
-			"anchor": "%d,%d" % [entry["anchor"].x, entry["anchor"].y]}
+			"anchor": "%d,%d" % [entry["anchor"].x, entry["anchor"].y],
+			"rot": entry.get("rot", 0)}
 	return out
 
 
