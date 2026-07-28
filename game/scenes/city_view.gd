@@ -19,6 +19,14 @@ const TOOL_BUILDING := {
 }
 
 const KENNEY := "res://assets/kenney/"
+
+## Network color language (user direction): heat = red/blue double pipe
+## (forward/return — physically honest, the backend models both sides);
+## water (Phase 5) = green.
+const PIPE_SUPPLY_COLOR := Color(0.85, 0.22, 0.15)
+const PIPE_RETURN_COLOR := Color(0.2, 0.38, 0.85)
+const WATER_PIPE_COLOR := Color(0.2, 0.7, 0.35)  # reserved for Phase 5
+const PIPE_HEIGHT := 0.16
 const HOUSE_VARIANTS := ["a", "b", "c", "d", "e", "f", "g", "h", "l", "m", "n", "q"]
 
 var tool: Tool = Tool.NONE
@@ -266,45 +274,57 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 func _make_pipe(pos: Vector2i) -> Node3D:
 	var node := Node3D.new()
 	node.position = _center(pos)
-	return node  # child mesh set by _orient_pipe
+	return node  # segments set by _orient_pipe
 
 
+## District-heating double pipe: forward (red) and return (blue) run in
+## parallel on low supports. One segment pair per connected direction from
+## the tile center to its edge — handles straights, bends, tees and crosses
+## without piece-picking. Side convention is world-axis based (X-runs offset
+## in Z, Z-runs offset in X) so straights never zigzag.
 func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
-	var mask := 0
+	var connections := ""
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	for i in 4:
 		if City.model.heat_pipes.has(pos + directions[i]):
-			mask |= 1 << i
-	var pick := _pipe_piece(mask)
-	var wanted: String = "%s|%d" % [pick[0], pick[1]]
-	if node.get_meta("piece", "") == wanted:
+			connections += str(i)
+	if node.get_meta("pipes", "") == connections:
 		return
-	node.set_meta("piece", wanted)
+	node.set_meta("pipes", connections)
 	for child in node.get_children():
 		child.queue_free()
-	var piece := _instance_glb("factory-kit/Models/GLB format/%s.glb" % pick[0], 0.95)
-	piece.rotation_degrees.y = pick[1]
-	node.add_child(piece)
-
-
-func _pipe_piece(mask: int) -> Array:
-	# same mask/yaw convention as roads (Kenney pieces run along X at yaw 0)
-	match mask:
-		0, 1: return ["pipe-large", 270]
-		2: return ["pipe-large", 180]
-		4: return ["pipe-large", 90]
-		8: return ["pipe-large", 0]
-		5: return ["pipe-large-long", 90]
-		10: return ["pipe-large-long", 0]
-		3: return ["pipe-large-curve", 270]
-		6: return ["pipe-large-curve", 180]
-		12: return ["pipe-large-curve", 90]
-		9: return ["pipe-large-curve", 0]
-		7: return ["pipe-large-junction", 180]
-		14: return ["pipe-large-junction", 90]
-		13: return ["pipe-large-junction", 0]
-		11: return ["pipe-large-junction", 270]
-		_: return ["pipe-large-cross", 0]
+	# support foot
+	node.add_child(_box(Vector3(0.14, PIPE_HEIGHT - 0.05, 0.14),
+		Color(0.45, 0.46, 0.5), Vector3(0, (PIPE_HEIGHT - 0.05) / 2.0, 0)))
+	var any_connection := false
+	for i in 4:
+		var d := directions[i]
+		if not City.model.heat_pipes.has(pos + d):
+			continue
+		any_connection = true
+		var horizontal := d.y == 0  # segment runs along world X
+		var perp := Vector3(0, 0, 0.13) if horizontal else Vector3(0.13, 0, 0)
+		for pair: Array in [[PIPE_SUPPLY_COLOR, 1.0], [PIPE_RETURN_COLOR, -1.0]]:
+			var seg := MeshInstance3D.new()
+			var cyl := CylinderMesh.new()
+			cyl.top_radius = 0.055
+			cyl.bottom_radius = 0.055
+			cyl.height = 0.5
+			seg.mesh = cyl
+			if horizontal:
+				seg.rotation_degrees.z = 90.0
+			else:
+				seg.rotation_degrees.x = 90.0
+			seg.position = Vector3(d.x * 0.25, PIPE_HEIGHT, d.y * 0.25) \
+				+ perp * pair[1]
+			seg.material_override = _flat(pair[0])
+			node.add_child(seg)
+	# per-color joint flanges bridge the corner gaps
+	if any_connection:
+		node.add_child(_box(Vector3(0.15, 0.15, 0.15), PIPE_SUPPLY_COLOR,
+			Vector3(0.13, PIPE_HEIGHT, 0.13)))
+		node.add_child(_box(Vector3(0.15, 0.15, 0.15), PIPE_RETURN_COLOR,
+			Vector3(-0.13, PIPE_HEIGHT, -0.13)))
 
 
 func _make_house(pos: Vector2i) -> Node3D:
