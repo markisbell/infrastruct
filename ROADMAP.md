@@ -527,7 +527,7 @@ seed everything (weather, failures, growth) so replays and golden tests are repr
 ### 6.3 Performance budgets
 | Item | Budget |
 |---|---|
-| Solver step round-trip (100–500 node net), p99 | ≤ 50 ms |
+| Solver step round-trip (100–500 node net), p99 | ≤ 75 ms (relaxed from 50 ms per ADR-003 measurements) |
 | Topology patch after a build action | ≤ 100 ms to solver-applied |
 | Frame-loop stall from co-sim | 0 (async by construction) |
 | Sidecar RAM, all three | ≤ 1.5 GB |

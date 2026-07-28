@@ -1,3 +1,9 @@
 [submodule "backends/rtpowerflow"]
 	path = backends/rtpowerflow
 	url = https://github.com/markisbell/rtpowerflow
+[submodule "backends/rtheatflow"]
+	path = backends/rtheatflow
+	url = https://github.com/markisbell/rtheatflow
+[submodule "backends/rtwaterflow"]
+	path = backends/rtwaterflow
+	url = https://github.com/markisbell/rtwaterflow

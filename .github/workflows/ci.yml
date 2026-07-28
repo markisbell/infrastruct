@@ -55,6 +55,12 @@ jobs:
           $GODOT --headless --path game -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://tests --ignoreHeadlessMode
 
   backend-tests:
+    # One job per backend: they pin conflicting pandapower versions
+    # (pandapipes 0.14.0 -> pandapower 3.3.3), mirroring the per-backend
+    # venvs used locally and in production sidecars.
+    strategy:
+      matrix:
+        backend: [rtpowerflow, rtheatflow]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,9 +72,46 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install rtpowerflow
-        run: pip install -e "./backends/rtpowerflow[dev]" numba
+      - name: Install ${{ matrix.backend }}
+        run: pip install -e "./backends/${{ matrix.backend }}[dev]" numba
 
       - name: Backend tests (incl. gamebridge puppet mode)
-        working-directory: backends/rtpowerflow
+        working-directory: backends/${{ matrix.backend }}
         run: python -m pytest -q
+
+  freeze-smoke:
+    # Phase 1 lesson from the v1 risk register: discover packaging pain now.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Freeze rtpowerflow with PyInstaller
+        shell: bash
+        run: |
+          pip install -e "./backends/rtpowerflow" numba pyinstaller
+          printf 'from netzsim.main import main\nmain()\n' > entry.py
+          pyinstaller --noconfirm --onedir --name netzsim-frozen \
+            --collect-all pandapower --collect-all numba --collect-all llvmlite \
+            --collect-all netzsim \
+            --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.lifespan.on entry.py
+      - name: Boot frozen backend and probe /health
+        shell: pwsh
+        working-directory: backends/rtpowerflow
+        run: |
+          $env:NETZSIM_EXTERNAL_CLOCK = "true"; $env:NETZSIM_PORT = "8010"
+          $p = Start-Process -FilePath "..\..\dist\netzsim-frozen\netzsim-frozen.exe" -PassThru -NoNewWindow
+          $ok = $false
+          foreach ($i in 1..60) {
+            Start-Sleep 2
+            try { $r = Invoke-RestMethod "http://127.0.0.1:8010/health" -TimeoutSec 2
+                  if ($r.app -eq "netzsim") { $ok = $true; break } } catch {}
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { exit 1 }

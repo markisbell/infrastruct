@@ -14,3 +14,4 @@ venv/
 # spike outputs / reports
 *.local.json
 tests/e2e/out/
+orchestration/logs/

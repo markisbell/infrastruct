@@ -53,13 +53,31 @@ func _ready() -> void:
 	cam.position = terrain_layer.map_to_local(Vector2i(MAP_SIZE / 2, MAP_SIZE / 2))
 	cam.make_current()
 
+	var smoke := ""
 	for arg: String in OS.get_cmdline_user_args():
 		if arg == "--bench":
 			_bench = true
 		elif arg.begins_with("--out="):
 			_bench_out = arg.trim_prefix("--out=")
+		elif arg.begins_with("--smoke="):
+			smoke = arg.trim_prefix("--smoke=")
 	if _bench:
 		cam.position = terrain_layer.map_to_local(_bench_cursor)
+		return
+
+	match smoke:
+		"sidecars":
+			_smoke_sidecars()
+		"resilience":
+			_smoke_resilience()
+		"saveload":
+			_smoke_saveload()
+		_:
+			# normal game run: supervise the backends + debug panel
+			if SidecarManager.load_config():
+				SidecarManager.start_all()
+				SidecarManager.state_changed.connect(_on_sidecar_state)
+				_add_debug_panel()
 
 
 func _make_tileset() -> TileSet:
@@ -164,23 +182,127 @@ func _process(delta: float) -> void:
 		_bench_tick(delta)
 
 
-# ─── save/load ───
+# ─── save/load (SaveGame autoload: model + clock, versioned envelope) ───
 
 func _save_path() -> String:
-	return "user://world.json"
+	return SaveGame.DEFAULT_PATH
 
 
 func _save_to(path: String) -> void:
-	var f := FileAccess.open(path, FileAccess.WRITE)
-	f.store_string(model.to_json())
-	f.close()
+	SaveGame.save_to(path, model)
 
 
 func _load_from(path: String) -> void:
-	if not FileAccess.file_exists(path):
+	var loaded: Dictionary = SaveGame.load_from(path)
+	if loaded["ok"]:
+		model = loaded["model"]
+		_rebuild_network_view()
+
+
+# ─── sidecar supervision UI ───
+
+var _debug_panel: PanelContainer
+
+
+func _add_debug_panel() -> void:
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	_debug_panel = preload("res://scenes/debug_panel.gd").new()
+	_debug_panel.position = Vector2(8, 8)
+	layer.add_child(_debug_panel)
+
+
+func _on_sidecar_state(id: String, state: SidecarManager.State) -> void:
+	if state == SidecarManager.State.HEALTHY and not CosimBridge.info.has(id):
+		CosimBridge.handshake(id)
+
+
+# ─── Phase 1 acceptance smoke modes (headless, print one JSON line, quit) ───
+
+func _wait_all_healthy(timeout_s: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
+	while not SidecarManager.all_healthy():
+		if Time.get_ticks_msec() > deadline:
+			return false
+		await get_tree().create_timer(0.5).timeout
+	return true
+
+
+func _smoke_sidecars() -> void:
+	SidecarManager.load_config()
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(180.0):
+		print("SMOKE_SIDECARS ", JSON.stringify({"ok": false, "reason": "health timeout"}))
+		SidecarManager.stop_all()
+		get_tree().quit(1)
 		return
-	model = WorldModel.from_json(FileAccess.get_file_as_string(path))
-	_rebuild_network_view()
+	var ok := true
+	var per_sidecar := {}
+	for id: String in SidecarManager.ids():
+		var handshake_ok: bool = await CosimBridge.handshake(id)
+		var frame := await CosimBridge.step(id)  # first step pays the numba JIT
+		var stepped: bool = frame.get("_status", 0) == 200 and frame.get("converged", false)
+		per_sidecar[id] = {
+			"handshake": handshake_ok,
+			"step_converged": stepped,
+			"solver": CosimBridge.info.get(id, {}).get("solver", "?"),
+		}
+		ok = ok and handshake_ok and stepped
+	print("SMOKE_SIDECARS ", JSON.stringify({"ok": ok, "sidecars": per_sidecar}))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if ok else 1)
+
+
+func _smoke_resilience() -> void:
+	SidecarManager.load_config()
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(180.0):
+		print("SMOKE_RESILIENCE ", JSON.stringify({"ok": false, "reason": "initial health timeout"}))
+		SidecarManager.stop_all()
+		get_tree().quit(1)
+		return
+	# hand the harness what it needs to kill a backend process externally
+	print("SMOKE_READY ", JSON.stringify({"ports": SidecarManager.ids().map(
+		func(id: String) -> int: return SidecarManager.port_of(id))}))
+	# the harness now kills the port owner; we must observe DOWN/RESTARTING…
+	var saw_down := false
+	var deadline := Time.get_ticks_msec() + 120_000
+	while Time.get_ticks_msec() < deadline:
+		for id: String in SidecarManager.ids():
+			var state: SidecarManager.State = SidecarManager.state_of(id)
+			if state == SidecarManager.State.DOWN or state == SidecarManager.State.RESTARTING:
+				saw_down = true
+		if saw_down:
+			break
+		await get_tree().create_timer(0.5).timeout
+	# …and the automatic recovery back to all-healthy, without crashing
+	var recovered := saw_down and await _wait_all_healthy(180.0)
+	print("SMOKE_RESILIENCE ", JSON.stringify({"ok": recovered, "saw_down": saw_down}))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if recovered else 1)
+
+
+func _smoke_saveload() -> void:
+	model.set_cable(Vector2i(10, 20), 1)
+	model.set_cable(Vector2i(-3, 7), 2)
+	GameClock.total_minutes = 3 * 1440.0 + 125.0  # day 3, 02:05
+	GameClock.speed = 3.0
+	var path := "user://smoke_save.json"
+	var save_err := SaveGame.save_to(path, model)
+	model = WorldModel.new()  # wipe state
+	GameClock.restore({"total_minutes": 0.0, "speed": 1.0})
+	var loaded: Dictionary = SaveGame.load_from(path)
+	var restored: WorldModel = loaded.get("model")
+	var ok: bool = (
+		save_err == OK and loaded["ok"]
+		and restored.cables.size() == 2
+		and restored.cables[Vector2i(-3, 7)] == 2
+		and GameClock.day() == 3
+		and GameClock.time_of_day_string() == "02:05"
+		and is_equal_approx(GameClock.speed, 3.0)
+	)
+	print("SMOKE_SAVELOAD ", JSON.stringify({"ok": ok}))
+	get_tree().quit(0 if ok else 1)
 
 
 # ─── benchmark mode ───

@@ -10,6 +10,13 @@ config/name="SimGames"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7")
 
+[autoload]
+
+GameClock="*res://autoloads/game_clock.gd"
+SidecarManager="*res://autoloads/sidecar_manager.gd"
+CosimBridge="*res://autoloads/cosim_bridge.gd"
+SaveGame="*res://autoloads/save_game.gd"
+
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/gdUnit4/plugin.cfg")

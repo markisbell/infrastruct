@@ -1,0 +1,28 @@
+{
+  "sidecars": [
+    {
+      "id": "power",
+      "python": ".venv/Scripts/python.exe",
+      "module": "netzsim.main",
+      "cwd": "backends/rtpowerflow",
+      "port": 8010,
+      "env": {
+        "NETZSIM_EXTERNAL_CLOCK": "true",
+        "NETZSIM_PORT": "8010",
+        "NETZSIM_HOST": "127.0.0.1"
+      }
+    },
+    {
+      "id": "heat",
+      "python": ".venv-heat/Scripts/python.exe",
+      "module": "rtheatflow.main",
+      "cwd": "backends/rtheatflow",
+      "port": 8011,
+      "env": {
+        "RTHEATFLOW_EXTERNAL_CLOCK": "true",
+        "RTHEATFLOW_PORT": "8011",
+        "RTHEATFLOW_HOST": "127.0.0.1"
+      }
+    }
+  ]
+}

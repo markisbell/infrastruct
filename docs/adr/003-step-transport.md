@@ -6,7 +6,8 @@
 
 The orchestrator calls `/gb/step` once per sim-step (default: one per 15
 in-game minutes; several per second at fast-forward). ROADMAP §6.3 budgets
-p99 ≤ 50 ms for the full round-trip on 100–500-node networks.
+p99 ≤ 75 ms for the full round-trip on 100–500-node networks (relaxed from
+50 ms by user decision 2026-07-28, based on the measurements below).
 
 ## Measurements (2026-07-28, this machine, localhost)
 
@@ -38,11 +39,11 @@ Solver share — `Simulator.run_step` on reference grids, warm-started, numba
 - **JIT warmup rule:** after every `/net/reset`, the backend fires one
   throwaway solve so the numba JIT cost (~3 s) never lands on a live step.
 - **Budget check:** at the mandated zone scale (§2.4), solver p50 + WS
-  transport ≈ 11–34 ms — inside budget. The 294-bus p99 (67 ms) slightly
-  exceeds 50 ms; acceptable because the orchestrator's one-step-lag +
-  skip-and-interpolate degradation (§2.5/§8) absorbs occasional overruns.
-  Keep default zone counts ≤ ~300 per network; 907-bus-class networks are
-  confirmed out of per-step budget and stay behind aggregation.
+  transport ≈ 11–34 ms and the 294-bus p99 (67 ms) both fit the 75 ms
+  budget; the orchestrator's one-step-lag + skip-and-interpolate degradation
+  (§2.5/§8) absorbs residual outliers. Keep default zone counts ≤ ~300 per
+  network; 907-bus-class networks are confirmed out of per-step budget and
+  stay behind aggregation.
 
 ## Consequences
 
