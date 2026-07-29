@@ -266,6 +266,13 @@ func _take_screenshot() -> void:
 	hud.view = view
 	add_child(hud)
 	City.money = 100_000_000
+	# environment demo: seed-19 wilderness (hills, rivers, mini-forest props)
+	# around a forced flat DRY pad the fixed town layout builds on (height
+	# overrides are never water); a river bend hugs the west and south edges
+	City.model.terrain.set_seed(19)
+	City.model.terrain.force_height(Vector2i(113, 114), Vector2i(146, 138), 0)
+	City.model.terrain.force_water(Vector2i(96, 139), Vector2i(146, 141))
+	City.model.terrain.force_water(Vector2i(96, 112), Vector2i(98, 141))
 	# terrain demo: the water tower stands on a forced plateau (elevation is
 	# real pressure now), plus a decorative stepped hill west of town
 	City.model.terrain.force_height(Vector2i(117, 130), Vector2i(123, 136), 2)
@@ -534,7 +541,7 @@ func _fail(tag: String, reason: String) -> void:
 # ─── Phase 1 smokes ───
 
 func _smoke_sidecars() -> void:
-	SidecarManager.load_config()
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
 	SidecarManager.start_all()
 	if not await _wait_all_healthy(180.0):
 		_fail("SMOKE_SIDECARS", "health timeout")
@@ -552,7 +559,7 @@ func _smoke_sidecars() -> void:
 
 
 func _smoke_resilience() -> void:
-	SidecarManager.load_config()
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
 	SidecarManager.start_all()
 	if not await _wait_all_healthy(180.0):
 		_fail("SMOKE_RESILIENCE", "initial health timeout")
@@ -601,7 +608,9 @@ func _smoke_cosim(kill_mode: bool) -> void:
 	if provider.fixtures.size() < 2:
 		_fail("SMOKE_COSIM", "fixtures missing (need power+heat)")
 		return
-	SidecarManager.load_config()
+	# stress ports (8014/15) like every other smoke — the default 8010/11
+	# may belong to a LIVE play session whose sidecars must not be reused
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
 	SidecarManager.start_all()
 	if not await _wait_all_healthy(180.0):
 		_fail("SMOKE_COSIM", "health timeout")
@@ -637,7 +646,7 @@ func _smoke_cosim(kill_mode: bool) -> void:
 	GameClock.restore({"total_minutes": 0.0, "speed": 0.0})
 	Orchestrator.start()
 	if kill_mode:
-		print("SMOKE_READY ", JSON.stringify({"ports": [8010, 8011]}))
+		print("SMOKE_READY ", JSON.stringify({"ports": [8014, 8015]}))
 	GameClock.speed = 15.0 if kill_mode else 60.0
 
 	var deadline := Time.get_ticks_msec() + (420_000 if kill_mode else 240_000)
@@ -1315,11 +1324,10 @@ func _smoke_hilltower() -> void:
 # ─── Phase 6 acceptance scenarios (living demand) ───
 
 ## The three-network reference town both Phase 6 smokes run on — built
-## COMPACT on purpose: the first draft strung the substation ~600 m of
-## NAYY 4x50 away from grid and plants, and at the 40-house evening peak
-## the voltage sagged under 0.90 pu — chronic evening brownouts, power
-## satisfaction 12/100. Keep feeders electrically short; no oversized wind
-## farm either (300 kW of export trips a 98 kVA feeder).
+## COMPACT originally because the first draft's 0.4-kV feeders sagged under
+## 0.90 pu at range (chronic brownouts, satisfaction 12/100). The grid is
+## 20 kV MV now (realism pass) so voltage is no longer the constraint, but
+## the compact layout stays — it keeps the smokes fast and readable.
 func _build_reference_city(seed_houses: int) -> void:
 	City.place_building("grid_connection", Vector2i(6, 4))
 	for x in range(8, 32):  # ..31: the east column hangs off (31,5)
@@ -1467,7 +1475,10 @@ func _smoke_yearcurves() -> void:
 		"ok": heat_winter > 3.0 * heat_summer
 			and elec_w_evening > 2.0 * elec_w_night
 			and elec_w_evening > 1.15 * elec_w_midday
-			and elec_s_midday > 0.9 * elec_s_evening
+			# summer PV surplus: NET zone load (realism pass: rooftop PV is
+			# part of the composition) collapses at midday — often negative —
+			# while the EV evening peak stands tall
+			and elec_s_midday < 0.5 * elec_s_evening
 			and water_summer > 1.15 * water_winter
 			and import_s_midday < import_s_evening - 20.0
 			and statuses["bad"] == 0
@@ -1783,6 +1794,10 @@ func _smoke_scenarios() -> void:
 
 	# ── A: greenfield — loan, build, grow to the win
 	var state := Scenarios.start("greenfield", "normal")
+	# the fixed reference layout must stay buildable: greenfield's seed-19
+	# terrain now carries RIVERS (environment pass) — keep the build area dry
+	# (players route around water; the smoke tests scenario mechanics)
+	City.model.terrain.force_water(Vector2i(0, 0), Vector2i(45, 25), false)
 	City.take_loan(300_000.0)  # the 110/20 kV station alone is 120k
 	_build_reference_city(6)
 	City._topo_dirty = true
@@ -1900,18 +1915,25 @@ func _smoke_maintenance() -> void:
 		return
 	City.reset_for_scenario(42)
 	City.growth_enabled = false
-	City.grid_capacity_override = 25.0  # evening import ~22 kW -> 88% signal
+	# evening import (30 houses incl. EV charging) crosses 80% of 100 kW well
+	# before the trafo trips — the signal precedes the failure, and the
+	# 110/20 kV interface itself never trips in this smoke
+	City.grid_capacity_override = 100.0
 	City.place_building("grid_connection", Vector2i(6, 4))
-	for x in range(8, 21):
+	for x in range(8, 33):
 		City.build_cable(Vector2i(x, 5))
-	# an undersized 5 kVA village trafo — trips within an hour, any hour
-	City.place_building("substation", Vector2i(12, 6), 0, {"rating_kva": 5.0})
-	City.place_building("substation", Vector2i(18, 6))  # healthy control zone
-	for x in range(8, 21):
-		City.build_road(Vector2i(x, 8))
-	for x in range(8, 21):
-		City.build_zone(Vector2i(x, 9))
-	City.spawn_houses_bulk(City.model.buildings_of_kind("substation")[0], 24)
+	# an undersized 50 kVA village trafo (explicit-parameter element): the
+	# EV evening peak pushes its SOLVED loading past 120% within the run
+	City.place_building("substation", Vector2i(12, 6), 0, {"rating_kva": 50.0})
+	# healthy control zone FAR east — its radius must not steal A's houses
+	City.place_building("substation", Vector2i(32, 6))
+	for y in [8, 11]:
+		for x in range(8, 21):
+			City.build_road(Vector2i(x, y))
+	for y in [9, 10, 12]:
+		for x in range(8, 21):
+			City.build_zone(Vector2i(x, y))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("substation")[0], 30)
 	City._topo_dirty = true
 	if not await _wait_registered(240.0):
 		_fail("SMOKE_MAINTENANCE", "register timeout")
@@ -1920,20 +1942,28 @@ func _smoke_maintenance() -> void:
 	var sub_b: String = City.model.buildings_of_kind("substation")[1]
 	var zone_a := "z_" + sub_a
 	var zone_b := "z_" + sub_b
+	# grid warning is latched DURING the run: once zone A trips, its demand
+	# drops off the wire and the end-state import sits well below the signal
+	var latch := {"grid_warned": false}
+	var slack_id: String = City.model.buildings_of_kind("grid_connection")[0]
+	City.power_result.connect(func(_t: int, _result: Dictionary) -> void:
+		if City.capacity_warnings.has(slack_id):
+			latch["grid_warned"] = true)
 	GameClock.restore({"total_minutes": 301.0 * 1440.0 + 17.0 * 60.0, "speed": 0.0})
 	Orchestrator.start()
-	await _run_steps(8, 240.0)
+	await _run_steps(10, 240.0)
 	var tripped := City.tripped_substations.has(sub_a)
 	var trip_marker: bool = City.capacity_warnings.get(sub_a, {}).get("text", "") == "TRIP"
-	var grid_warned: bool = City.capacity_warnings.has(
-		City.model.buildings_of_kind("grid_connection")[0])
+	var grid_warned: bool = latch["grid_warned"]
 	var a_dark_1: bool = not City.zone_supplied.get(zone_a, true)
 	var b_alive: bool = City.zone_supplied.get(zone_b, false)
 	# no self-healing: well past the old 2 h auto-repair, still dark
 	await _run_steps(12, 240.0)
 	var a_dark_2: bool = not City.zone_supplied.get(zone_a, true)
-	# pay the crew (and right-size the trafo so it doesn't re-trip)
-	City.model.buildings[sub_a]["params"]["rating_kva"] = 200.0
+	# pay the crew (and right-size the trafo so it doesn't re-trip; the new
+	# rating is baked into the solver doc, so force a topology rebuild)
+	City.model.buildings[sub_a]["params"]["rating_kva"] = 630.0
+	City._topo_dirty = true
 	var repaired := City.dispatch_repair(City.model.buildings[sub_a]["anchor"])
 	var maintenance_cost := float(City.econ_total.get("cost_maintenance", 0.0))
 	await _run_steps(City.REPAIR_STEPS + 2, 240.0)
@@ -2001,7 +2031,10 @@ func _smoke_windless_week() -> void:
 
 func _run_windless_phase(weather_seed: int, with_battery: bool) -> Dictionary:
 	City.reset_for_scenario(weather_seed)
-	City.grid_capacity_override = 3.0  # kW — below even the night minimum
+	City.growth_enabled = false  # fixed 6 houses — the EMA needs a stable target
+	# between the battery-shaved evening import (~EMA, <10 kW) and the raw
+	# EV-peak import (~22 kW): the plain town trips, the battery town holds
+	City.grid_capacity_override = 14.0
 	City.place_building("grid_connection", Vector2i(10, 10))
 	for x in range(12, 31):
 		City.build_cable(Vector2i(x, 10))
@@ -2018,15 +2051,15 @@ func _run_windless_phase(weather_seed: int, with_battery: bool) -> Dictionary:
 	if not await _wait_registered(120.0):
 		return {"error": "register timeout"}
 
-	# clock: start at the next full day boundary; calm 06:00-18:00 on day 1
+	# clock: start at the next full day boundary; calm 12:00-24:00 on day 1 —
+	# the window must cover the EV evening peak, where the import spike lives
 	var t0 := (int(GameClock.total_minutes / GameClock.SIM_STEP_MINUTES / 96) + 1) * 96
 	GameClock.restore({"total_minutes": t0 * float(GameClock.SIM_STEP_MINUTES), "speed": 0.0})
-	var calm_start := t0 + 24
-	var calm_end := t0 + 72
+	var calm_start := t0 + 48
+	var calm_end := t0 + 96
 	# scripted series: solid wind across the whole run, dead calm inside the
-	# window — "outages fire exactly when the weather series says calm"
-	# 7 m/s -> ~26 kW from the 300-kW farm: covers the town without the huge
-	# export that would overvolt this small feeder
+	# window — "outages fire exactly when the weather series says calm";
+	# 7 m/s keeps the 9-MW farm at a modest few-hundred-kW output
 	City.weather.force_wind(t0 - 96, t0 + 192, 7.0)
 	City.weather.force_calm(calm_start, calm_end)
 	var unsupplied_steps: Array[int] = []
@@ -2073,8 +2106,11 @@ func _run_windless_phase(weather_seed: int, with_battery: bool) -> Dictionary:
 		"events": City.events.size()}
 
 
-## Two feeders from the grid connection; the heavy one (140 houses behind two
-## substations) overloads past 120 %, trips, and blacks out ONLY its zones.
+## Two feeders from the grid connection; the heavy one carries an 18-MW wind
+## park (2 farms) at its far end — at full wind the EXPORT overloads the
+## 20-kV overhead run (~7.3 MVA) past 120 %, trips, and blacks out ONLY the
+## zones behind the cut. MW-scale generation is what overloads MV lines now;
+## household districts alone barely register.
 func _smoke_overload() -> void:
 	SidecarManager.load_config("orchestration/sidecars_stress.json")
 	SidecarManager.start_all()
@@ -2085,7 +2121,6 @@ func _smoke_overload() -> void:
 	City.money = 100_000_000
 	City.weather = WeatherSystem.new(42)
 	City.outage_minutes = {}
-	City.grid_capacity_override = 2000.0  # capacity is not under test here
 	City.place_building("grid_connection", Vector2i(10, 10))
 	# feeder A (east) -> sub1, light
 	for x in range(12, 18):
@@ -2095,24 +2130,27 @@ func _smoke_overload() -> void:
 		City.build_road(Vector2i(x, 8))
 	for x in range(14, 26):
 		City.build_zone(Vector2i(x, 7))
-	# feeder B (south, then east) -> sub2 + sub3, heavy
+	# feeder B (south, then east) -> sub2 + sub3 + the wind park at the end
 	for y in range(12, 16):
 		City.build_cable(Vector2i(10, y))
-	for x in range(11, 30):
+	for x in range(11, 35):
 		City.build_cable(Vector2i(x, 15))
 	City.place_building("substation", Vector2i(20, 16))  # touches (20,15)
-	City.place_building("substation", Vector2i(30, 15))
+	City.place_building("substation", Vector2i(30, 16))  # touches (30,15)
+	City.place_building("wind_farm", Vector2i(32, 13))   # touches (32,15)
+	City.place_building("wind_farm", Vector2i(33, 16))   # touches (33,15)
 	for x in range(12, 34):
-		City.build_road(Vector2i(x, 18))
-		City.build_road(Vector2i(x, 21))
-		City.build_road(Vector2i(x, 24))
+		City.build_road(Vector2i(x, 19))
+		City.build_road(Vector2i(x, 22))
 	for x in range(12, 34):
-		for y in [19, 20, 22, 23]:  # every zoned row is road-adjacent
+		for y in [20, 21, 23]:  # every zoned row is road-adjacent
 			City.build_zone(Vector2i(x, y))
 	var subs := City.model.buildings_of_kind("substation")
 	# heavy district spawns FIRST so sub1 cannot eat its candidate tiles
 	var spawned := [City.spawn_houses_bulk(subs[1], 60),
 		City.spawn_houses_bulk(subs[2], 60), City.spawn_houses_bulk(subs[0], 20)]
+	# full wind across the whole run: both farms at rated output
+	City.weather.force_wind(0, 100_000, 14.0)
 	City._topo_dirty = true
 	if not await _wait_registered(120.0):
 		_fail("SMOKE_OVERLOAD", "register timeout")

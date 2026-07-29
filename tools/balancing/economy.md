@@ -18,21 +18,27 @@ constants and the *why*; change a constant → rerun the smoke → commit both.
 | `GRID_FEEDIN_KWH` | 0.06 €/kWh | Feed-in for exports — PV surplus earns a little, never a business model on its own. |
 | `LOAN_RATE_DAY` | 0.0005 (~18 % p.a.) | Loans bridge construction (greenfield needs one), interest makes sitting on debt hurt. |
 | `UPKEEP_DAY` table | see building_defs.gd | Sized so the 24-house reference fleet costs ≈ €167/day fixed — thin margins at village scale, widening as the town grows on the same fleet (the intended arc). |
-| grid_connection cost | 120 000 € | The 110/20 kV interface (10 MVA). Gameplay-priced: a real station is millions, but the game bill is the player's SHARE of a shared asset. Upkeep stays 20 €/d for the same reason. |
-| overhead vs cable | 120 / 320 €/tile | Freileitung (48-AL1, ~145 kVA) vs buried NAYY 4x150 (~187 kVA): the cable costs ~2.7x, buys ~30% rating and clean streets. |
-| `CREW_COST` | 1 500 € | One maintenance dispatch (overload trips never self-heal). Roughly two weeks of a healthy village's net margin — an overloaded grid you ignore eats the profits, which is the teaching pressure toward more substations / local generation. |
-| substation `rating_kva` | 100 kVA | Ortsnetzstation sizing: a full 40-house zone peaks at ~70-80 % so the capacity signal is VISIBLE in normal play; sustained overload trips the trafo (crew required). Override per building via params for scenarios. |
+| grid_connection cost | 120 000 € | The 110/20 kV interface (20 MVA, user correction). Gameplay-priced: a real station is millions, but the game bill is the player's SHARE of a shared asset. Upkeep stays 20 €/d for the same reason. |
+| overhead vs cable | 120 / 320 €/tile | 20-kV Freileitung (48-AL1, ~7.3 MVA) vs buried NA2XS2Y 1x95 (~8.7 MVA): the cable costs ~2.7x, buys ~20% rating and clean streets. MW-scale generation is what loads these lines — a 9 MW wind farm at full output overloads a single overhead run. |
+| `CREW_COST` | 1 500 € | One maintenance dispatch (overload trips never self-heal). An overloaded grid you ignore eats the profits, which is the teaching pressure toward more substations / local generation. |
+| substation `rating_kva` | 630 kVA | Ortsnetzstation (user correction; modeled as a REAL 20/0.4 kV pandapower trafo, loading solved). A 150-house zone incl. EV charging peaks near 90 % — the capacity signal is VISIBLE at full build-out. Override per building via params for scenarios (below 250 kVA the element gets explicit physical parameters). |
+| household composition | PV 40 % × 7 kWp · EV 35 % × 11 kW | Zone demand = BDEW H0 base + diversified EV home charging (gaussian-arrival shapes) − rooftop PV on REAL measured rtpowerflow day shapes. Net load goes NEGATIVE at sunny noon (backfeed, signed on the wire); billing books only the positive net import. |
 
-## Measured result (2026-07-29)
+## Measured result (2026-07-29, realism pass)
 
 | Window | Income | Costs | Net |
 |---|---|---|---|
-| Winter, 2 days | ≈ €791 (el 397 · heat 343 · water 33 · base 19) | ≈ €734 (fuel 396 · upkeep 334 · grid 4) | **+€57** |
-| Summer, 2 days | ≈ €587 (el 437 · heat 72 · water 38 · feed-in 20 · base 19) | ≈ €525 (fuel 188 · upkeep 334 · grid 3) | **+€62** |
-| Blackout day | heat/water still sell; **electricity books €0** | fuel + upkeep keep running | strongly negative |
+| Winter, 2 days | ≈ €969 (el 508 · heat 345 · feed-in 66 · water 31 · base 19) | ≈ €754 (fuel 381 · upkeep 334 · grid 40) | **+€215** |
+| Summer, 2 days | ≈ €1 183 (feed-in 673 · el 380 · heat 74 · water 37 · base 19) | ≈ €556 (fuel 193 · upkeep 334 · grid 29) | **+€627** |
+| Blackout day | heat/water still sell; **electricity books €0** | fuel + upkeep keep running | ≈ −€130 vs a winter day's +€108 |
 
-≈ +€30/day at 24 houses. Growth to 40 houses adds ~65 % tariff income on the
-same fixed fleet — profitable towns are GROWN, not built.
+The MW-scale plants moved the reference town from break-even to solidly
+profitable: the 1.2-MWp solar park's feed-in carries the summer (€673/2d at
+only 0.06 €/kWh — winter feed-in is small because the daylight window is
+seasonally compressed, no phantom January-evening sun), electricity income
+grew with the EV charging demand. The tension shifts from "survive" to
+"fund the build-out" — scenario start budgets and difficulty money scaling
+stay the effective knobs.
 
 ## Known simplifications (Phase 8 candidates)
 

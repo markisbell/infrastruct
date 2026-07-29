@@ -66,22 +66,43 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   five-file bundles). Water junction `elevation_m` = 300 + 5 m/terrain level
   (+ tower height folded in). Heat slack = FIRST plant (sorted ids); water head
   preference tower > well > pump, head mirrored as the single ext_grid.
+- **Power is 20 kV MV** (realism pass 2026-07-29): buses vn_kv 20; every
+  substation is a REAL 20/0.4 kV trafo element (`trafo_fields`: catalog std
+  types ≥250 kVA, explicit params below) with its own LV bus carrying the
+  zone load; `topo.trafo_subs` maps solved "T<idx>" edges → substation ids
+  (warnings/trips/telemetry read SOLVED trafo loading). DISCONNECTED subs
+  keep a `zones_info` entry (`connected: false`) so their houses count as
+  dark after a branch trip. Power zone demand is SIGNED net load (rooftop-PV
+  backfeed; contract §4 power note; heat/water stay clamped ≥0).
 
 ## 4. Gameplay systems (all smoke-verified)
 
-- **Lines**: overhead (kind 1, 48-AL1 ~145 kVA, 120/tile) vs buried (kind 2,
-  NAYY 4x150 ~187 kVA, 320/tile); heat/water pipes have surface + buried builds
-  too. Buried lines cross under ROADS (manhole plates) and share street
-  cross-sections; NOTHING runs under houses/buildings; roads may pave over
-  buried-only tiles; kind transitions become junction buses (one per joint).
-- **Ratings semantics** (user correction): grid connection = 110/20 kV, 10 MVA;
-  substation = 20/0.4 kV Ortsnetzstation, 100 kVA (a full 40-house zone peaks
-  ~70-80 % → the signal is visible in normal play).
+- **Lines**: overhead (kind 1, "48-AL1/8-ST1A 20.0" ~7.3 MVA, 120/tile) vs
+  buried (kind 2, "NA2XS2Y 1x95 RM/25 12/20 kV" ~8.7 MVA, 320/tile); heat/water
+  pipes have surface + buried builds too. Buried lines cross under ROADS
+  (manhole plates) and share street cross-sections; NOTHING runs under
+  houses/buildings; roads may pave over buried-only tiles; kind transitions
+  become junction buses (one per joint).
+- **Ratings semantics** (user corrections): grid connection = 110/20 kV,
+  20 MVA; substation = 20/0.4 kV Ortsnetzstation, 630 kVA (150-house zones);
+  wind farm 9 MW (3×3 MW), solar park 1.2 MWp (300 kW/tile), gas 2 MW,
+  battery 1 MWh/400 kW. MW-scale generation is what overloads MV lines —
+  household districts alone barely register (the overload smoke premise).
+- **Demand composition**: zone net load = BDEW H0 base (1.05 kW/house mean)
+  + EV home charging (35 % × 11 kW, gaussian-arrival shapes, workday peak
+  ~19:00) − rooftop PV (40 % × 7 kWp on REAL measured rtpowerflow day
+  shapes, seasonal-scaled). Negative at sunny noon = export. Solar parks
+  dispatch from the same `DemandModel.pv_availability` (not weather ghi);
+  billing books only positive net import.
+- **Battery = peak shaving ALWAYS** (user direction): discharge net load
+  above its one-day EMA (`City._peak_ema`, alpha 1/96), recharge below;
+  gas covers the residual AFTER the battery pass.
 - **Signals & maintenance**: `City.capacity_warnings` (lines ≥80 %, trafos
   ≥70 %, grid ≥80 %, heat < min+4 °C, water < 2.4 bar) → floating markers.
-  Overload trips (line >120 %, trafo > rating, sustained) disconnect the branch
-  and DON'T self-heal: repair crew tool (M), €1 500, 2 h (`AWAITING_CREW` vs
-  positive repair-at step). Event auto-crews (bursts, MTBF failures) stay auto.
+  Overload trips (line >120 % and trafo >120 % SOLVED loading, sustained)
+  disconnect the branch and DON'T self-heal: repair crew tool (M), €1 500,
+  2 h (`AWAITING_CREW` vs positive repair-at step). A tripped substation
+  de-energizes its zone (boundary demand → 0). Event auto-crews stay auto.
 - **Economy**: tariffs on DELIVERED kWh/m³ + Grundgebühr; fuel from solved
   outputs; upkeep/day; wholesale import/feed-in; loans. Blackout days book €0
   electricity income. Balancing sheet is the contract — change a constant,
@@ -93,6 +114,17 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
 - **Scenarios**: sandbox / tutorial (9 steps) / greenfield / inherited grid
   (20-kW relic, loses by misery untouched) / energy transition; difficulty
   scales growth/events/money. Prebuilds run BEFORE the start budget lands.
+- **Environment** (2026-07-29): RIVERS derive from a second noise channel
+  (`Terrain.is_water` — seed-only like heights, seed 0 = none, water only
+  on valley level 0, never under forced-height rects; `force_water` is the
+  scenario/test hook, serialized additively). Water blocks ALL construction
+  (roads/lines/pipes/zones/buildings — no bridges yet); wells within 3
+  tiles of water yield ×1.5 (`WaterTopology.WELL_RIVER_BONUS`). Sandbox +
+  greenfield (terrain seed 19) carry rivers; prebuilt scenarios stay flat.
+  DECORATION: Kenney mini-forest props (trees/stones/earth) scatter on
+  ~8 % of empty unzoned tiles — deterministic per (tile, seed) hash, one
+  MultiMesh per variant (`city_view._rebuild_deco`, skipped headless),
+  occupancy-filtered every redraw so building clears props.
 - **Inspector**: left-click with no tool → daily profile graph in rtpowerflow's
   ProfileGraph conventions (0–24 h, 2 h ticks, unit y-axis, staircase, dashed
   limits, now marker, yesterday faded, hover readout). Buildings show their

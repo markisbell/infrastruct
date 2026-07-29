@@ -10,13 +10,12 @@ const TILE_M := 25.0  # one tile edge in meters (cable lengths derive from it)
 ## the power net as the aggregated "cpl_heat" coupling_load (contract §4).
 const DEFS := {
 	"substation": {
-		# the 20/0.4 kV district transformer station (Ortsnetzstation):
-		# 100 kVA — a full 40-house zone peaks near 70-80 %, so the capacity
-		# signal is VISIBLE in normal play and sustained overload (growth,
-		# cold snaps) trips the trafo until a crew repairs it
+		# the 20/0.4 kV Ortsnetzstation, modeled as a REAL pandapower
+		# transformer (0.63 MVA std type) between the MV grid and its
+		# zone's LV bus — loading comes solved from the contract T-edges
 		"size": Vector2i(1, 1), "cost": 12_000, "device": "", "network": "power",
-		"color": Color(0.25, 0.75, 0.85), "zone_radius": 12, "house_capacity": 40,
-		"rating_kva": 100.0,
+		"color": Color(0.25, 0.75, 0.85), "zone_radius": 12, "house_capacity": 150,
+		"rating_kva": 630.0,
 	},
 	"heat_exchanger": {
 		"size": Vector2i(1, 1), "cost": 15_000, "device": "", "network": "heat",
@@ -43,28 +42,27 @@ const DEFS := {
 		"params": {"e_kwh": 500.0, "p_max_kw": 100.0}, "color": Color(0.75, 0.55, 0.3),
 	},
 	"grid_connection": {
-		# the 110/20 kV interface to the transmission grid — a 10 MVA
-		# station (user correction: 250 kW was a substation-trafo number).
-		# Cost is gameplay-priced, not utility-priced (balancing sheet).
+		# the 110/20 kV interface to the transmission grid — 20 MVA (user
+		# correction). Cost is gameplay-priced, not utility-priced.
 		"size": Vector2i(2, 2), "cost": 120_000, "device": "slack", "network": "power",
-		"params": {"vm_pu": 1.0}, "capacity_kw": 10_000.0,
+		"params": {"vm_pu": 1.0}, "capacity_kw": 20_000.0,
 		"color": Color(0.85, 0.3, 0.3),
 	},
 	"gas_plant": {
 		"size": Vector2i(2, 2), "cost": 90_000, "device": "generator", "network": "power",
-		"params": {"p_max_kw": 500.0}, "color": Color(0.55, 0.42, 0.3),
+		"params": {"p_max_kw": 2_000.0}, "color": Color(0.55, 0.42, 0.3),
 	},
 	"wind_farm": {
 		"size": Vector2i(2, 2), "cost": 70_000, "device": "wind", "network": "power",
-		"params": {"p_rated_kw": 300.0}, "color": Color(0.92, 0.93, 0.95),
+		"params": {"p_rated_kw": 9_000.0}, "color": Color(0.92, 0.93, 0.95),
 	},
 	"solar_park": {
 		"size": Vector2i(2, 2), "cost": 50_000, "device": "pv", "network": "power",
-		"params": {"p_rated_kw": 200.0}, "color": Color(0.2, 0.3, 0.55),
+		"params": {"p_rated_kw": 1_200.0}, "color": Color(0.2, 0.3, 0.55),
 	},
 	"battery": {
 		"size": Vector2i(1, 1), "cost": 40_000, "device": "battery", "network": "power",
-		"params": {"e_kwh": 200.0, "p_max_kw": 100.0}, "color": Color(0.6, 0.35, 0.75),
+		"params": {"e_kwh": 1_000.0, "p_max_kw": 400.0}, "color": Color(0.6, 0.35, 0.75),
 	},
 	"water_station": {
 		# zone definer, like substation/heat_exchanger — a district metering hub

@@ -21,7 +21,8 @@ func _town() -> WorldModel:
 func test_simple_town_extraction() -> void:
 	var topo := PowerTopology.build(_town(), {})
 	assert_bool(topo.has_slack).is_true()
-	assert_int(topo.doc["native"]["grid_structure"]["buses"].size()).is_equal(2)
+	# slack MV + substation MV + the substation's LV bus (realism pass)
+	assert_int(topo.doc["native"]["grid_structure"]["buses"].size()).is_equal(3)
 	var lines: Array = topo.doc["native"]["lines"]["lines"]
 	assert_int(lines.size()).is_equal(1)
 	# path: 9 cable tiles + both endpoints are among them -> 9 tiles * 25 m
@@ -32,6 +33,13 @@ func test_simple_town_extraction() -> void:
 	assert_int(topo.doc["devices"].size()).is_equal(1)  # slack only
 	assert_that(topo.doc["devices"][0]["kind"]).is_equal("slack")
 	assert_bool(topo.line_tiles.has("L0")).is_true()
+	# the substation is a REAL 20/0.4 kV trafo, zone load on its LV side
+	var trafos: Array = topo.doc["native"]["lines"]["transformers"]
+	assert_int(trafos.size()).is_equal(1)
+	assert_str(str(trafos[0]["std_type"])).is_equal("0.63 MVA 20/0.4 kV")
+	assert_str(str(topo.doc["zones"][0]["node"])).starts_with("lv_")
+	assert_str(str(topo.trafo_subs["T0"])) \
+		.is_equal(str(topo.zones_info[zone_id]["sub"]))
 
 
 func test_junction_splits_lines() -> void:
@@ -41,9 +49,9 @@ func test_junction_splits_lines() -> void:
 		model.set_cable(Vector2i(6, y), 1)
 	model.place_building("wind_farm", Vector2i(5, 5))  # touches (6,4)
 	var topo := PowerTopology.build(model, {})
-	# junction at (6,0) -> 3 lines, 4 buses (slack, sub, wind, junction)
+	# junction at (6,0) -> 3 lines, 5 buses (slack, sub, wind, junction + LV)
 	assert_int(topo.doc["native"]["lines"]["lines"].size()).is_equal(3)
-	assert_int(topo.doc["native"]["grid_structure"]["buses"].size()).is_equal(4)
+	assert_int(topo.doc["native"]["grid_structure"]["buses"].size()).is_equal(5)
 	var kinds := []
 	for device: Dictionary in topo.doc["devices"]:
 		kinds.append(device["kind"])

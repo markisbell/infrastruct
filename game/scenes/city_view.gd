@@ -93,6 +93,9 @@ const TERRAIN_COLORS: Array[Color] = [
 ## bright warm earth: skirts face away from the sun, so the bluish ambient
 ## dominates them — a dark brown reads as water there, this stays soil
 const TERRAIN_SKIRT_COLOR := Color(0.72, 0.58, 0.4)
+## rivers: dipped below their valley plateau, saturated blue (vertex color)
+const WATER_COLOR := Color(0.2, 0.42, 0.65)
+const WATER_DIP := 0.45  # fraction of VISUAL_STEP below the tile's plateau
 const WORLD_TILES := 256
 
 
@@ -172,6 +175,7 @@ func focus_tile(tile: Vector2i, zoom: float = 18.0) -> void:
 func redraw() -> void:
 	var model: WorldModel = City.model
 	_rebuild_terrain()
+	_rebuild_deco()
 	_diff(_zones, model.zoning, _make_zone)
 	_diff(_roads, model.roads, _make_road)
 	_diff(_cables, model.cables, _make_cable)
@@ -235,21 +239,23 @@ func _rebuild_terrain() -> void:
 		for z in WORLD_TILES:
 			var pos := Vector2i(x, z)
 			var h := terrain.height(pos)
-			var y := h * Terrain.VISUAL_STEP
-			var color := TERRAIN_COLORS[clampi(h, 0, TERRAIN_COLORS.size() - 1)]
+			var y := _tile_y(terrain, pos)
+			var color := WATER_COLOR if terrain.is_water(pos) \
+				else TERRAIN_COLORS[clampi(h, 0, TERRAIN_COLORS.size() - 1)]
 			_emit_quad(verts, normals, colors, indices,
 				[Vector3(x, y, z), Vector3(x + 1, y, z),
 					Vector3(x + 1, y, z + 1), Vector3(x, y, z + 1)],
 				Vector3.UP, color)
 			# skirts where this plateau stands above a neighbor (each tile
-			# emits only its own descending faces — no doubles)
+			# emits only its own descending faces — no doubles); river banks
+			# come out of the same rule (water tiles dip below their plateau)
 			for side: Array in [
 				[Vector2i(1, 0), Vector3(x + 1, 0, z), Vector3(x + 1, 0, z + 1), Vector3.RIGHT],
 				[Vector2i(-1, 0), Vector3(x, 0, z + 1), Vector3(x, 0, z), Vector3.LEFT],
 				[Vector2i(0, 1), Vector3(x + 1, 0, z + 1), Vector3(x, 0, z + 1), Vector3.BACK],
 				[Vector2i(0, -1), Vector3(x, 0, z), Vector3(x + 1, 0, z), Vector3.FORWARD],
 			]:
-				var neighbor_y: float = terrain.height(pos + side[0]) * Terrain.VISUAL_STEP
+				var neighbor_y: float = _tile_y(terrain, pos + side[0])
 				if neighbor_y >= y:
 					continue
 				var a: Vector3 = side[1]
@@ -276,6 +282,149 @@ func _rebuild_terrain() -> void:
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_terrain_mesh.material_override = material
 	add_child(_terrain_mesh)
+
+
+## Rendered surface height of a tile: its plateau, dipped for water — the
+## dip is what draws the river bed and banks (skirt rule sees it as lower).
+static func _tile_y(terrain: Terrain, pos: Vector2i) -> float:
+	var y := terrain.height(pos) * Terrain.VISUAL_STEP
+	return y - WATER_DIP * Terrain.VISUAL_STEP if terrain.is_water(pos) else y
+
+
+# ─── environment decoration (Kenney mini-forest, deterministic scatter) ───
+#
+# Empty tiles get trees / stones / earth patches, picked per tile from a
+# seeded hash (no stored state, byte-stable across sessions) and rendered
+# as ONE MultiMesh per variant — thousands of props, a handful of draw
+# calls. Anything built on a tile removes its prop (occupancy filter runs
+# per redraw); zoned land is kept clean (that's building land).
+
+const DECO_DENSITY := 0.08   # fraction of eligible empty tiles
+const MINI_FOREST := "mini-forest/Models/GLB format/"
+## variant -> {file, fit (footprint in world units), bands: which height
+## bands it appears in (0 = valleys/waterside, 1 = grass mid, 2 = rocky top).
+## The pack also ships bridge.glb — the hook for river crossings later.
+const DECO_KINDS := {
+	"tree":        {"file": "tree.glb",        "fit": 0.55, "bands": [0, 1]},
+	"tree_high":   {"file": "tree-high.glb",   "fit": 0.5,  "bands": [0, 1]},
+	"plant":       {"file": "plant.glb",       "fit": 0.35, "bands": [0, 1]},
+	"stones":      {"file": "stones.glb",      "fit": 0.35, "bands": [1, 2]},
+	"rocks_low":   {"file": "rocks-low.glb",   "fit": 0.5,  "bands": [1, 2]},
+	"rocks_high":  {"file": "rocks-high.glb",  "fit": 0.55, "bands": [2]},
+	"patch_dirt":  {"file": "patch-dirt.glb",  "fit": 0.85, "bands": [0, 1]},
+	"patch_grass": {"file": "patch-grass.glb", "fit": 0.85, "bands": [0, 1]},
+}
+
+var _deco_nodes := {}        # variant -> MultiMeshInstance3D
+var _deco_lib := {}          # variant -> {mesh, base: Transform3D} | null
+var _deco_scatter: Array[Dictionary] = []   # per terrain fingerprint
+var _deco_scatter_fp := ""
+
+
+static func _tile_hash(pos: Vector2i, seed_value: int) -> int:
+	# cheap 2D integer hash — deterministic prop placement per (tile, seed)
+	var h := pos.x * 73856093 ^ pos.y * 19349663 ^ seed_value * 83492791
+	return absi(h)
+
+
+static func _deco_band(terrain: Terrain, pos: Vector2i) -> int:
+	if terrain.near_water(pos, 2) or terrain.height(pos) <= 1:
+		return 0  # valleys and riversides: lush
+	return 1 if terrain.height(pos) <= 3 else 2  # grass mid vs rocky top
+
+
+func _rebuild_deco() -> void:
+	if DisplayServer.get_name() == "headless":
+		return  # smokes never look at props; skip the 65k-tile scatter
+	var terrain: Terrain = City.model.terrain
+	if terrain.fingerprint() != _deco_scatter_fp:
+		_deco_scatter_fp = terrain.fingerprint()
+		_deco_scatter.clear()
+		for x in WORLD_TILES:
+			for z in WORLD_TILES:
+				var pos := Vector2i(x, z)
+				var h := _tile_hash(pos, terrain.seed_value)
+				if h % 1000 >= int(DECO_DENSITY * 1000.0) or terrain.is_water(pos):
+					continue
+				var band := _deco_band(terrain, pos)
+				var pool: Array[String] = []
+				for variant: String in DECO_KINDS:
+					if band in (DECO_KINDS[variant]["bands"] as Array):
+						pool.append(variant)
+				if pool.is_empty():
+					continue
+				_deco_scatter.append({"pos": pos,
+					"variant": pool[(h / 1000) % pool.size()], "h": h})
+	# occupancy pass: a prop lives only on truly empty, unzoned land
+	var model: WorldModel = City.model
+	var buckets := {}
+	for entry: Dictionary in _deco_scatter:
+		var pos: Vector2i = entry["pos"]
+		if not model.is_tile_free(pos) or model.zoning.has(pos):
+			continue
+		var variant: String = entry["variant"]
+		if not buckets.has(variant):
+			buckets[variant] = []
+		var h: int = entry["h"]
+		var jitter := Vector3((h % 41) / 41.0 - 0.5, 0.0,
+			(h % 37) / 37.0 - 0.5) * 0.55
+		var spot := Vector3(pos.x + 0.5, _ground_y(pos), pos.y + 0.5) + jitter
+		buckets[variant].append(Transform3D(
+			Basis(Vector3.UP, TAU * float(h % 97) / 97.0), spot))
+	for variant: String in DECO_KINDS:
+		var lib: Variant = _deco_lib_entry(variant)
+		var transforms: Array = buckets.get(variant, [])
+		if lib == null:
+			continue
+		var entry: Dictionary = lib
+		if not _deco_nodes.has(variant):
+			var node := MultiMeshInstance3D.new()
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.mesh = entry["mesh"]
+			node.multimesh = mm
+			add_child(node)
+			_deco_nodes[variant] = node
+		var base: Transform3D = entry["base"]
+		var multi: MultiMesh = (_deco_nodes[variant] as MultiMeshInstance3D).multimesh
+		multi.instance_count = transforms.size()
+		for i in transforms.size():
+			multi.set_instance_transform(i, (transforms[i] as Transform3D) * base)
+
+
+## Mesh + grounding transform for a variant (first mesh in the GLB scene,
+## scaled so its footprint spans `fit`, bottom at y=0). null = missing model.
+func _deco_lib_entry(variant: String) -> Variant:
+	if _deco_lib.has(variant):
+		return _deco_lib[variant]
+	var info: Dictionary = DECO_KINDS[variant]
+	var scene: Resource = load(KENNEY + MINI_FOREST + str(info["file"]))
+	var entry: Variant = null
+	if scene is PackedScene:
+		var inst: Node3D = (scene as PackedScene).instantiate()
+		var mesh_node := _first_mesh(inst)
+		if mesh_node != null:
+			var bounds := _aabb_of(inst)
+			var extent := maxf(bounds.size.x, bounds.size.z)
+			var s := float(info["fit"]) / maxf(extent, 0.001)
+			var bottom := bounds.position + Vector3(bounds.size.x / 2.0, 0, bounds.size.z / 2.0)
+			entry = {"mesh": mesh_node.mesh, "base":
+				Transform3D(Basis.from_scale(Vector3.ONE * s), -bottom * s)}
+		inst.free()
+	if entry == null:
+		push_warning("mini-forest model missing: " + str(info["file"]))
+	_deco_lib[variant] = entry
+	return entry
+
+
+static func _first_mesh(node: Node) -> MeshInstance3D:
+	if node is MeshInstance3D:
+		return node
+	for child: Node in node.get_children():
+		var found := _first_mesh(child)
+		if found != null:
+			return found
+	return null
 
 
 func _emit_quad(verts: PackedVector3Array, normals: PackedVector3Array,

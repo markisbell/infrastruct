@@ -63,8 +63,60 @@ static func house_factor(t: int) -> float:
 	return lerpf(HOURLY_V1[hour], HOURLY_V1[(hour + 1) % 24], within) * 1.71
 
 
+## Household composition (user direction: the residential picture must
+## include local rooftop solar and electric vehicles, like rtpowerflow's
+## households). Shares are diversified expectations, not per-house state.
+const PV_SHARE := 0.4        # fraction of houses with a rooftop plant
+const PV_KWP := 7.0          # typical single-family rooftop
+const EV_SHARE := 0.35       # fraction of houses with a home charger
+const EV_CHARGER_KW := 11.0
+
+## NET zone load at the transformer: households + EV charging − rooftop PV.
+## Negative = the zone exports (sunny noon), which the solver handles as a
+## negative load. Billing uses max(0, ·) — exported energy isn't sold twice.
 static func zone_demand_kw(n_houses: int, t: int) -> float:
-	return n_houses * HOUSE_MEAN_KW * house_factor(t)
+	var base := n_houses * HOUSE_MEAN_KW * house_factor(t)
+	var ev := n_houses * EV_SHARE * EV_CHARGER_KW * ev_factor(t)
+	var pv := n_houses * PV_SHARE * PV_KWP * pv_availability(t)
+	return base + ev - pv
+
+
+## Expected per-EV load as a fraction of charger power (pack shape:
+## gaussian arrivals x charge window, peaks ~19:00 on workdays).
+static func ev_factor(t: int) -> float:
+	var pack := _get_pack()
+	if pack.has("ev"):
+		return float(pack["ev"][day_kind(t)][t % STEPS_PER_DAY])
+	var hour := (t * 15 % 1440) / 60
+	return 0.45 if (hour >= 18 and hour < 21) else (0.1 if hour >= 21 or hour < 2 else 0.02)
+
+
+## PV yield as a fraction of kWp — REAL measured day shapes from
+## rtpowerflow's rooftop plant (real_pv_days.json via the profile pack),
+## picked deterministically per game day and scaled by season (the
+## measurement campaign covers late spring/summer). Drives rooftop PV in
+## the zone composition AND the solar parks' dispatch.
+## Winter shortens BOTH the amplitude and the DAYLIGHT WINDOW: the summer
+## shapes are time-compressed toward noon (a 4-pm winter sunset), otherwise
+## a January evening would still show phantom summer sun.
+static func pv_availability(t: int) -> float:
+	var pack := _get_pack()
+	var doy := (t / STEPS_PER_DAY) % DAYS_PER_YEAR
+	var season := 0.5 - 0.5 * cos(TAU * float(doy) / DAYS_PER_YEAR)  # 0 winter..1 summer
+	var seasonal := lerpf(0.22, 1.0, season)
+	var day_scale := lerpf(0.62, 1.0, season)  # ~10 h winter vs ~16 h summer day
+	var stretched := 48.0 + (float(t % STEPS_PER_DAY) - 48.0) / day_scale
+	if stretched < 0.0 or stretched > 95.0:
+		return 0.0
+	if pack.has("pv_days"):
+		var days: Array = pack["pv_days"]
+		var day := t / STEPS_PER_DAY
+		var shape: Array = days[(day * 2654435761) % days.size()]
+		return float(shape[int(stretched)]) * seasonal
+	# fallback: clear-sky bell
+	var frac := stretched / STEPS_PER_DAY
+	var elevation := 1.0 - absf(frac - 0.5) / 0.3
+	return maxf(elevation, 0.0) * seasonal
 
 
 # ─── heat (Phase 4, unchanged): space heating follows outdoor temperature

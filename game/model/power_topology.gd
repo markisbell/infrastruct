@@ -15,22 +15,39 @@ extends RefCounted
 
 const NEIGHBORS: Array[Vector2i] = [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-## Two LV feeder builds share one electrical graph (they join freely; a
-## kind transition becomes a junction bus so every pandapower line segment
-## carries ONE std_type): overhead Freileitung 48-AL1 (~145 kVA) vs the
-## buried NAYY 4x150 (~187 kVA, pricier, out of sight). One healthy zone
-## (40 houses, ~76 kW peak) loads an overhead feeder to ~52 % — hanging a
-## second zone plus a cold-snap coupling load on it still overloads.
+## The buildable grid is the 20 kV MEDIUM-VOLTAGE network (realism pass:
+## MW-scale generation makes 0.4 kV feeders physically impossible). Two
+## builds share one graph, kind transitions become junction buses:
+## overhead 48-AL1 (~7.3 MVA) vs buried NA2XS2Y 1x95 (~8.7 MVA). A 9 MW
+## wind farm at full output overloads a single overhead line — route
+## strong generation on cable or split the export path.
+const MV_KV := 20.0
 const STD_TYPES := {
-	BuildingDefs.LINE_OVERHEAD: "48-AL1/8-ST1A 0.4",
-	BuildingDefs.LINE_UNDERGROUND: "NAYY 4x150 SE",
+	BuildingDefs.LINE_OVERHEAD: "48-AL1/8-ST1A 20.0",
+	BuildingDefs.LINE_UNDERGROUND: "NA2XS2Y 1x95 RM/25 12/20 kV",
 }
+
+
+## Substation trafo element fields from its kVA rating: pandapower catalog
+## std types down to 0.25 MVA; BELOW that, explicit physical parameters
+## (typical distribution-trafo values) — the scenario/smoke hook for
+## deliberately undersized village stations.
+static func trafo_fields(rating_kva: float) -> Dictionary:
+	if rating_kva < 250.0:
+		return {"sn_mva": rating_kva / 1000.0, "vn_hv_kv": MV_KV, "vn_lv_kv": 0.4,
+			"vk_percent": 4.0, "vkr_percent": 1.5, "pfe_kw": 0.2, "i0_percent": 0.4}
+	if rating_kva <= 250.0:
+		return {"std_type": "0.25 MVA 20/0.4 kV"}
+	if rating_kva <= 400.0:
+		return {"std_type": "0.4 MVA 20/0.4 kV"}
+	return {"std_type": "0.63 MVA 20/0.4 kV"}
 
 var doc := {}                    # contract topology document ({} if no slack)
 var line_tiles := {}             # "L<idx>" -> Array[Vector2i] (path incl. endpoints)
 var zones_info := {}             # zone_id -> {sub: building_id, houses: int, bus: String, center: Vector2i}
 var house_zone := {}             # Vector2i -> zone_id
 var connected := {}              # building_id -> bool (slack-reachable)
+var trafo_subs := {}             # "T<idx>" (solved edge id) -> substation building id
 var has_slack := false
 var warnings: Array[String] = []
 
@@ -131,7 +148,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	var buses: Array[Dictionary] = []
 	for key: Variant in reachable:
 		bus_index[key] = buses.size()
-		buses.append({"name": _bus_name(key), "vn_kv": 0.4})
+		buses.append({"name": _bus_name(key), "vn_kv": MV_KV})
 	var lines_out: Array[Dictionary] = []
 	for line: Dictionary in raw_lines:
 		if not (reachable.has(line["a"]) and reachable.has(line["b"])):
@@ -149,14 +166,34 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			"std_type": STD_TYPES.get(mid_kind, STD_TYPES[BuildingDefs.LINE_OVERHEAD]),
 		})
 
+	# each substation is a REAL 20/0.4 kV transformer: its own LV bus hangs
+	# off the MV bus via a trafo element, the zone load sits on the LV side —
+	# trafo loading comes solved from the contract "T<idx>" edges.
+	# DISCONNECTED substations keep a zones_info entry (connected: false) so
+	# their houses still count as dark after a branch trip cuts them off —
+	# only connected zones enter the solver doc.
+	var transformers: Array[Dictionary] = []
 	var zones: Array[Dictionary] = []
 	for sub_id: String in model.buildings_of_kind("substation"):
-		if not connected.get(sub_id, false):
-			continue
 		var zone_id := "z_" + sub_id
-		zones.append({"id": zone_id, "node": _bus_name(sub_id)})
-		zones_info[zone_id] = {"sub": sub_id, "houses": 0, "bus": _bus_name(sub_id),
-			"center": model.buildings[sub_id]["anchor"]}
+		var is_conn: bool = connected.get(sub_id, false)
+		zones_info[zone_id] = {"sub": sub_id, "houses": 0, "bus": "",
+			"connected": is_conn, "center": model.buildings[sub_id]["anchor"]}
+		if not is_conn:
+			continue
+		# per-building params_override wins (scenario/smoke hook), else the def
+		var rating: float = float(model.building_params(sub_id).get("rating_kva",
+			BuildingDefs.get_def("substation").get("rating_kva", 630.0)))
+		var lv_name := "lv_%s" % sub_id
+		var edge_id := "T%d" % transformers.size()
+		var spec := {"name": edge_id, "hv_bus": bus_index[sub_id],
+			"lv_bus": buses.size()}
+		spec.merge(trafo_fields(rating))
+		transformers.append(spec)
+		trafo_subs[edge_id] = sub_id
+		buses.append({"name": lv_name, "vn_kv": 0.4})
+		zones.append({"id": zone_id, "node": lv_name})
+		zones_info[zone_id]["bus"] = lv_name
 	_assign_houses(model)
 
 	var devices: Array[Dictionary] = []
@@ -189,7 +226,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		"steps_per_day": 96,
 		"native": {
 			"grid_structure": {"name": "city", "f_hz": 50, "buses": buses},
-			"lines": {"lines": lines_out, "transformers": []},
+			"lines": {"lines": lines_out, "transformers": transformers},
 			"load": {"resolution_minutes": 15, "steps": 96, "loads": []},
 			"generation": {"resolution_minutes": 15, "steps": 96, "generation": []},
 			"substation": {"resolution_minutes": 15, "steps": 96, "substations": []},

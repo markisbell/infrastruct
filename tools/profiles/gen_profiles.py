@@ -113,7 +113,64 @@ def gen_water() -> None:
     _save_pack(pack)
 
 
+def gen_pv() -> None:
+    """Real measured PV day shapes from rtpowerflow's rooftop plant
+    (data/real_pv_days.json, 1-min raster) downsampled to the game's 96
+    quarter-hour ticks. Shapes are fractions of kWp; the game picks a day
+    deterministically per game-day and scales by season (the measurement
+    campaign covers late spring/summer only)."""
+    src = ROOT / "backends" / "rtpowerflow" / "data" / "real_pv_days.json"
+    data = json.loads(src.read_text(encoding="utf-8"))
+    days = []
+    for day in data["days"]:
+        shape = day["shape"]
+        ticks = [
+            round(sum(shape[i * 15:(i + 1) * 15]) / 15.0, 4) for i in range(96)]
+        days.append(ticks)
+    pack = _load_pack()
+    pack["pv_days"] = days
+    pack["meta"]["pv_source"] = "%s (%d measured days, fractions of kWp)" % (
+        data.get("source", "rtpowerflow real_pv_days"), len(days))
+    _save_pack(pack)
+
+
+def gen_ev() -> None:
+    """Diversified home-charging shape (mirrors rtpowerflow's synthetic
+    additive EV model): arrivals spread 16:30-21:00 on workdays (later and
+    flatter on weekends), ~2.2 h at full charger power per arrival. The
+    shape is the EXPECTED per-EV load as a fraction of charger power."""
+    import math
+
+    def day_shape(arrival_mean_h: float, arrival_std_h: float,
+                  charge_h: float) -> list[float]:
+        out = [0.0] * 96
+        for k in range(96):
+            t_h = k / 4.0
+            density = 0.0
+            for offset in (-24.0, 0.0, 24.0):  # wrap past midnight
+                x = t_h + offset
+                # probability an EV that arrived at g is still charging at x:
+                # integral of the gaussian arrival density over the window
+                lo = (x - charge_h - arrival_mean_h) / (arrival_std_h * math.sqrt(2))
+                hi = (x - arrival_mean_h) / (arrival_std_h * math.sqrt(2))
+                density += 0.5 * (math.erf(hi) - math.erf(lo))
+            out[k] = round(density, 4)
+        return out
+
+    pack = _load_pack()
+    pack["ev"] = {
+        "workday": day_shape(18.0, 1.6, 2.2),
+        "saturday": day_shape(15.5, 3.0, 2.2),
+        "sunday": day_shape(16.5, 3.2, 2.2),
+    }
+    pack["meta"]["ev_source"] = (
+        "synthetic diversified home charging (gaussian arrivals x 2.2 h), "
+        "expected per-EV fraction of charger power")
+    _save_pack(pack)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ("elec", "water"):
-        sys.exit("usage: gen_profiles.py elec|water")
-    gen_elec() if sys.argv[1] == "elec" else gen_water()
+    commands = {"elec": gen_elec, "water": gen_water, "pv": gen_pv, "ev": gen_ev}
+    if len(sys.argv) != 2 or sys.argv[1] not in commands:
+        sys.exit("usage: gen_profiles.py elec|water|pv|ev")
+    commands[sys.argv[1]]()

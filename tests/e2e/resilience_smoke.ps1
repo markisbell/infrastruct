@@ -19,9 +19,13 @@ while (-not (Select-String -Path $log -Pattern "SMOKE_READY" -Quiet -ErrorAction
     Start-Sleep -Milliseconds 500
 }
 
-# kill the power backend (the actual uvicorn python, via its listening port)
-$owner = (Get-NetTCPConnection -LocalPort 8010 -State Listen).OwningProcess | Select-Object -First 1
-Write-Output "killing power backend pid $owner"
+# kill the power backend (the actual uvicorn python, via its listening port).
+# The smoke runs on the STRESS ports and prints them in SMOKE_READY — parse
+# the first one instead of assuming the live game's 8010.
+$ready = (Select-String -Path $log -Pattern "SMOKE_READY (.*)").Matches[0].Groups[1].Value
+$port = (ConvertFrom-Json $ready).ports[0]
+$owner = (Get-NetTCPConnection -LocalPort $port -State Listen).OwningProcess | Select-Object -First 1
+Write-Output "killing power backend pid $owner (port $port)"
 Stop-Process -Id $owner -Force
 
 # the game must observe DOWN, restart it, and report recovery

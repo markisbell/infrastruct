@@ -19,10 +19,11 @@ while (-not (Select-String -Path $log -Pattern "SMOKE_READY" -Quiet -ErrorAction
     Start-Sleep -Milliseconds 500
 }
 
-# let the run get ~15 in-game steps in, then kill the heat backend (port 8011 owner)
+# let the run get ~15 in-game steps in, then kill the heat backend (port 8015
+# owner — the cosim smokes run on the stress ports, never the live game's)
 Start-Sleep -Seconds 15
-$owner = (Get-NetTCPConnection -LocalPort 8011 -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -First 1
-if (-not $owner) { Write-Output "FAIL: no heat backend on 8011"; Stop-Process -Id $proc.Id -Force; exit 1 }
+$owner = (Get-NetTCPConnection -LocalPort 8015 -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -First 1
+if (-not $owner) { Write-Output "FAIL: no heat backend on 8015"; Stop-Process -Id $proc.Id -Force; exit 1 }
 Write-Output "killing heat backend pid $owner"
 Stop-Process -Id $owner -Force
 

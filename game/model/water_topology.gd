@@ -25,6 +25,10 @@ const PIPE_K_MM := 0.1
 const PN_BAR := 4.0
 ## head preference order (index = priority)
 const SOURCE_PRIORITY: Array[String] = ["water_tower", "well", "pumping_station"]
+## Wells within this manhattan radius of a river tile yield more (richer
+## aquifer) — the incentive to site wells along the water.
+const WELL_WATER_RADIUS := 3
+const WELL_RIVER_BONUS := 1.5
 
 var doc := {}                    # contract topology document ({} if no source)
 var pipe_tiles := {}             # "P<idx>" -> Array[Vector2i]
@@ -187,8 +191,16 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	for id: String in source_ids:     # head FIRST (backend binds the ext_grid)
 		if reachable.has(id):
 			var def := BuildingDefs.get_def(model.buildings[id]["kind"])
+			var params := model.building_params(id)
+			# a well near a river taps a richer aquifer: +50 % rated yield
+			# (Terrain.is_water — the environment pass's gameplay hook)
+			if def["device"] == "well" and model.terrain.near_water(
+					model.buildings[id]["anchor"], WELL_WATER_RADIUS):
+				params = params.duplicate()
+				params["rated_m3_h"] = float(params.get("rated_m3_h", 15.0)) \
+					* WELL_RIVER_BONUS
 			devices.append({"id": id, "kind": def["device"], "node": node_name[id],
-				"params": model.building_params(id)})
+				"params": params})
 
 	var head_is_tower: bool = model.buildings[head_id]["kind"] == "water_tower"
 	var temps: Array[float] = []

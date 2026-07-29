@@ -21,8 +21,8 @@ func test_kind_transition_splits_segments() -> void:
 	var std_types := {}
 	for line: Dictionary in lines:
 		std_types[line["std_type"]] = true
-	assert_bool(std_types.has("48-AL1/8-ST1A 0.4")).is_true()
-	assert_bool(std_types.has("NAYY 4x150 SE")).is_true()
+	assert_bool(std_types.has("48-AL1/8-ST1A 20.0")).is_true()
+	assert_bool(std_types.has("NA2XS2Y 1x95 RM/25 12/20 kV")).is_true()
 	# the joint became a junction bus
 	var junction_buses := 0
 	for bus: Dictionary in topo.doc["native"]["grid_structure"]["buses"]:
@@ -42,16 +42,16 @@ func test_uniform_run_stays_one_segment() -> void:
 	var topo := PowerTopology.build(model, {})
 	var lines: Array = topo.doc["native"]["lines"]["lines"]
 	assert_int(lines.size()).is_equal(1)
-	assert_str(str(lines[0]["std_type"])).is_equal("NAYY 4x150 SE")
+	assert_str(str(lines[0]["std_type"])).is_equal("NA2XS2Y 1x95 RM/25 12/20 kV")
 
 
 func test_grid_connection_is_hv_interface() -> void:
-	# user correction: the grid connection is the 110/20 kV interface
-	# (~10 MVA), not a 250 kW distribution trafo
+	# user corrections (realism pass): 110/20 kV interface = 20 MVA,
+	# district substation = 630 kVA Ortsnetzstation
 	assert_float(float(BuildingDefs.get_def("grid_connection")["capacity_kw"])) \
-		.is_equal(10_000.0)
+		.is_equal(20_000.0)
 	assert_float(float(BuildingDefs.get_def("substation")["rating_kva"])) \
-		.is_equal(100.0)
+		.is_equal(630.0)
 
 
 func test_awaiting_crew_never_self_heals() -> void:

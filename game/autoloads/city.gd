@@ -29,7 +29,8 @@ const LOAN_RATE_DAY := 0.0005     # ~18 % p.a., charged daily on the balance
 const STEP_H := 0.25              # 15-min step in hours
 const TRIP_STREAK := 3            # consecutive critical overloads before a line trips
 const GRID_TRIP_STREAK := 2       # consecutive capacity busts before the slack trips
-const TRAFO_TRIP_STREAK := 4      # 1 h of zone demand above the trafo rating
+const TRAFO_TRIP_STREAK := 4      # 1 h of solved trafo loading above 120 %
+const PEAK_SHAVE_ALPHA := 1.0 / 96.0  # ~one-day EMA horizon (battery threshold)
 const REPAIR_STEPS := 8           # 2 in-game hours (crew work time)
 const CREW_COST := 1_500          # dispatching a maintenance crew
 ## tripped_* value convention: AWAITING_CREW means the element stays dead
@@ -128,6 +129,8 @@ var scenario_state := {}
 
 var _line_streak := {}
 var _slack_streak := 0
+var _peak_ema := 0.0              # battery peak-shave threshold (net-load EMA)
+var _peak_ema_t := -1
 var _topo_dirty := true
 var _topo_timer := 0.0
 var _last_doc_json := ""
@@ -367,9 +370,14 @@ func warmup_backend() -> void:
 		"steps_per_day": 96,
 		"native": {
 			"grid_structure": {"name": "warmup", "f_hz": 50,
-				"buses": [{"name": "w0", "vn_kv": 0.4}, {"name": "w1", "vn_kv": 0.4}]},
+				"buses": [{"name": "w0", "vn_kv": 20.0}, {"name": "w1", "vn_kv": 20.0},
+					{"name": "w2", "vn_kv": 0.4}]},
 			"lines": {"lines": [{"name": "wl", "from_bus": 0, "to_bus": 1,
-				"length_km": 0.1, "std_type": "NAYY 4x50 SE"}], "transformers": []},
+				"length_km": 0.1, "std_type": "48-AL1/8-ST1A 20.0"}],
+				# a trafo in the warmup primes pandapower's trafo path too —
+				# every real city network carries 20/0.4 kV elements now
+				"transformers": [{"name": "wt", "hv_bus": 1, "lv_bus": 2,
+					"std_type": "0.63 MVA 20/0.4 kV"}]},
 			"load": {"resolution_minutes": 15, "steps": 96, "loads": []},
 			"generation": {"resolution_minutes": 15, "steps": 96, "generation": []},
 			"substation": {"resolution_minutes": 15, "steps": 96, "substations": []},
@@ -402,6 +410,13 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 				+ event_system.extra_water_demand_m3h(zone_id, t), 0.001)}
 		return out
 	for zone_id: String in topo.zones_info:
+		# disconnected zones aren't in the solver doc at all
+		if not bool(topo.zones_info[zone_id].get("connected", true)):
+			continue
+		# a tripped district trafo de-energizes its zone: nothing draws
+		if tripped_substations.has(topo.zones_info[zone_id]["sub"]):
+			out[zone_id] = {"value": 0.0}
+			continue
 		out[zone_id] = {"value": DemandModel.zone_demand_kw(
 			topo.zones_info[zone_id]["houses"], t)}
 	return out
@@ -415,9 +430,14 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 	var sample := weather.sample(t)
 	var total_demand := 0.0
 	for zone_id: String in topo.zones_info:
+		# only zones that actually draw: in the doc and not de-energized
+		if not bool(topo.zones_info[zone_id].get("connected", true)) \
+				or tripped_substations.has(topo.zones_info[zone_id]["sub"]):
+			continue
 		total_demand += DemandModel.zone_demand_kw(topo.zones_info[zone_id]["houses"], t)
 	var out := {}
 	var renewable := 0.0
+	var n_batteries := 0
 	for device: Dictionary in topo.doc.get("devices", []):
 		var params: Dictionary = device.get("params", {})
 		var down := event_system.is_down(device["id"], t)  # equipment/maintenance
@@ -428,24 +448,39 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 				out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
 				renewable += p
 			"pv":
-				var p: float = 0.0 if down else params["p_rated_kw"] \
-					* WeatherSystem.pv_availability(sample["ghi_wm2"])
+				# solar parks follow the REAL measured day shapes (rtpowerflow
+				# real_pv_days via the profile pack) — the same sun that drives
+				# the households' rooftop PV in the zone composition
+				var p: float = 0.0 if down else float(params["p_rated_kw"]) \
+					* DemandModel.pv_availability(t)
 				out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
 				renewable += p
+			"battery":
+				if not down:
+					n_batteries += 1
+	# batteries ALWAYS peak-shave (user direction): discharge the net load
+	# above its slow-moving average, recharge below it — flattening what the
+	# grid connection sees instead of bridging only after gas dispatch
+	if _peak_ema_t != t:
+		_peak_ema = total_demand if _peak_ema_t < 0 \
+			else lerpf(_peak_ema, total_demand, PEAK_SHAVE_ALPHA)
+		_peak_ema_t = t
+	var shave := (total_demand - _peak_ema) / maxf(float(n_batteries), 1.0)
 	var residual := total_demand - renewable
 	for device: Dictionary in topo.doc.get("devices", []):
-		var down := event_system.is_down(device["id"], t)
-		match device["kind"]:
-			"generator":
-				var p: float = 0.0 if down \
-					else clampf(residual, 0.0, device["params"]["p_max_kw"])
-				out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
-				residual -= p
-			"battery":
-				# discharge into deficit, charge on surplus; backend clamps SoC
-				var p_max: float = 0.0 if down else device["params"]["p_max_kw"]
-				out[device["id"]] = {"p_kw": snappedf(clampf(residual, -p_max, p_max), 0.1)}
-				residual -= clampf(residual, -p_max, p_max)
+		if device["kind"] == "battery":
+			var p_max: float = 0.0 if event_system.is_down(device["id"], t) \
+				else device["params"]["p_max_kw"]
+			var p := clampf(shave, -p_max, p_max)
+			out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
+			residual -= p
+	for device: Dictionary in topo.doc.get("devices", []):
+		if device["kind"] == "generator":
+			# gas covers what is left AFTER renewables and the battery pass
+			var p: float = 0.0 if event_system.is_down(device["id"], t) \
+				else clampf(residual, 0.0, device["params"]["p_max_kw"])
+			out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
+			residual -= p
 	return out
 
 
@@ -629,8 +664,10 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 	var income := 0.0
 	for zone_id: String in topo.zones_info:
 		if zone_supplied.get(zone_id, false):
-			income += DemandModel.zone_demand_kw(
-				topo.zones_info[zone_id]["houses"], t) * STEP_H * TARIFF_ELEC_KWH
+			# bill only the net IMPORT: at sunny noon the zone's rooftop PV
+			# exports (negative net load) and nothing is delivered to sell
+			income += maxf(0.0, DemandModel.zone_demand_kw(
+				topo.zones_info[zone_id]["houses"], t)) * STEP_H * TARIFF_ELEC_KWH
 	if income > 0.0:
 		_econ_apply("income_elec", income)
 	for slack_id: String in model.buildings_of_kind("grid_connection"):
@@ -652,12 +689,13 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		if not zone_result.is_empty():
 			_telemetry_put("v:" + zone_id, t,
 				float(zone_result.get("detail", {}).get("v_pu", NAN)))
-		var sub_id: String = topo.zones_info[zone_id]["sub"]
-		var demand := DemandModel.zone_demand_kw(
-			topo.zones_info[zone_id]["houses"], t)
-		_telemetry_put("d:" + zone_id, t, demand)
-		_telemetry_put("trafo:" + sub_id, t, 100.0 * demand
-			/ float(model.building_params(sub_id).get("rating_kva", 100.0)))
+		_telemetry_put("d:" + zone_id, t, DemandModel.zone_demand_kw(
+			topo.zones_info[zone_id]["houses"], t))
+	# district trafo loading comes SOLVED from the contract T-edges
+	for edge_id: String in topo.trafo_subs:
+		var entry: Dictionary = result.get("edges", {}).get(edge_id, {})
+		_telemetry_put("trafo:" + str(topo.trafo_subs[edge_id]), t,
+			float(entry.get("loading_percent", NAN)))
 	for device_id: String in result.get("devices", {}):
 		var device: Dictionary = result["devices"][device_id]
 		_telemetry_put("dev:" + device_id, t, float(device.get("output_kw", NAN)))
@@ -886,23 +924,23 @@ func _check_protection(t: int, result: Dictionary) -> void:
 					"Line overloaded (%.0f%%) — branch disconnected. Send a repair crew (M)." % loading)
 		else:
 			_line_streak.erase(edge_id)
-	# transformer trips: zone demand above the substation's kVA rating
+	# transformer trips: SOLVED loading of the 20/0.4 kV element above 120 %
+	# sustained (contract T-edges — same criticality rule as the lines)
 	var trafo_streak: Dictionary = get_meta("trafo_streak", {})
-	for zone_id: String in topo.zones_info:
-		var sub_id: String = topo.zones_info[zone_id]["sub"]
+	for edge_id: String in topo.trafo_subs:
+		var sub_id: String = topo.trafo_subs[edge_id]
 		if tripped_substations.has(sub_id):
 			continue
-		var rating := float(model.building_params(sub_id).get("rating_kva", 100.0))
-		var demand := DemandModel.zone_demand_kw(
-			topo.zones_info[zone_id]["houses"], t)
-		if demand > rating:
+		var loading := float(result.get("edges", {}).get(edge_id, {})
+			.get("loading_percent", 0.0))
+		if loading > 120.0:
 			trafo_streak[sub_id] = int(trafo_streak.get(sub_id, 0)) + 1
 			if trafo_streak[sub_id] >= TRAFO_TRIP_STREAK:
 				tripped_substations[sub_id] = AWAITING_CREW
 				trafo_streak.erase(sub_id)
 				log_event("trafo_trip", "critical",
-					"Transformer %s overloaded (%.0f kW > %.0f kVA) — zone dark. Send a repair crew (M)."
-					% [sub_id, demand, rating])
+					"Transformer %s overloaded (%.0f%%) — zone dark. Send a repair crew (M)."
+					% [sub_id, loading])
 		else:
 			trafo_streak.erase(sub_id)
 	set_meta("trafo_streak", trafo_streak)
@@ -940,12 +978,11 @@ func _update_capacity_warnings(t: int, result: Dictionary) -> void:
 				"level": "crit" if loading >= 95.0 else "warn",
 				"percent": loading, "pos": tiles[tiles.size() / 2],
 				"text": "%d%%" % int(loading)}
-	# substation transformers: zone demand vs kVA rating
-	for zone_id: String in topo.zones_info:
-		var sub_id: String = topo.zones_info[zone_id]["sub"]
-		var rating := float(model.building_params(sub_id).get("rating_kva", 100.0))
-		var percent := 100.0 * DemandModel.zone_demand_kw(
-			topo.zones_info[zone_id]["houses"], t) / rating
+	# substation transformers: SOLVED loading of the 20/0.4 kV element
+	for edge_id: String in topo.trafo_subs:
+		var sub_id: String = topo.trafo_subs[edge_id]
+		var percent := float(result.get("edges", {}).get(edge_id, {})
+			.get("loading_percent", 0.0))
 		if percent >= 70.0 or tripped_substations.has(sub_id):
 			capacity_warnings[sub_id] = {
 				"level": "crit" if percent >= 90.0 or tripped_substations.has(sub_id) else "warn",
@@ -1205,6 +1242,8 @@ func reset_for_scenario(weather_seed: int) -> void:
 	_last_water_doc_json = ""
 	_line_streak.clear()
 	_slack_streak = 0
+	_peak_ema = 0.0
+	_peak_ema_t = -1
 	_heat_degraded_streak = 0
 	zone_supplied.clear()
 	heat_zone_supplied.clear()
