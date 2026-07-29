@@ -304,6 +304,19 @@ func _register_async() -> void:
 				_last_heat_doc_json = heat_json
 			else:
 				heat_registered = false
+	# a rejected heat network is invisible misery (the solver never steps):
+	# pin a persistent marker on the slack plant until registration succeeds
+	if not heat_topo.doc.is_empty() and not heat_registered:
+		var plant_ids: Array[String] = []
+		for kind: String in BuildingDefs.HEAT_PLANT_KINDS:
+			plant_ids.append_array(model.buildings_of_kind(kind))
+		plant_ids.sort()
+		if not plant_ids.is_empty():
+			capacity_warnings["hz_offline"] = {"level": "crit", "percent": 0.0,
+				"pos": model.buildings[plant_ids[0]]["anchor"],
+				"text": "HEAT REJECTED"}
+	else:
+		capacity_warnings.erase("hz_offline")
 	# water (independent of both)
 	if not water_topo.has_source or water_topo.doc.is_empty():
 		water_registered = false
