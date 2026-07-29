@@ -122,7 +122,7 @@ func _build_items() -> Array:
 				"desc": "Send a crew to a TRIPPED line or transformer (~2 h work). Overload trips don't fix themselves."},
 			{"tool": CityView.Tool.BULLDOZE, "label": "Bulldozer", "mono": "X", "key": "0",
 				"color": Color(0.8, 0.25, 0.2), "cost": 0,
-				"desc": "Remove anything (buildings refund 25%). Right-drag bulldozes too."},
+				"desc": "Remove anything (buildings refund 25%). A right-CLICK bulldozes a single tile too."},
 		]},
 	]
 
@@ -137,7 +137,7 @@ func _ready() -> void:
 	_status = Label.new()
 	row.add_child(_status)
 	_tool_label = Label.new()
-	_tool_label.text = "Tool: none — TAB build menu · I happiness breakdown · Q/E rotate view · R rotate ghost · SPACE pause · V overlays"
+	_tool_label.text = "Tool: none — TAB build menu · I happiness breakdown · right-drag orbit · Q/E snap 90° · R rotate ghost · SPACE pause · V overlays"
 	row.add_child(_tool_label)
 
 	var events_panel := PanelContainer.new()

@@ -68,7 +68,10 @@ var _buildings := {}
 var _rings := {}          # zone/slack overlay rings
 var _cursor: MeshInstance3D
 var _painting := false
-var _erasing := false
+## Right mouse: drag orbits the camera freely around the focus (any angle);
+## a click without movement keeps the quick-bulldoze convenience.
+var _orbiting := false
+var _orbit_travel := 0.0
 
 var _dark_material := StandardMaterial3D.new()
 var _cold_material := StandardMaterial3D.new()
@@ -143,8 +146,13 @@ func _place_camera() -> void:
 	camera.look_at(_cam_focus, Vector3.UP)
 
 
+## Q/E snap to the NEXT axis-aligned view in that direction — after a free
+## right-drag orbit to e.g. 37°, E goes to 90°, Q back to 0°.
 func rotate_view(steps: int) -> void:
-	_cam_yaw_target += steps * 90.0
+	if steps > 0:
+		_cam_yaw_target = (floorf(_cam_yaw_target / 90.0) + 1.0) * 90.0
+	else:
+		_cam_yaw_target = (ceilf(_cam_yaw_target / 90.0) - 1.0) * 90.0
 
 
 func focus_tile(tile: Vector2i, zoom: float = 18.0) -> void:
@@ -1234,9 +1242,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				if mb.pressed:
 					_apply_tool(mouse_tile())
 			MOUSE_BUTTON_RIGHT:
-				_erasing = mb.pressed
 				if mb.pressed:
-					City.bulldoze(mouse_tile())
+					_orbiting = true
+					_orbit_travel = 0.0
+				else:
+					_orbiting = false
+					if _orbit_travel < 6.0:  # a click, not a drag
+						City.bulldoze(mouse_tile())
 			MOUSE_BUTTON_WHEEL_UP:
 				if mb.pressed:
 					_zoom = maxf(_zoom / 1.12, 6.0)
@@ -1249,8 +1261,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		var mm: InputEventMouseMotion = event
 		if _painting:
 			_apply_tool(mouse_tile())
-		elif _erasing:
-			City.bulldoze(mouse_tile())
+		elif _orbiting:
+			# free orbit around the current focus; Q/E snap back to 90° views
+			_orbit_travel += mm.relative.length()
+			_cam_yaw += mm.relative.x * 0.4
+			_cam_yaw_target = _cam_yaw
+			_place_camera()
 		elif mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
 			_pan_ground(Vector2(-mm.relative.x, mm.relative.y) * 0.02 * (_zoom / 18.0))
 
