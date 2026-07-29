@@ -541,7 +541,13 @@ func _fail(tag: String, reason: String) -> void:
 # ─── Phase 1 smokes ───
 
 func _smoke_sidecars() -> void:
-	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	# dev repo: stress ports (a live play session may own 8010-8012);
+	# EXPORTED/staged builds ship exactly one config — this smoke is the
+	# installer verification path, so it must use what actually ships
+	if OS.has_feature("editor"):
+		SidecarManager.load_config("orchestration/sidecars_stress.json")
+	else:
+		SidecarManager.load_config()
 	SidecarManager.start_all()
 	if not await _wait_all_healthy(180.0):
 		_fail("SMOKE_SIDECARS", "health timeout")
