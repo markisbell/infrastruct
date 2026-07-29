@@ -210,11 +210,13 @@ pandapower pins, keep separate), `.venv-water` (rtwaterflow).
 - The user's memory preference: **lean solo work; state the scale and ask
   before any multi-agent fan-out** (they stopped costly workflows twice).
 
-## 7. Verified state (2026-07-29)
+## 7. Verified state (2026-07-29, post realism + environment passes)
 
-GdUnit 69/69 · all 19 smokes green (incl. the full regression battery) ·
-rtwaterflow 282 · rtheatflow 212 · shared contract suite green for
+GdUnit 75/75 · all 19 smokes green incl. the kill-recovery + resilience
+harnesses (both parse SMOKE_READY ports now) · rtpowerflow gamebridge 15
+(signed zone demand pinned) · shared contract suite green for
 mock+power+heat+water · CI builds + runs the suites. Remaining roadmap:
 Phase 8 — save/load completeness (device SoC replay), performance,
 packaging; noted candidates: contract 1.2 (emitter leaks, CHP fuel field),
-MV/LV explicit modeling, dry-home visuals, terrain-aware coverage discs.
+river BRIDGES (mini-forest ships bridge.glb), dry-home visuals,
+terrain-aware coverage discs. GitHub release still ON HOLD (user's call).
