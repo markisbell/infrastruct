@@ -1,10 +1,10 @@
-# Builds the Windows installer end to end:
-#   1. exports the Godot game (needs .tools/windows_release_x86_64.exe — the
+﻿# Builds the Windows installer end to end:
+#   1. exports the Godot game (needs .tools/windows_release_x86_64.exe - the
 #      4.7.1 release export template, extracted from the official tpz)
 #   2. freezes the three solver backends with PyInstaller (their venvs)
 #   3. stages the install payload under .tools/dist-build/stage
 #   4. compiles tools/installer/setup.iss with Inno Setup 6 (ISCC)
-# Result: .tools/dist-build/infrastruct-setup-<version>.exe — installs on a
+# Result: .tools/dist-build/infrastruct-setup-<version>.exe - installs on a
 # clean Windows 11 PC, per-user, no Python/Godot/anything required.
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path "$PSScriptRoot\..\.."
@@ -19,7 +19,7 @@ New-Item -ItemType Directory -Force "$build\dist\game" | Out-Null
 & $godot --headless --path "$root\game" --export-release "Windows Desktop"
 if (-not (Test-Path "$build\dist\game\infrastruct.exe")) { throw "game export failed" }
 
-# 2. backend freezes (skipped when the dist already exists — delete to rebuild)
+# 2. backend freezes (skipped when the dist already exists - delete to rebuild)
 $freezes = @(
     @{ venv = ".venv";       name = "netzsim-frozen";    entry = "entry_power.py"; extra = @() },
     @{ venv = ".venv-heat";  name = "rtheatflow-frozen"; entry = "entry_heat.py";  extra = @("--collect-all", "pandapipes", "--collect-all", "rtheatflow") },
@@ -40,9 +40,12 @@ foreach ($f in $freezes) {
     & "$root\$($f.venv)\Scripts\pyinstaller.exe" @common @($f.extra) "$build\$($f.entry)"
 }
 
-# 3. stage the payload
+# 3. stage the payload - a FRESH tree, or Copy-Item nests into leftovers
+# and silently doubles the payload (locked files from a still-running
+# frozen backend once survived the silent remove)
 $stage = "$build\stage"
-Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+if (Test-Path $stage) { throw "stage not removable - a frozen backend still running?" }
 New-Item -ItemType Directory -Force "$stage\orchestration", "$stage\backends" | Out-Null
 Copy-Item "$build\dist\game\infrastruct.exe" $stage
 Copy-Item "$root\orchestration\sidecars_dist.json" "$stage\orchestration\sidecars.json"
@@ -56,7 +59,7 @@ foreach ($b in $backends) {
     Copy-Item -Recurse "$root\backends\$($b.src)\data" "$stage\backends\$($b.id)\data"
 }
 
-# 4. compile the installer — through a subst'd drive letter, because the
+# 4. compile the installer - through a subst'd drive letter, because the
 # frozen pandapipes tree nests past MAX_PATH from a deep repo checkout
 subst I: /d 2>$null
 subst I: $build
