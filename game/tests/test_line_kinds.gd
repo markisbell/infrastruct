@@ -51,7 +51,31 @@ func test_grid_connection_is_hv_interface() -> void:
 	assert_float(float(BuildingDefs.get_def("grid_connection")["capacity_kw"])) \
 		.is_equal(10_000.0)
 	assert_float(float(BuildingDefs.get_def("substation")["rating_kva"])) \
-		.is_equal(250.0)
+		.is_equal(100.0)
+
+
+func test_awaiting_crew_never_self_heals() -> void:
+	City.reset_for_scenario(42)
+	City.tripped_tiles[Vector2i(3, 3)] = City.AWAITING_CREW
+	City.tripped_tiles[Vector2i(4, 3)] = 50  # crew finishing at t=50
+	City._apply_repairs(100)
+	assert_bool(City.tripped_tiles.has(Vector2i(3, 3))).is_true()   # still waiting
+	assert_bool(City.tripped_tiles.has(Vector2i(4, 3))).is_false()  # healed
+	City.reset_for_scenario(42)
+
+
+func test_dispatch_repair_charges_and_schedules() -> void:
+	City.reset_for_scenario(42)
+	City.tripped_tiles[Vector2i(5, 5)] = City.AWAITING_CREW
+	var money_before := City.money
+	assert_bool(City.dispatch_repair(Vector2i(5, 5))).is_true()
+	assert_int(City.money).is_equal(money_before - City.CREW_COST)
+	assert_bool(int(City.tripped_tiles[Vector2i(5, 5)]) > 0).is_true()
+	assert_float(float(City.econ_total.get("cost_maintenance", 0.0))) \
+		.is_equal(-float(City.CREW_COST))
+	# no double dispatch on an already-crewed tile
+	assert_bool(City.dispatch_repair(Vector2i(5, 5))).is_false()
+	City.reset_for_scenario(42)
 
 
 func test_line_costs_differ() -> void:

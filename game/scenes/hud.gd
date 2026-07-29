@@ -21,6 +21,7 @@ const TOOL_KEYS := {
 	KEY_U: CityView.Tool.HEATPUMP,
 	KEY_T: CityView.Tool.HEATSTORE,
 	KEY_G: CityView.Tool.UCABLE,
+	KEY_M: CityView.Tool.REPAIR,
 	KEY_W: CityView.Tool.WATER_PIPE,
 	KEY_A: CityView.Tool.WATER_SUB,
 	KEY_N: CityView.Tool.WELL,
@@ -115,7 +116,10 @@ func _build_items() -> Array:
 				"kind": "water_tower",
 				"desc": "Pressure head + 200 m³ buffer. Rides through pump outages; taller = more bar."},
 		]},
-		{"cat": "Demolish", "items": [
+		{"cat": "Service", "items": [
+			{"tool": CityView.Tool.REPAIR, "label": "Repair crew", "mono": "Rp", "key": "M",
+				"color": Color(1.0, 0.75, 0.2), "cost": City.CREW_COST,
+				"desc": "Send a crew to a TRIPPED line or transformer (~2 h work). Overload trips don't fix themselves."},
 			{"tool": CityView.Tool.BULLDOZE, "label": "Bulldozer", "mono": "X", "key": "0",
 				"color": Color(0.8, 0.25, 0.2), "cost": 0,
 				"desc": "Remove anything (buildings refund 25%). Right-drag bulldozes too."},
@@ -184,7 +188,7 @@ func _make_build_menu() -> void:
 		for item: Dictionary in category["items"]:
 			tile_row.add_child(_make_tile(item))
 		columns.add_child(col)
-		if category["cat"] != "Demolish":
+		if category["cat"] != "Service":
 			columns.add_child(VSeparator.new())
 
 
@@ -516,6 +520,9 @@ func _thumbnail_scene(tool: CityView.Tool) -> Node3D:
 		CityView.Tool.BULLDOZE:
 			return view._instance_glb(
 				"factory-kit/Models/GLB format/crane-magnet.glb", 1.0)
+		CityView.Tool.REPAIR:
+			return view._instance_glb(
+				"factory-kit/Models/GLB format/cone.glb", 0.8)
 	return null
 
 

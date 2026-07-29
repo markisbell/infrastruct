@@ -29,7 +29,13 @@ const LOAN_RATE_DAY := 0.0005     # ~18 % p.a., charged daily on the balance
 const STEP_H := 0.25              # 15-min step in hours
 const TRIP_STREAK := 3            # consecutive critical overloads before a line trips
 const GRID_TRIP_STREAK := 2       # consecutive capacity busts before the slack trips
-const REPAIR_STEPS := 8           # 2 in-game hours
+const TRAFO_TRIP_STREAK := 4      # 1 h of zone demand above the trafo rating
+const REPAIR_STEPS := 8           # 2 in-game hours (crew work time)
+const CREW_COST := 1_500          # dispatching a maintenance crew
+## tripped_* value convention: AWAITING_CREW means the element stays dead
+## until the player pays for a repair; positive values are the step the
+## running repair completes (event auto-crews and dispatched crews).
+const AWAITING_CREW := -1
 # Idle-based: the countdown RESTARTS on every build action, so a building
 # spree costs ONE reset at the end, not one per click (reset storms froze
 # the world in the first playtest).
@@ -50,8 +56,12 @@ var events: Array[Dictionary] = []
 var topo: PowerTopology = PowerTopology.new()
 var heat_topo: HeatTopology = HeatTopology.new()
 var water_topo: WaterTopology = WaterTopology.new()
-var tripped_tiles := {}           # Vector2i -> repair_at (sim-step)
+var tripped_tiles := {}           # Vector2i -> AWAITING_CREW | repair_at step
+var tripped_substations := {}     # building id -> AWAITING_CREW | repair_at
 var grid_trip_until := -1
+## What the capacity-signal markers show: key -> {level: "warn"|"crit",
+## percent, pos: Vector2i, text}. Rebuilt each step from the solved state.
+var capacity_warnings := {}
 var zone_supplied := {}           # power zone_id -> bool (latest step)
 var heat_zone_supplied := {}      # heat zone_id -> bool (latest step)
 var heat_outage_minutes := {}     # heat zone_id -> minutes cold
@@ -549,6 +559,7 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
 		var supplied: bool = (
 			not grid_tripped and not failed
+			and not tripped_substations.has(topo.zones_info[zone_id]["sub"])
 			and not zone_result.is_empty()
 			and float(zone_result.get("supplied", 0.0)) >= 0.99
 			and float(zone_result.get("detail", {}).get("v_pu", 0.0)) >= 0.90
@@ -588,6 +599,7 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 			_econ_apply("cost_fuel", -p_kw / GAS_PLANT_ETA * STEP_H * FUEL_PRICE_KWH)
 
 	_check_protection(t, result)
+	_update_capacity_warnings(t, result)
 	_grow(t)
 	state_changed.emit()
 	power_result.emit(t, result)
@@ -627,6 +639,16 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 			and t_supply >= HeatTopology.T_SUPPLY_MIN_C
 		)
 		heat_zone_supplied[zone_id] = warm
+		# capacity signal: supply temperature scraping the minimum means the
+		# network is at its thermal limit for this weather
+		if t_supply > 0.0 and t_supply < HeatTopology.T_SUPPLY_MIN_C + 4.0:
+			capacity_warnings[zone_id] = {
+				"level": "crit" if t_supply < HeatTopology.T_SUPPLY_MIN_C else "warn",
+				"percent": t_supply,
+				"pos": heat_topo.zones_info[zone_id]["center"],
+				"text": "%.0f°C" % t_supply}
+		else:
+			capacity_warnings.erase(zone_id)
 		if not warm and houses > 0:
 			heat_outage_minutes[zone_id] = heat_outage_minutes.get(zone_id, 0) \
 				+ GameClock.SIM_STEP_MINUTES
@@ -697,6 +719,16 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 			water_outage_minutes[zone_id] = water_outage_minutes.get(zone_id, 0) \
 				+ GameClock.SIM_STEP_MINUTES
 			dry_weight += (1.0 - supplied) * houses
+		# capacity signal: pressure approaching the W 400-1 minimum
+		var p_bar := float(zone_result.get("detail", {}).get("p_bar", -1.0))
+		if p_bar >= 0.0 and p_bar < 2.4:
+			capacity_warnings[zone_id] = {
+				"level": "crit" if p_bar < 2.0 else "warn",
+				"percent": p_bar,
+				"pos": water_topo.zones_info[zone_id]["center"],
+				"text": "%.1f bar" % p_bar}
+		else:
+			capacity_warnings.erase(zone_id)
 	if total > 0:
 		var hurt := dry_weight / total
 		satisfaction["water"] = clampf(satisfaction["water"] - 12.0 * hurt
@@ -732,20 +764,43 @@ func total_water_outage_minutes() -> int:
 
 
 func _check_protection(t: int, result: Dictionary) -> void:
-	# line trips: sustained critical overload (contract 1.1 edges)
+	# line trips: sustained critical overload disconnects the WHOLE branch
+	# behind it (physics: the tiles leave the topology) and it STAYS dead
+	# until the player pays a maintenance crew — the pressure to split
+	# feeders, add substations, or build local generation
 	for edge_id: String in result.get("edges", {}):
 		var loading := float(result["edges"][edge_id].get("loading_percent", 0.0))
 		if loading > 120.0:
 			_line_streak[edge_id] = _line_streak.get(edge_id, 0) + 1
 			if _line_streak[edge_id] >= TRIP_STREAK and topo.line_tiles.has(edge_id):
 				for tile: Vector2i in topo.line_tiles[edge_id]:
-					tripped_tiles[tile] = t + REPAIR_STEPS
+					tripped_tiles[tile] = AWAITING_CREW
 				_line_streak.erase(edge_id)
 				_topo_dirty = true
 				log_event("line_trip", "critical",
-					"Cable overloaded (%.0f%%) — protection tripped" % loading)
+					"Line overloaded (%.0f%%) — branch disconnected. Send a repair crew (M)." % loading)
 		else:
 			_line_streak.erase(edge_id)
+	# transformer trips: zone demand above the substation's kVA rating
+	var trafo_streak: Dictionary = get_meta("trafo_streak", {})
+	for zone_id: String in topo.zones_info:
+		var sub_id: String = topo.zones_info[zone_id]["sub"]
+		if tripped_substations.has(sub_id):
+			continue
+		var rating := float(model.building_params(sub_id).get("rating_kva", 100.0))
+		var demand := DemandModel.zone_demand_kw(
+			topo.zones_info[zone_id]["houses"], t)
+		if demand > rating:
+			trafo_streak[sub_id] = int(trafo_streak.get(sub_id, 0)) + 1
+			if trafo_streak[sub_id] >= TRAFO_TRIP_STREAK:
+				tripped_substations[sub_id] = AWAITING_CREW
+				trafo_streak.erase(sub_id)
+				log_event("trafo_trip", "critical",
+					"Transformer %s overloaded (%.0f kW > %.0f kVA) — zone dark. Send a repair crew (M)."
+					% [sub_id, demand, rating])
+		else:
+			trafo_streak.erase(sub_id)
+	set_meta("trafo_streak", trafo_streak)
 	# grid connection capacity (game-side protection on the slack)
 	var slack_ids := model.buildings_of_kind("grid_connection")
 	if not slack_ids.is_empty():
@@ -764,16 +819,114 @@ func _check_protection(t: int, result: Dictionary) -> void:
 			_slack_streak = 0
 
 
+## Capacity signaling: everything running close to its limit gets an entry
+## the view renders as a floating percent marker (amber warn, red crit).
+## Rebuilt on every power step; heat/water handlers add their own keys.
+func _update_capacity_warnings(t: int, result: Dictionary) -> void:
+	for key: String in capacity_warnings.keys():
+		if not str(key).begins_with("hz_") and not str(key).begins_with("wz_"):
+			capacity_warnings.erase(key)
+	# lines: loading vs thermal rating (contract 1.1 edges)
+	for edge_id: String in result.get("edges", {}):
+		var loading := float(result["edges"][edge_id].get("loading_percent", 0.0))
+		if loading >= 80.0 and topo.line_tiles.has(edge_id):
+			var tiles: Array = topo.line_tiles[edge_id]
+			capacity_warnings[edge_id] = {
+				"level": "crit" if loading >= 95.0 else "warn",
+				"percent": loading, "pos": tiles[tiles.size() / 2],
+				"text": "%d%%" % int(loading)}
+	# substation transformers: zone demand vs kVA rating
+	for zone_id: String in topo.zones_info:
+		var sub_id: String = topo.zones_info[zone_id]["sub"]
+		var rating := float(model.building_params(sub_id).get("rating_kva", 100.0))
+		var percent := 100.0 * DemandModel.zone_demand_kw(
+			topo.zones_info[zone_id]["houses"], t) / rating
+		if percent >= 70.0 or tripped_substations.has(sub_id):
+			capacity_warnings[sub_id] = {
+				"level": "crit" if percent >= 90.0 or tripped_substations.has(sub_id) else "warn",
+				"percent": percent, "pos": model.buildings[sub_id]["anchor"],
+				"text": "TRIP" if tripped_substations.has(sub_id) else "%d%%" % int(percent)}
+	# tripped/crewed line sections get their own markers (sparse: every 6th tile)
+	var awaiting: Array = []
+	var crewed: Array = []
+	for tile: Vector2i in tripped_tiles:
+		if tripped_tiles[tile] == AWAITING_CREW:
+			awaiting.append(tile)
+		else:
+			crewed.append(tile)
+	awaiting.sort()
+	crewed.sort()
+	for i in range(0, awaiting.size(), 6):
+		capacity_warnings["trip_%d" % i] = {"level": "crit", "percent": 0.0,
+			"pos": awaiting[i], "text": "TRIP"}
+	for i in range(0, crewed.size(), 6):
+		capacity_warnings["crew_%d" % i] = {"level": "warn", "percent": 0.0,
+			"pos": crewed[i], "text": "CREW"}
+	# the 110/20 kV interface: import vs its MVA rating
+	for slack_id: String in model.buildings_of_kind("grid_connection"):
+		var capacity: float = grid_capacity_override if grid_capacity_override > 0.0 \
+			else BuildingDefs.get_def("grid_connection")["capacity_kw"]
+		var percent := 100.0 * float(result.get("devices", {})
+			.get(slack_id, {}).get("output_kw", 0.0)) / capacity
+		if percent >= 80.0:
+			capacity_warnings[slack_id] = {
+				"level": "crit" if percent >= 95.0 else "warn",
+				"percent": percent, "pos": model.buildings[slack_id]["anchor"],
+				"text": "%d%%" % int(percent)}
+
+
 func _apply_repairs(t: int) -> void:
+	# only elements with a crew on site heal (positive repair_at);
+	# AWAITING_CREW entries wait for the player's dispatch
 	var repaired := false
 	for tile: Vector2i in tripped_tiles.keys():
-		if tripped_tiles[tile] <= t:
+		if tripped_tiles[tile] != AWAITING_CREW and tripped_tiles[tile] <= t:
 			tripped_tiles.erase(tile)
 			repaired = true
+	for sub_id: String in tripped_substations.keys():
+		if tripped_substations[sub_id] != AWAITING_CREW \
+				and tripped_substations[sub_id] <= t:
+			tripped_substations.erase(sub_id)
+			log_event("repair", "info", "Transformer %s back in service" % sub_id)
 	if repaired:
 		_topo_dirty = true
-		log_event("repair", "info", "Cable repaired — line back in service")
+		log_event("repair", "info", "Line repaired — branch back in service")
 		world_changed.emit()
+
+
+## The repair tool (M): pay a crew to fix the tripped element at `pos` —
+## a line tile, or any tile of a tripped substation. Bursts and equipment
+## failures crew themselves; overload trips are on you.
+func dispatch_repair(pos: Vector2i) -> bool:
+	if tripped_tiles.get(pos, 0) == AWAITING_CREW:
+		if not _paid(CREW_COST):
+			return false
+		_book_maintenance()
+		# one dispatch fixes every awaiting line section (one crew, one bill)
+		for tile: Vector2i in tripped_tiles.keys():
+			if tripped_tiles[tile] == AWAITING_CREW:
+				tripped_tiles[tile] = current_t + REPAIR_STEPS
+		log_event("crew", "info",
+			"Repair crew dispatched (€%d) — line back in ~2 h" % CREW_COST)
+		state_changed.emit()
+		return true
+	var sub_id: String = model.building_tiles.get(pos, "")
+	if sub_id != "" and tripped_substations.get(sub_id, 0) == AWAITING_CREW:
+		if not _paid(CREW_COST):
+			return false
+		_book_maintenance()
+		tripped_substations[sub_id] = current_t + REPAIR_STEPS
+		log_event("crew", "info",
+			"Repair crew dispatched (€%d) — transformer back in ~2 h" % CREW_COST)
+		state_changed.emit()
+		return true
+	return false
+
+
+## _paid already moved the money; this records the reporting category.
+func _book_maintenance() -> void:
+	econ_today["cost_maintenance"] = econ_today.get("cost_maintenance", 0.0) - CREW_COST
+	econ_total["cost_maintenance"] = econ_total.get("cost_maintenance", 0.0) - CREW_COST
 
 
 const SATISFACTION_RECOVERY := 0.06  # per clean step (~6/day): weeks-scale memory
@@ -922,6 +1075,9 @@ func reset_for_scenario(weather_seed: int) -> void:
 	happiness = 100.0
 	satisfaction = {"power": 100.0, "heat": 100.0, "water": 100.0}
 	tripped_tiles.clear()
+	tripped_substations.clear()
+	capacity_warnings.clear()
+	set_meta("trafo_streak", {})
 	grid_trip_until = -1
 	grid_capacity_override = -1.0
 	growth_enabled = true

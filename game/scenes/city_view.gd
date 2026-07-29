@@ -9,7 +9,7 @@ extends Node3D
 
 enum Tool { NONE, ROAD, ZONE, CABLE, SUBSTATION, GAS, WIND, SOLAR, BATTERY, GRID,
 	BULLDOZE, PIPE, HEAT_SUB, BOILER, CHP, HEATPUMP, HEATSTORE,
-	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER, UCABLE }
+	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER, UCABLE, REPAIR }
 
 const TOOL_BUILDING := {
 	Tool.SUBSTATION: "substation", Tool.GAS: "gas_plant", Tool.WIND: "wind_farm",
@@ -920,14 +920,39 @@ func _update_status_markers() -> void:
 			_status_markers.erase(id)
 
 
-func _make_marker(text: String, color: Color) -> Label3D:
+func _make_marker(text: String, color: Color, size: int = 220) -> Label3D:
 	var label := Label3D.new()
 	label.text = text
-	label.font_size = 220
+	label.font_size = size
 	label.modulate = color
 	label.outline_size = 40
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	return label
+
+
+## Capacity signals (City.capacity_warnings): floating percent/state text
+## over anything running near its limit — amber warn, red crit. Always
+## visible; unlike the V overlays, these are gameplay-critical.
+var _cap_markers := {}
+
+
+func _update_capacity_markers() -> void:
+	var warnings: Dictionary = City.capacity_warnings
+	for key: Variant in _cap_markers.keys():
+		if not warnings.has(key):
+			_cap_markers[key].queue_free()
+			_cap_markers.erase(key)
+	for key: Variant in warnings:
+		var warning: Dictionary = warnings[key]
+		if not _cap_markers.has(key):
+			var marker := _make_marker("", Color.WHITE, 110)
+			add_child(marker)
+			_cap_markers[key] = marker
+		var label: Label3D = _cap_markers[key]
+		label.text = warning["text"]
+		label.modulate = Color(0.95, 0.2, 0.15) if warning["level"] == "crit" \
+			else Color(1.0, 0.75, 0.2)
+		label.position = _center(warning["pos"]) + Vector3(0, 1.15, 0)
 
 
 func _update_house_power() -> void:
@@ -971,6 +996,7 @@ func _set_state_material(node: Node3D, state: String) -> void:
 
 
 func _update_overlays() -> void:
+	_update_capacity_markers()  # always on — these are gameplay-critical
 	if not overlays_visible:
 		return
 	# cable wires tinted by their line's loading (contract 1.1 edges)
@@ -1203,6 +1229,9 @@ func _apply_tool(pos: Vector2i) -> void:
 			City.build_cable(pos, BuildingDefs.LINE_OVERHEAD)
 		Tool.UCABLE:
 			City.build_cable(pos, BuildingDefs.LINE_UNDERGROUND)
+		Tool.REPAIR:
+			City.dispatch_repair(pos)
+			_painting = false
 		Tool.PIPE:
 			City.build_heat_pipe(pos)
 		Tool.WATER_PIPE:

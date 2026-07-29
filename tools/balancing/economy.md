@@ -20,6 +20,8 @@ constants and the *why*; change a constant → rerun the smoke → commit both.
 | `UPKEEP_DAY` table | see building_defs.gd | Sized so the 24-house reference fleet costs ≈ €167/day fixed — thin margins at village scale, widening as the town grows on the same fleet (the intended arc). |
 | grid_connection cost | 120 000 € | The 110/20 kV interface (10 MVA). Gameplay-priced: a real station is millions, but the game bill is the player's SHARE of a shared asset. Upkeep stays 20 €/d for the same reason. |
 | overhead vs cable | 120 / 320 €/tile | Freileitung (48-AL1, ~145 kVA) vs buried NAYY 4x150 (~187 kVA): the cable costs ~2.7x, buys ~30% rating and clean streets. |
+| `CREW_COST` | 1 500 € | One maintenance dispatch (overload trips never self-heal). Roughly two weeks of a healthy village's net margin — an overloaded grid you ignore eats the profits, which is the teaching pressure toward more substations / local generation. |
+| substation `rating_kva` | 100 kVA | Ortsnetzstation sizing: a full 40-house zone peaks at ~70-80 % so the capacity signal is VISIBLE in normal play; sustained overload trips the trafo (crew required). Override per building via params for scenarios. |
 
 ## Measured result (2026-07-29)
 

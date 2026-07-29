@@ -11,10 +11,12 @@ const TILE_M := 25.0  # one tile edge in meters (cable lengths derive from it)
 const DEFS := {
 	"substation": {
 		# the 20/0.4 kV district transformer station (Ortsnetzstation):
-		# 250 kVA rating serves its ~40-house zone with headroom
+		# 100 kVA — a full 40-house zone peaks near 70-80 %, so the capacity
+		# signal is VISIBLE in normal play and sustained overload (growth,
+		# cold snaps) trips the trafo until a crew repairs it
 		"size": Vector2i(1, 1), "cost": 12_000, "device": "", "network": "power",
 		"color": Color(0.25, 0.75, 0.85), "zone_radius": 12, "house_capacity": 40,
-		"rating_kva": 250.0,
+		"rating_kva": 100.0,
 	},
 	"heat_exchanger": {
 		"size": Vector2i(1, 1), "cost": 15_000, "device": "", "network": "heat",

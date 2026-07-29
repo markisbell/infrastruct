@@ -74,6 +74,8 @@ func _ready() -> void:
 			_smoke_events()
 		"scenarios":
 			_smoke_scenarios()
+		"maintenance":
+			_smoke_maintenance()
 		_:
 			_boot_game()
 
@@ -1751,6 +1753,89 @@ func _smoke_scenarios() -> void:
 		"orch": Orchestrator.stats,
 	}
 	print("SMOKE_SCENARIOS ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+## Capacity signaling + paid maintenance: an undersized transformer signals,
+## trips, and STAYS dark until a crew is paid; a manually tripped trunk
+## section blacks out the whole downstream branch until its crew arrives.
+func _smoke_maintenance() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_power_healthy(240.0):
+		_fail("SMOKE_MAINTENANCE", "health timeout")
+		return
+	City.reset_for_scenario(42)
+	City.growth_enabled = false
+	City.grid_capacity_override = 25.0  # evening import ~22 kW -> 88% signal
+	City.place_building("grid_connection", Vector2i(6, 4))
+	for x in range(8, 21):
+		City.build_cable(Vector2i(x, 5))
+	# an undersized 5 kVA village trafo — trips within an hour, any hour
+	City.place_building("substation", Vector2i(12, 6), 0, {"rating_kva": 5.0})
+	City.place_building("substation", Vector2i(18, 6))  # healthy control zone
+	for x in range(8, 21):
+		City.build_road(Vector2i(x, 8))
+	for x in range(8, 21):
+		City.build_zone(Vector2i(x, 9))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("substation")[0], 24)
+	City._topo_dirty = true
+	if not await _wait_registered(240.0):
+		_fail("SMOKE_MAINTENANCE", "register timeout")
+		return
+	var sub_a: String = City.model.buildings_of_kind("substation")[0]
+	var sub_b: String = City.model.buildings_of_kind("substation")[1]
+	var zone_a := "z_" + sub_a
+	var zone_b := "z_" + sub_b
+	GameClock.restore({"total_minutes": 301.0 * 1440.0 + 17.0 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	await _run_steps(8, 240.0)
+	var tripped := City.tripped_substations.has(sub_a)
+	var trip_marker: bool = City.capacity_warnings.get(sub_a, {}).get("text", "") == "TRIP"
+	var grid_warned: bool = City.capacity_warnings.has(
+		City.model.buildings_of_kind("grid_connection")[0])
+	var a_dark_1: bool = not City.zone_supplied.get(zone_a, true)
+	var b_alive: bool = City.zone_supplied.get(zone_b, false)
+	# no self-healing: well past the old 2 h auto-repair, still dark
+	await _run_steps(12, 240.0)
+	var a_dark_2: bool = not City.zone_supplied.get(zone_a, true)
+	# pay the crew (and right-size the trafo so it doesn't re-trip)
+	City.model.buildings[sub_a]["params"]["rating_kva"] = 200.0
+	var repaired := City.dispatch_repair(City.model.buildings[sub_a]["anchor"])
+	var maintenance_cost := float(City.econ_total.get("cost_maintenance", 0.0))
+	await _run_steps(City.REPAIR_STEPS + 2, 240.0)
+	var a_back: bool = City.zone_supplied.get(zone_a, false)
+
+	# ── branch disconnection: trip the trunk between the subs; everything
+	# downstream (zone B) goes dark until ITS crew arrives
+	for x in range(15, 18):
+		City.tripped_tiles[Vector2i(x, 5)] = City.AWAITING_CREW
+	City._topo_dirty = true
+	await _run_steps(8, 240.0)
+	# a zone cut from the topology has NO entry at all — absent means dark
+	var b_dark: bool = not City.zone_supplied.get(zone_b, false)
+	var trip_tile_marker := City.capacity_warnings.has("trip_0")
+	var repaired_line := City.dispatch_repair(Vector2i(16, 5))
+	await _run_steps(City.REPAIR_STEPS + 6, 300.0)
+	var b_back: bool = City.zone_supplied.get(zone_b, false)
+
+	var report := {
+		"ok": tripped and trip_marker and grid_warned and a_dark_1 and b_alive
+			and a_dark_2 and repaired and maintenance_cost == -float(City.CREW_COST)
+			and a_back and b_dark and trip_tile_marker and repaired_line and b_back,
+		"trafo_tripped": tripped, "trip_marker": trip_marker,
+		"grid_warning": grid_warned,
+		"a_dark_after_trip": a_dark_1, "b_alive_meanwhile": b_alive,
+		"a_still_dark_no_autoheal": a_dark_2,
+		"crew_paid": repaired, "maintenance_cost": maintenance_cost,
+		"a_back_after_crew": a_back,
+		"branch_dark_after_line_trip": b_dark, "trip_tile_marker": trip_tile_marker,
+		"line_crew_paid": repaired_line, "b_back_after_crew": b_back,
+		"warnings_seen": City.capacity_warnings.keys(),
+		"orch": Orchestrator.stats,
+	}
+	print("SMOKE_MAINTENANCE ", JSON.stringify(report))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if report["ok"] else 1)
 
