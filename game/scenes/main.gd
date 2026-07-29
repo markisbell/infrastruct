@@ -417,6 +417,29 @@ func _take_roadtest() -> void:
 	await get_tree().create_timer(0.4).timeout
 	get_viewport().get_texture().get_image().save_png(
 		_roadtest_path.replace(".png", "_crossing.png"))
+	# four 3-tile L-turns, one per bend orientation — at this zoom a flipped
+	# corner cannot hide: the band either flows through the curve or breaks
+	for l_shape: Array in [
+		[Vector2i(150, 128), Vector2i(151, 128), Vector2i(151, 129)],  # corner W+S
+		[Vector2i(155, 128), Vector2i(156, 128), Vector2i(155, 129)],  # corner E+S
+		[Vector2i(150, 133), Vector2i(151, 133), Vector2i(150, 132)],  # corner E+N
+		[Vector2i(155, 133), Vector2i(156, 133), Vector2i(156, 132)],  # corner W+N
+	]:
+		for tile: Vector2i in l_shape:
+			City.build_road(tile)
+	view.redraw()
+	view.focus_tile(Vector2i(153, 130), 10.0)
+	await get_tree().create_timer(0.4).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_roadtest_path.replace(".png", "_bends.png"))
+	view.focus_tile(Vector2i(138, 122), 7.0)  # T stem-S + stem-N, close
+	await get_tree().create_timer(0.4).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_roadtest_path.replace(".png", "_tee_ns.png"))
+	view.focus_tile(Vector2i(144, 120), 7.0)  # T stem-E + stem-W, close
+	await get_tree().create_timer(0.4).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_roadtest_path.replace(".png", "_tee_ew.png"))
 	print("ROADTEST saved to ", _roadtest_path)
 	get_tree().quit(0)
 

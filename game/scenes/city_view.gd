@@ -342,10 +342,10 @@ func _road_piece(mask: int) -> Array:
 		8: return ["road-end", 0]
 		5: return ["road-straight", 90]
 		10: return ["road-straight", 0]
-		3: return ["road-bend", 0]
-		9: return ["road-bend", 90]
-		12: return ["road-bend", 180]
-		6: return ["road-bend", 270]
+		3: return ["road-bend", 180]
+		9: return ["road-bend", 270]
+		12: return ["road-bend", 0]
+		6: return ["road-bend", 90]
 		14: return ["road-intersection", 0]
 		7: return ["road-intersection", 90]
 		11: return ["road-intersection", 180]
@@ -1288,13 +1288,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				if mb.pressed:
 					_apply_tool(mouse_tile())
 			MOUSE_BUTTON_RIGHT:
+				# right mouse is CAMERA ONLY (playtest feedback: the old
+				# click-bulldoze kept firing accidentally between orbits) —
+				# demolition lives exclusively on the bulldozer tool (0)
+				_orbiting = mb.pressed
 				if mb.pressed:
-					_orbiting = true
 					_orbit_travel = 0.0
-				else:
-					_orbiting = false
-					if _orbit_travel < 6.0:  # a click, not a drag
-						City.bulldoze(mouse_tile())
 			MOUSE_BUTTON_WHEEL_UP:
 				if mb.pressed:
 					_zoom = maxf(_zoom / 1.12, 6.0)
