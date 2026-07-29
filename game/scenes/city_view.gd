@@ -24,6 +24,9 @@ const TOOL_BUILDING := {
 
 const KENNEY := "res://assets/kenney/"
 
+## Left click with NO tool active selects infrastructure (HUD inspector).
+signal building_clicked(id: String)
+
 ## Network color language (user direction): heat = red/blue double pipe
 ## (forward/return — physically honest, the backend models both sides);
 ## water (Phase 5) = green.
@@ -1314,6 +1317,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _apply_tool(pos: Vector2i) -> void:
 	match tool:
+		Tool.NONE:
+			var id: String = City.model.building_tiles.get(pos, "")
+			if id != "":
+				building_clicked.emit(id)
+			_painting = false
 		Tool.ROAD:
 			City.build_road(pos)
 		Tool.ZONE:

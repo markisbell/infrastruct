@@ -312,6 +312,17 @@ func _take_screenshot() -> void:
 	City.model.spawn_house(Vector2i(148, 127))
 	City.model.spawn_house(Vector2i(151, 127))
 	City._refresh_topo_assignment()
+	# inspector demo: synthetic two-day trafo-loading telemetry (yesterday
+	# full + today up to "now"), then open the substation's graph panel
+	var sub_demo: String = subs[0]
+	for t in 96:
+		City._telemetry_put("trafo:" + sub_demo, t,
+			maxf(38.0 + 42.0 * sin(TAU * (t / 96.0 - 0.31)) + 6.0 * sin(TAU * t / 16.0), 4.0))
+	for t in range(96, 96 + 62):
+		City._telemetry_put("trafo:" + sub_demo, t,
+			maxf(42.0 + 47.0 * sin(TAU * ((t - 96) / 96.0 - 0.31)) + 5.0 * sin(TAU * t / 12.0), 4.0))
+	City.current_t = 96 + 61
+	hud._open_inspector(sub_demo)
 	view.tool = CityView.Tool.SUBSTATION
 	view.redraw()
 	view.focus_tile(Vector2i(133, 125), 24.0)

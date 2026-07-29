@@ -62,6 +62,29 @@ var grid_trip_until := -1
 ## What the capacity-signal markers show: key -> {level: "warn"|"crit",
 ## percent, pos: Vector2i, text}. Rebuilt each step from the solved state.
 var capacity_warnings := {}
+
+## Element telemetry for the click-inspector graphs (rtpowerflow's daily
+## profile convention): per key, TODAY's 96 step slots fill as solved, and
+## YESTERDAY's completed day renders as the faded reference curve.
+## key -> {"day": int, "today": Array[96], "yesterday": Array[96]} (NAN = no
+## sample). Keys: dev:<id> kW · soc:<id> % · q:<id> m³/h · v:<zone> pu ·
+## d:<zone> kW · t:<zone> °C · pb:<zone> bar · trafo:<sub_id> %.
+var telemetry := {}
+
+
+func _telemetry_put(key: String, t: int, value: float) -> void:
+	var day := t / 96
+	var entry: Dictionary = telemetry.get(key, {})
+	if entry.is_empty() or int(entry["day"]) != day:
+		var blank := []
+		blank.resize(96)
+		blank.fill(NAN)
+		entry = {"day": day,
+			"yesterday": entry.get("today", blank.duplicate()) if not entry.is_empty()
+				and int(entry.get("day", -99)) == day - 1 else blank.duplicate(),
+			"today": blank.duplicate()}
+		telemetry[key] = entry
+	entry["today"][t % 96] = value
 var zone_supplied := {}           # power zone_id -> bool (latest step)
 var heat_zone_supplied := {}      # heat zone_id -> bool (latest step)
 var heat_outage_minutes := {}     # heat zone_id -> minutes cold
@@ -602,6 +625,24 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		if p_kw > 0.0:
 			_econ_apply("cost_fuel", -p_kw / GAS_PLANT_ETA * STEP_H * FUEL_PRICE_KWH)
 
+	# telemetry for the click-inspector graphs
+	for zone_id: String in topo.zones_info:
+		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
+		if not zone_result.is_empty():
+			_telemetry_put("v:" + zone_id, t,
+				float(zone_result.get("detail", {}).get("v_pu", NAN)))
+		var sub_id: String = topo.zones_info[zone_id]["sub"]
+		var demand := DemandModel.zone_demand_kw(
+			topo.zones_info[zone_id]["houses"], t)
+		_telemetry_put("d:" + zone_id, t, demand)
+		_telemetry_put("trafo:" + sub_id, t, 100.0 * demand
+			/ float(model.building_params(sub_id).get("rating_kva", 100.0)))
+	for device_id: String in result.get("devices", {}):
+		var device: Dictionary = result["devices"][device_id]
+		_telemetry_put("dev:" + device_id, t, float(device.get("output_kw", NAN)))
+		if device.get("soc") != null:
+			_telemetry_put("soc:" + device_id, t, 100.0 * float(device["soc"]))
+
 	_check_protection(t, result)
 	_update_capacity_warnings(t, result)
 	_grow(t)
@@ -666,6 +707,18 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 		if cold_houses > 0 and t % 8 == 0:
 			log_event("cold_homes", "warning",
 				"%d houses without adequate heat (%.0f°C outside)" % [cold_houses, temp])
+	# telemetry: zone supply temperatures + plant/storage outputs
+	for zone_id: String in heat_topo.zones_info:
+		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
+		if not zone_result.is_empty():
+			_telemetry_put("t:" + zone_id, t,
+				float(zone_result.get("detail", {}).get("t_supply_c", NAN)))
+	for device_id: String in result.get("devices", {}):
+		var device: Dictionary = result["devices"][device_id]
+		_telemetry_put("dev:" + device_id, t,
+			absf(float(device.get("output_kw", NAN))))
+		if device.get("soc") != null:
+			_telemetry_put("soc:" + device_id, t, 100.0 * float(device["soc"]))
 	# economy: warm zones pay the heat tariff; boiler fuel comes from the
 	# solved p_fuel_kw, CHP fuel from heat + coupled electricity over eta
 	var income := 0.0
@@ -742,6 +795,19 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 			log_event("dry_taps", "critical",
 				"Water pressure collapsed — %.0f%% of homes short of water"
 				% (100.0 * hurt))
+	# telemetry: zone pressures + source flows/levels
+	for zone_id: String in water_topo.zones_info:
+		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
+		if not zone_result.is_empty():
+			_telemetry_put("pb:" + zone_id, t,
+				float(zone_result.get("detail", {}).get("p_bar", NAN)))
+	for device_id: String in result.get("devices", {}):
+		var device: Dictionary = result["devices"][device_id]
+		var q := float(device.get("detail", {}).get("q_m3h", NAN))
+		if not is_nan(q):
+			_telemetry_put("q:" + device_id, t, q)
+		if device.get("soc") != null:
+			_telemetry_put("soc:" + device_id, t, 100.0 * float(device["soc"]))
 	# economy: household m³ actually delivered (PDD fraction) earn the
 	# tariff — fire/leak draws are losses, never billed
 	var temp_w := float(weather.sample(t)["temp_c"])
@@ -1081,6 +1147,7 @@ func reset_for_scenario(weather_seed: int) -> void:
 	tripped_tiles.clear()
 	tripped_substations.clear()
 	capacity_warnings.clear()
+	telemetry.clear()
 	set_meta("trafo_streak", {})
 	grid_trip_until = -1
 	grid_capacity_override = -1.0

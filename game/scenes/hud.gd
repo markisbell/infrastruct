@@ -159,6 +159,7 @@ func _ready() -> void:
 	_make_build_menu()
 	_render_thumbnails()  # async: icons replace the monograms as they render
 	_make_breakdown()
+	view.building_clicked.connect(_open_inspector)
 
 	City.state_changed.connect(_refresh)
 	City.event_logged.connect(_on_event)
@@ -342,6 +343,128 @@ func _make_budget_section(box: VBoxContainer) -> void:
 		City.repay_loan(100_000.0)
 		_refresh_breakdown())
 	row.add_child(repay)
+
+
+# ─── element inspector: click infrastructure with no tool active and its
+# daily profile graph appears (rtpowerflow ProfileGraph conventions) ───
+
+var _inspector: PanelContainer
+var _inspector_title: Label
+var _inspector_graph: ProfileGraph
+var _inspector_live: Label
+
+
+## Per-kind graph configuration: which telemetry series, unit, axis title,
+## and dashed limit lines (the rtpowerflow quantities per element type).
+func _inspector_config(kind: String, id: String) -> Dictionary:
+	var kw_series: Array[Dictionary] = [
+		{"key": "dev:" + id, "label": "P", "color": Color(0.95, 0.68, 0.21)}]
+	match kind:
+		"grid_connection":
+			var capacity: float = City.grid_capacity_override \
+				if City.grid_capacity_override > 0.0 \
+				else BuildingDefs.get_def(kind)["capacity_kw"]
+			var limits: Array[Dictionary] = []
+			if capacity <= 1_000.0:  # a 10-MVA line would flatten the curve
+				limits = [{"value": capacity, "label": "%.0f kW cap" % capacity,
+					"color": Color(0.95, 0.3, 0.25)}]
+			return {"title": "Grid connection 110/20 kV", "unit": "kW", "dec": 0,
+				"base_zero": false, "y": "Import / export [kW]", "limits": limits,
+				"series": [{"key": "dev:" + id, "label": "Import",
+					"color": Color(0.95, 0.45, 0.3)}]}
+		"substation":
+			return {"title": "Substation 20/0.4 kV (%.0f kVA)"
+					% float(City.model.building_params(id).get("rating_kva", 100.0)),
+				"unit": "%", "dec": 0, "base_zero": true, "y": "Trafo loading [%]",
+				"limits": [{"value": 100.0, "label": "rating",
+					"color": Color(0.95, 0.3, 0.25)}],
+				"series": [{"key": "trafo:" + id, "label": "Loading",
+					"color": Color(0.31, 0.76, 0.97)}]}
+		"gas_plant", "wind_farm", "solar_park":
+			return {"title": kind.capitalize(), "unit": "kW", "dec": 0,
+				"base_zero": true, "y": "P [kW]", "limits": [], "series": kw_series}
+		"chp_plant", "boiler_plant", "heat_pump_plant":
+			return {"title": kind.capitalize(), "unit": "kW", "dec": 0,
+				"base_zero": true, "y": "Q [kW]", "limits": [],
+				"series": [{"key": "dev:" + id, "label": "Q",
+					"color": Color(0.9, 0.35, 0.25)}]}
+		"battery", "heat_storage", "water_tower":
+			return {"title": kind.capitalize(), "unit": "%", "dec": 0,
+				"base_zero": true, "y": "State of charge [%]", "limits": [],
+				"series": [{"key": "soc:" + id, "label": "SoC",
+					"color": Color(0.62, 0.44, 0.86)}]}
+		"heat_exchanger":
+			return {"title": "Heat exchanger", "unit": "°C", "dec": 1,
+				"base_zero": false, "y": "Supply temperature [°C]",
+				"limits": [{"value": 60.0, "label": "min 60 °C",
+					"color": Color(0.35, 0.55, 0.95)}],
+				"series": [{"key": "t:hz_" + id, "label": "T supply",
+					"color": Color(0.95, 0.55, 0.2)}]}
+		"water_station":
+			return {"title": "Water station", "unit": "bar", "dec": 2,
+				"base_zero": false, "y": "Zone pressure [bar]",
+				"limits": [{"value": 2.0, "label": "min 2.0 bar",
+					"color": Color(0.95, 0.3, 0.25)}],
+				"series": [{"key": "pb:wz_" + id, "label": "p",
+					"color": Color(0.25, 0.75, 0.5)}]}
+		"well", "pumping_station":
+			return {"title": kind.capitalize(), "unit": "m³/h", "dec": 1,
+				"base_zero": true, "y": "Flow [m³/h]", "limits": [],
+				"series": [{"key": "q:" + id, "label": "Q",
+					"color": Color(0.25, 0.75, 0.5)}]}
+	return {}
+
+
+func _open_inspector(id: String) -> void:
+	if not City.model.buildings.has(id):
+		return
+	var kind: String = City.model.buildings[id]["kind"]
+	var config := _inspector_config(kind, id)
+	if config.is_empty():
+		return
+	if _inspector == null:
+		_inspector = PanelContainer.new()
+		_inspector.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		_inspector.offset_top = 320.0
+		_inspector.offset_left = -430.0
+		var style := StyleBoxFlat.new()  # opaque: the event feed sits above
+		style.bg_color = Color(0.08, 0.1, 0.13, 0.97)
+		style.set_corner_radius_all(6)
+		style.set_content_margin_all(8)
+		_inspector.add_theme_stylebox_override("panel", style)
+		add_child(_inspector)
+		var box := VBoxContainer.new()
+		_inspector.add_child(box)
+		var header := HBoxContainer.new()
+		box.add_child(header)
+		_inspector_title = Label.new()
+		_inspector_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		header.add_child(_inspector_title)
+		var close := Button.new()
+		close.text = "✕"
+		close.focus_mode = Control.FOCUS_NONE
+		close.pressed.connect(func() -> void: _inspector.visible = false)
+		header.add_child(close)
+		_inspector_graph = ProfileGraph.new()
+		box.add_child(_inspector_graph)
+		_inspector_live = Label.new()
+		_inspector_live.add_theme_font_size_override("font_size", 11)
+		_inspector_live.modulate = Color(1, 1, 1, 0.7)
+		box.add_child(_inspector_live)
+		for network_signal: Signal in [City.power_result, City.heat_result,
+				City.water_result]:
+			network_signal.connect(func(_t: int, _r: Dictionary) -> void:
+				if _inspector.visible:
+					_inspector_graph.queue_redraw())
+	_inspector_title.text = "%s   (%s)" % [config["title"], id]
+	_inspector_live.text = "Today opaque · yesterday faded · dashed = limit"
+	var series_typed: Array[Dictionary] = []
+	series_typed.assign(config["series"])
+	var limits_typed: Array[Dictionary] = []
+	limits_typed.assign(config["limits"])
+	_inspector_graph.setup(series_typed, config["unit"], config["dec"],
+		limits_typed, config["base_zero"], config["y"])
+	_inspector.visible = true
 
 
 # ─── scenario UI (Phase 7): objective line, win/lose banner, picker ───
