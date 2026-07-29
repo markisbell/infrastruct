@@ -28,8 +28,31 @@ func is_tile_free(pos: Vector2i) -> bool:
 		or cables.has(pos) or heat_pipes.has(pos) or water_pipes.has(pos))
 
 
-func _line_blocked(pos: Vector2i) -> bool:
-	return roads.has(pos) or houses.has(pos) or building_tiles.has(pos)
+## Buried lines (kind LINE_UNDERGROUND) may run under ROADS and share the
+## street cross-section with other buried networks; nothing ever runs under
+## houses or building footprints. Surface builds keep the strict rules.
+func _line_blocked(pos: Vector2i, buried: bool) -> bool:
+	if houses.has(pos) or building_tiles.has(pos):
+		return true
+	return not buried and roads.has(pos)
+
+
+## Does this layer hold a SURFACE entry here (blocks everything)?
+func _surface_entry(layer: Dictionary, pos: Vector2i) -> bool:
+	return layer.has(pos) and int(layer[pos]) != BuildingDefs.LINE_UNDERGROUND
+
+
+## Cross-network conflict for a new entry: surface entries conflict with
+## ANY other network entry; buried entries only with surface ones.
+func _other_lines_conflict(pos: Vector2i, buried: bool,
+		others: Array[Dictionary]) -> bool:
+	for layer: Dictionary in others:
+		if buried:
+			if _surface_entry(layer, pos):
+				return true
+		elif layer.has(pos):
+			return true
+	return false
 
 
 func can_place_building(kind: String, anchor: Vector2i) -> bool:
@@ -44,7 +67,9 @@ func can_place_building(kind: String, anchor: Vector2i) -> bool:
 # ─── mutations (all return success) ───
 
 func set_cable(pos: Vector2i, kind: int) -> bool:
-	if _line_blocked(pos) or heat_pipes.has(pos) or water_pipes.has(pos):
+	var buried := kind == BuildingDefs.LINE_UNDERGROUND
+	if _line_blocked(pos, buried) \
+			or _other_lines_conflict(pos, buried, [heat_pipes, water_pipes]):
 		return false
 	cables[pos] = kind
 	return true
@@ -55,7 +80,9 @@ func remove_cable(pos: Vector2i) -> void:
 
 
 func set_heat_pipe(pos: Vector2i, kind: int) -> bool:
-	if _line_blocked(pos) or cables.has(pos) or water_pipes.has(pos):
+	var buried := kind == BuildingDefs.LINE_UNDERGROUND
+	if _line_blocked(pos, buried) \
+			or _other_lines_conflict(pos, buried, [cables, water_pipes]):
 		return false
 	heat_pipes[pos] = kind
 	return true
@@ -66,7 +93,9 @@ func remove_heat_pipe(pos: Vector2i) -> void:
 
 
 func set_water_pipe(pos: Vector2i, kind: int) -> bool:
-	if _line_blocked(pos) or cables.has(pos) or heat_pipes.has(pos):
+	var buried := kind == BuildingDefs.LINE_UNDERGROUND
+	if _line_blocked(pos, buried) \
+			or _other_lines_conflict(pos, buried, [cables, heat_pipes]):
 		return false
 	water_pipes[pos] = kind
 	return true
@@ -81,8 +110,12 @@ func has_cable(pos: Vector2i) -> bool:
 
 
 func set_road(pos: Vector2i) -> bool:
-	if not is_tile_free(pos):
+	# paving OVER existing buried lines is fine; surface lines block
+	if roads.has(pos) or houses.has(pos) or building_tiles.has(pos):
 		return false
+	for layer: Dictionary in [cables, heat_pipes, water_pipes]:
+		if _surface_entry(layer, pos):
+			return false
 	roads[pos] = true
 	return true
 
@@ -92,9 +125,11 @@ func remove_road(pos: Vector2i) -> void:
 
 
 func set_zone(pos: Vector2i, kind: int = 1) -> bool:
-	# zoning is paint — allowed anywhere except on buildings/roads/cables;
-	# it coexists with houses (that's what spawned them)
-	if roads.has(pos) or building_tiles.has(pos) or cables.has(pos):
+	# zoning is paint — allowed anywhere except on buildings/roads/lines
+	# (houses may NOT sit over any line, buried or not); it coexists with
+	# houses (that's what spawned them)
+	if roads.has(pos) or building_tiles.has(pos) or cables.has(pos) \
+			or heat_pipes.has(pos) or water_pipes.has(pos):
 		return false
 	zoning[pos] = kind
 	return true

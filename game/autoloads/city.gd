@@ -159,13 +159,17 @@ func build_cable(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
 		and _after_build(true)
 
 
-func build_heat_pipe(pos: Vector2i) -> bool:
-	return _paid(BuildingDefs.COSTS["heat_pipe"]) and model.set_heat_pipe(pos, 1) \
+func build_heat_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
+	var cost_key := "heat_pipe_buried" \
+		if kind == BuildingDefs.LINE_UNDERGROUND else "heat_pipe"
+	return _paid(BuildingDefs.COSTS[cost_key]) and model.set_heat_pipe(pos, kind) \
 		and _after_build(true)
 
 
-func build_water_pipe(pos: Vector2i) -> bool:
-	return _paid(BuildingDefs.COSTS["water_pipe"]) and model.set_water_pipe(pos, 1) \
+func build_water_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
+	var cost_key := "water_pipe_buried" \
+		if kind == BuildingDefs.LINE_UNDERGROUND else "water_pipe"
+	return _paid(BuildingDefs.COSTS[cost_key]) and model.set_water_pipe(pos, kind) \
 		and _after_build(true)
 
 

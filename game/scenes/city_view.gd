@@ -9,7 +9,8 @@ extends Node3D
 
 enum Tool { NONE, ROAD, ZONE, CABLE, SUBSTATION, GAS, WIND, SOLAR, BATTERY, GRID,
 	BULLDOZE, PIPE, HEAT_SUB, BOILER, CHP, HEATPUMP, HEATSTORE,
-	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER, UCABLE, REPAIR }
+	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER, UCABLE, REPAIR,
+	BURIED_PIPE, BURIED_WATER }
 
 const TOOL_BUILDING := {
 	Tool.SUBSTATION: "substation", Tool.GAS: "gas_plant", Tool.WIND: "wind_farm",
@@ -421,14 +422,16 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 			connections += str(i)
 		if _electrical_building_at(pos + directions[i]):
 			connections += "b%d" % i
-	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
+	var wanted := "%s|r%s@%s" % [connections,
+		City.model.roads.has(pos), _terrain_fingerprint]
 	if node.get_meta("wires", "") == wanted:
 		return
 	node.set_meta("wires", wanted)
 	for child in node.get_children():
 		child.queue_free()
 	if kind == BuildingDefs.LINE_UNDERGROUND:
-		_orient_cable_underground(pos, node, directions)
+		_orient_buried(pos, node, City.model.cables, "power",
+			[Color(0.85, 0.75, 0.35)], true)
 		return
 	node.add_child(_pole_visual())
 	for i in 4:
@@ -446,28 +449,52 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 				0.025, Color(0.16, 0.16, 0.18)))
 
 
-func _orient_cable_underground(pos: Vector2i, node: Node3D,
-		directions: Array[Vector2i]) -> void:
+## Shared buried-line renderer (power/heat/water). Open ground: a trench
+## strip toward each connected neighbor, network-colored marker posts
+## (Merksteine), riser boxes into adjacent buildings. Under a ROAD the
+## line compresses to a manhole plate on the pavement — buried lines may
+## cross streets, and each network's plate sits at its own offset so
+## shared street cross-sections stay readable.
+func _orient_buried(pos: Vector2i, node: Node3D, layer: Dictionary,
+		network: String, markers: Array, tint_loading: bool) -> void:
+	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	var trench := Color(0.36, 0.33, 0.29)
+	if City.model.roads.has(pos):
+		var plate_offset := {"power": Vector3.ZERO,
+			"heat": Vector3(0.24, 0, 0.24),
+			"water": Vector3(-0.24, 0, -0.24)}[network] as Vector3
+		var plate := _box(Vector3(0.2, 0.015, 0.2), Color(0.3, 0.3, 0.33),
+			plate_offset + Vector3(0, 0.035, 0))
+		if tint_loading:
+			plate.set_meta("wire", true)
+		node.add_child(plate)
+		return
 	node.add_child(_box(Vector3(0.18, 0.025, 0.18), trench, Vector3(0, 0.012, 0)))
-	# marker post so buried runs stay findable on the map
-	node.add_child(_box(Vector3(0.05, 0.2, 0.05), Color(0.85, 0.75, 0.35),
-		Vector3(0.2, 0.1, 0.2)))
+	for i in markers.size():  # marker posts so buried runs stay findable
+		node.add_child(_box(Vector3(0.05, 0.2, 0.05), markers[i],
+			Vector3(0.2, 0.1, 0.2 - 0.14 * i)))
 	for i in 4:
 		var d := directions[i]
-		if City.model.cables.has(pos + d):
+		if layer.has(pos + d):
 			var strip := _box(Vector3(0.16 if d.y != 0 else 0.5,
 				0.025, 0.16 if d.x != 0 else 0.5), trench,
 				Vector3(d.x * 0.25, 0.012, d.y * 0.25))
-			strip.set_meta("wire", true)  # loading overlay tints the trench
+			if tint_loading:
+				strip.set_meta("wire", true)  # loading overlay tints the trench
 			node.add_child(strip)
-		elif _electrical_building_at(pos + d):
-			# riser box where the cable comes up into the building
+		elif _buried_building_target(pos + d, network):
+			# riser box where the line comes up into the building
 			node.add_child(_box(Vector3(0.4 if d.x != 0 else 0.16, 0.025,
 				0.4 if d.y != 0 else 0.16), trench,
 				Vector3(d.x * 0.3, 0.012, d.y * 0.3)))
 			node.add_child(_box(Vector3(0.12, 0.22, 0.12), Color(0.55, 0.57, 0.6),
 				Vector3(d.x * 0.42, 0.11, d.y * 0.42)))
+
+
+func _buried_building_target(pos: Vector2i, network: String) -> bool:
+	if network == "power":
+		return _electrical_building_at(pos)
+	return _network_building_at(pos, network)
 
 
 func _make_pipe(pos: Vector2i) -> Node3D:
@@ -486,19 +513,25 @@ func _make_pipe(pos: Vector2i) -> Node3D:
 ## supply/return stubs plus a valve box at the joint (same idea as the
 ## electrical service drops).
 func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
-	var connections := ""
+	var kind := int(City.model.heat_pipes.get(pos, BuildingDefs.LINE_OVERHEAD))
+	var connections := "%d|" % kind
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	for i in 4:
 		if City.model.heat_pipes.has(pos + directions[i]):
 			connections += str(i)
 		elif _network_building_at(pos + directions[i], "heat"):
 			connections += "b%d" % i
-	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
+	var wanted := "%s|r%s@%s" % [connections,
+		City.model.roads.has(pos), _terrain_fingerprint]
 	if node.get_meta("pipes", "") == wanted:
 		return
 	node.set_meta("pipes", wanted)
 	for child in node.get_children():
 		child.queue_free()
+	if kind == BuildingDefs.LINE_UNDERGROUND:
+		_orient_buried(pos, node, City.model.heat_pipes, "heat",
+			[PIPE_SUPPLY_COLOR, PIPE_RETURN_COLOR], false)
+		return
 	# support foot
 	node.add_child(_box(Vector3(0.14, PIPE_HEIGHT - 0.05, 0.14),
 		Color(0.45, 0.46, 0.5), Vector3(0, (PIPE_HEIGHT - 0.05) / 2.0, 0)))
@@ -564,19 +597,25 @@ func _make_water_pipe(pos: Vector2i) -> Node3D:
 ## Green main toward every connected neighbor — pipe tiles AND water
 ## buildings: towers/wells/pumps/stations get a visible stub + collar.
 func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
-	var connections := ""
+	var kind := int(City.model.water_pipes.get(pos, BuildingDefs.LINE_OVERHEAD))
+	var connections := "%d|" % kind
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	for i in 4:
 		if City.model.water_pipes.has(pos + directions[i]):
 			connections += str(i)
 		elif _network_building_at(pos + directions[i], "water"):
 			connections += "b%d" % i
-	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
+	var wanted := "%s|r%s@%s" % [connections,
+		City.model.roads.has(pos), _terrain_fingerprint]
 	if node.get_meta("pipes", "") == wanted:
 		return
 	node.set_meta("pipes", wanted)
 	for child in node.get_children():
 		child.queue_free()
+	if kind == BuildingDefs.LINE_UNDERGROUND:
+		_orient_buried(pos, node, City.model.water_pipes, "water",
+			[WATER_PIPE_COLOR], false)
+		return
 	node.add_child(_box(Vector3(0.14, PIPE_HEIGHT - 0.05, 0.14),
 		Color(0.45, 0.46, 0.5), Vector3(0, (PIPE_HEIGHT - 0.05) / 2.0, 0)))
 	var any_connection := false
@@ -1288,8 +1327,12 @@ func _apply_tool(pos: Vector2i) -> void:
 			_painting = false
 		Tool.PIPE:
 			City.build_heat_pipe(pos)
+		Tool.BURIED_PIPE:
+			City.build_heat_pipe(pos, BuildingDefs.LINE_UNDERGROUND)
 		Tool.WATER_PIPE:
 			City.build_water_pipe(pos)
+		Tool.BURIED_WATER:
+			City.build_water_pipe(pos, BuildingDefs.LINE_UNDERGROUND)
 		Tool.BULLDOZE:
 			City.bulldoze(pos)
 		_:

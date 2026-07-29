@@ -22,6 +22,8 @@ const TOOL_KEYS := {
 	KEY_T: CityView.Tool.HEATSTORE,
 	KEY_G: CityView.Tool.UCABLE,
 	KEY_M: CityView.Tool.REPAIR,
+	KEY_K: CityView.Tool.BURIED_PIPE,
+	KEY_L: CityView.Tool.BURIED_WATER,
 	KEY_W: CityView.Tool.WATER_PIPE,
 	KEY_A: CityView.Tool.WATER_SUB,
 	KEY_N: CityView.Tool.WELL,
@@ -83,6 +85,9 @@ func _build_items() -> Array:
 			{"tool": CityView.Tool.PIPE, "label": "Heat pipe", "mono": "Hp", "key": "H",
 				"color": CityView.PIPE_SUPPLY_COLOR, "cost": BuildingDefs.COSTS["heat_pipe"],
 				"desc": "District-heating pair: red forward, blue return. Long runs lose temperature."},
+			{"tool": CityView.Tool.BURIED_PIPE, "label": "Buried heat pipe", "mono": "Bh", "key": "K",
+				"color": Color(0.36, 0.33, 0.29), "cost": BuildingDefs.COSTS["heat_pipe_buried"],
+				"desc": "Same pair, trenched: crosses under roads and shares the street with other buried lines."},
 			{"tool": CityView.Tool.HEAT_SUB, "label": "Heat exchanger", "mono": "Hx", "key": "J",
 				"kind": "heat_exchanger",
 				"desc": "Defines a heat zone (radius 12). Homes inside get district heat."},
@@ -103,6 +108,9 @@ func _build_items() -> Array:
 			{"tool": CityView.Tool.WATER_PIPE, "label": "Water pipe", "mono": "Wp", "key": "W",
 				"color": CityView.WATER_PIPE_COLOR, "cost": BuildingDefs.COSTS["water_pipe"],
 				"desc": "Drinking-water main (green). Pressure falls with distance and elevation."},
+			{"tool": CityView.Tool.BURIED_WATER, "label": "Buried water pipe", "mono": "Bw", "key": "L",
+				"color": Color(0.36, 0.33, 0.29), "cost": BuildingDefs.COSTS["water_pipe_buried"],
+				"desc": "Same main, trenched: crosses under roads and shares the street with other buried lines."},
 			{"tool": CityView.Tool.WATER_SUB, "label": "Water station", "mono": "Ws", "key": "A",
 				"kind": "water_station",
 				"desc": "Defines a water zone (radius 12). Homes inside tap this network."},
@@ -497,21 +505,11 @@ func _thumbnail_scene(tool: CityView.Tool) -> Node3D:
 		CityView.Tool.CABLE:
 			return view._pole_visual()
 		CityView.Tool.UCABLE:
-			var trench := Node3D.new()
-			var strip := MeshInstance3D.new()
-			var strip_mesh := BoxMesh.new()
-			strip_mesh.size = Vector3(0.9, 0.05, 0.2)
-			strip.mesh = strip_mesh
-			strip.material_override = view._flat(Color(0.36, 0.33, 0.29))
-			trench.add_child(strip)
-			var marker := MeshInstance3D.new()
-			var marker_mesh := BoxMesh.new()
-			marker_mesh.size = Vector3(0.08, 0.3, 0.08)
-			marker.mesh = marker_mesh
-			marker.position = Vector3(0.2, 0.15, 0.15)
-			marker.material_override = view._flat(Color(0.85, 0.75, 0.35))
-			trench.add_child(marker)
-			return trench
+			return _trench_sample([Color(0.85, 0.75, 0.35)])
+		CityView.Tool.BURIED_PIPE:
+			return _trench_sample([CityView.PIPE_SUPPLY_COLOR, CityView.PIPE_RETURN_COLOR])
+		CityView.Tool.BURIED_WATER:
+			return _trench_sample([CityView.WATER_PIPE_COLOR])
 		CityView.Tool.PIPE:
 			return _pipe_sample([[CityView.PIPE_SUPPLY_COLOR, 0.13],
 				[CityView.PIPE_RETURN_COLOR, -0.13]], 0.055)
@@ -524,6 +522,26 @@ func _thumbnail_scene(tool: CityView.Tool) -> Node3D:
 			return view._instance_glb(
 				"factory-kit/Models/GLB format/cone.glb", 0.8)
 	return null
+
+
+## Trench with network-colored marker posts — the buried-line thumbnails.
+func _trench_sample(markers: Array) -> Node3D:
+	var trench := Node3D.new()
+	var strip := MeshInstance3D.new()
+	var strip_mesh := BoxMesh.new()
+	strip_mesh.size = Vector3(0.9, 0.05, 0.2)
+	strip.mesh = strip_mesh
+	strip.material_override = view._flat(Color(0.36, 0.33, 0.29))
+	trench.add_child(strip)
+	for i in markers.size():
+		var marker := MeshInstance3D.new()
+		var marker_mesh := BoxMesh.new()
+		marker_mesh.size = Vector3(0.08, 0.3, 0.08)
+		marker.mesh = marker_mesh
+		marker.position = Vector3(0.2 - 0.18 * i, 0.15, 0.15)
+		marker.material_override = view._flat(markers[i])
+		trench.add_child(marker)
+	return trench
 
 
 func _pipe_sample(runs: Array, radius: float) -> Node3D:

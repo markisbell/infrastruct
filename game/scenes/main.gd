@@ -354,6 +354,13 @@ func _take_roadtest() -> void:
 	for y in range(119, 122):  # T with stem WEST (mask N|S|W)
 		City.build_road(Vector2i(146, y))
 	City.build_road(Vector2i(145, 120))
+	# crossing demo: all three buried networks dive under a street
+	for y in range(127, 132):
+		City.build_road(Vector2i(122, y))
+	for x in range(119, 126):
+		City.build_water_pipe(Vector2i(x, 128), BuildingDefs.LINE_UNDERGROUND)
+		City.build_heat_pipe(Vector2i(x, 129), BuildingDefs.LINE_UNDERGROUND)
+		City.build_cable(Vector2i(x, 130), BuildingDefs.LINE_UNDERGROUND)
 	var north := view._box(Vector3(0.5, 1.6, 0.5), Color(0.9, 0.15, 0.1),
 		Vector3(133.5, 0.8, 116.5))
 	view.add_child(north)
@@ -392,6 +399,10 @@ func _take_roadtest() -> void:
 	await get_tree().create_timer(0.4).timeout
 	get_viewport().get_texture().get_image().save_png(
 		_roadtest_path.replace(".png", "_native.png"))
+	view.focus_tile(Vector2i(122, 129), 8.0)  # buried lines crossing the street
+	await get_tree().create_timer(0.4).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_roadtest_path.replace(".png", "_crossing.png"))
 	print("ROADTEST saved to ", _roadtest_path)
 	get_tree().quit(0)
 
