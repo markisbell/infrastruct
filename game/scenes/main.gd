@@ -20,6 +20,8 @@ func _ready() -> void:
 			smoke = arg.trim_prefix("--smoke=")
 		elif arg.begins_with("--screenshot="):
 			_screenshot_path = arg.trim_prefix("--screenshot=")
+		elif arg.begins_with("--roadtest="):
+			_roadtest_path = arg.trim_prefix("--roadtest=")
 		elif arg.begins_with("--gallery="):
 			_gallery_path = arg.trim_prefix("--gallery=")
 
@@ -31,6 +33,9 @@ func _ready() -> void:
 		return
 	if _screenshot_path != "":
 		_take_screenshot()
+		return
+	if _roadtest_path != "":
+		_take_roadtest()
 		return
 	if _gallery_path != "":
 		_take_gallery()
@@ -313,6 +318,81 @@ func _take_screenshot() -> void:
 	await get_tree().create_timer(1.0).timeout
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)
+	get_tree().quit(0)
+
+
+# ─── road-piece visual regression: every mask variant on one screen ───
+
+var _roadtest_path := ""
+
+
+## Builds all road-orientation cases: a closed loop (all four bends), a
+## crossroad with four ends, and all four T-junctions. The red pillar
+## marks NORTH (y-), the blue pillar EAST (x+) — read the picture against
+## the world axes, not the camera.
+func _take_roadtest() -> void:
+	City.money = 100_000_000
+	for x in range(120, 126):  # loop: top + bottom edges
+		City.build_road(Vector2i(x, 120))
+		City.build_road(Vector2i(x, 123))
+	for y in range(121, 123):  # loop: left + right edges
+		City.build_road(Vector2i(120, y))
+		City.build_road(Vector2i(125, y))
+	for y in range(119, 124):  # crossroad: vertical arm
+		City.build_road(Vector2i(132, y))
+	for x in range(130, 135):  # crossroad: horizontal arm
+		City.build_road(Vector2i(x, 121))
+	for x in range(137, 140):  # T with stem SOUTH (mask W|E|S)
+		City.build_road(Vector2i(x, 120))
+	City.build_road(Vector2i(138, 121))
+	for x in range(137, 140):  # T with stem NORTH (mask W|E|N)
+		City.build_road(Vector2i(x, 124))
+	City.build_road(Vector2i(138, 123))
+	for y in range(119, 122):  # T with stem EAST (mask N|S|E)
+		City.build_road(Vector2i(142, y))
+	City.build_road(Vector2i(143, 120))
+	for y in range(119, 122):  # T with stem WEST (mask N|S|W)
+		City.build_road(Vector2i(146, y))
+	City.build_road(Vector2i(145, 120))
+	var north := view._box(Vector3(0.5, 1.6, 0.5), Color(0.9, 0.15, 0.1),
+		Vector3(133.5, 0.8, 116.5))
+	view.add_child(north)
+	var east := view._box(Vector3(0.5, 1.6, 0.5), Color(0.15, 0.3, 0.9),
+		Vector3(150.5, 0.8, 121.5))
+	view.add_child(east)
+	view.redraw()
+	view.focus_tile(Vector2i(133, 121), 24.0)
+	await get_tree().create_timer(1.0).timeout
+	get_viewport().get_texture().get_image().save_png(_roadtest_path)
+	view.focus_tile(Vector2i(122, 121), 9.0)  # loop close-up: the four bends
+	await get_tree().create_timer(0.4).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_roadtest_path.replace(".png", "_loop.png"))
+	view.focus_tile(Vector2i(141, 121), 14.0)  # the four T-junctions
+	await get_tree().create_timer(0.4).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_roadtest_path.replace(".png", "_tees.png"))
+	view.focus_tile(Vector2i(138, 121), 6.0)  # single T, close enough to read
+	await get_tree().create_timer(0.4).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_roadtest_path.replace(".png", "_tee1.png"))
+	# ground truth: the raw GLBs at yaw 0, red post = N edge, blue = E edge
+	var x := 126
+	for piece: String in ["road-bend", "road-intersection", "road-end"]:
+		var raw := view._instance_glb(
+			"city-kit-roads/Models/GLB format/%s.glb" % piece, 1.0)
+		raw.position = Vector3(x + 0.5, 0, 130.5)
+		view.add_child(raw)
+		view.add_child(view._box(Vector3(0.15, 0.7, 0.15), Color(0.9, 0.15, 0.1),
+			Vector3(x + 0.5, 0.35, 130.0 - 0.35)))  # north edge
+		view.add_child(view._box(Vector3(0.15, 0.7, 0.15), Color(0.15, 0.3, 0.9),
+			Vector3(x + 0.5 + 0.85, 0.35, 130.5)))  # east edge
+		x += 3
+	view.focus_tile(Vector2i(129, 130), 7.0)
+	await get_tree().create_timer(0.4).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_roadtest_path.replace(".png", "_native.png"))
+	print("ROADTEST saved to ", _roadtest_path)
 	get_tree().quit(0)
 
 

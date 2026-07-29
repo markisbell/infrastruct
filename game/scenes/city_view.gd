@@ -324,8 +324,10 @@ func _orient_road(pos: Vector2i, node: Node3D) -> void:
 
 
 func _road_piece(mask: int) -> Array:
-	# mask bits: 1=N 2=E 4=S 8=W. Kenney road GLBs run along X at yaw 0,
-	# hence the +90 base against the first-render "ladder" look.
+	# mask bits: 1=N 2=E 4=S 8=W. Native orientations read off the raw GLBs
+	# with N/E marker posts (--roadtest ..._native.png): straight runs E-W,
+	# end opens W, bend connects N+E, intersection is the E-W bar with the
+	# stem S. Godot +yaw is CCW from above: E→N→W→S→E per 90°.
 	match mask:
 		0: return ["road-end-round", 90]
 		1: return ["road-end", 270]
@@ -334,14 +336,14 @@ func _road_piece(mask: int) -> Array:
 		8: return ["road-end", 0]
 		5: return ["road-straight", 90]
 		10: return ["road-straight", 0]
-		3: return ["road-bend", 270]
-		6: return ["road-bend", 180]
-		12: return ["road-bend", 90]
-		9: return ["road-bend", 0]
-		7: return ["road-intersection", 180]
-		14: return ["road-intersection", 90]
-		13: return ["road-intersection", 0]
-		11: return ["road-intersection", 270]
+		3: return ["road-bend", 0]
+		9: return ["road-bend", 90]
+		12: return ["road-bend", 180]
+		6: return ["road-bend", 270]
+		14: return ["road-intersection", 0]
+		7: return ["road-intersection", 90]
+		11: return ["road-intersection", 180]
+		13: return ["road-intersection", 270]
 		_: return ["road-crossroad", 0]
 
 
