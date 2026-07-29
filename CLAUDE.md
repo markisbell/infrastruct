@@ -116,6 +116,12 @@ start_game.bat
 .tools/godot/...console.exe --headless --path game -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://tests --ignoreHeadlessMode
 # shared contract suite (all four backends, spawns them itself)
 .venv/Scripts/python.exe -m pytest tests/contract -q
+# Windows installer (clean-PC install, per-user, no admin/Python/Godot):
+#   prerequisites once: .tools/windows_release_x86_64.exe (from the official
+#   4.7.1 export-templates tpz) + Inno Setup 6 (ISCC, per-user install ok)
+powershell -File tools/installer/build_installer.ps1
+#   -> .tools/dist-build/infrastruct-setup-<v>.exe (~330 MB; payload = exported
+#   game exe + 3 PyInstaller-frozen backends + their data + dist sidecars.json)
 # visual modes (need a window, NOT --headless)
 ...win64.exe --path game --resolution 1600x900 -- --screenshot=out.png   # demo town
 ...                                              -- --roadtest=out.png   # road pieces + crossing
@@ -160,6 +166,13 @@ pandapower pins, keep separate), `.venv-water` (rtwaterflow).
   restore clock BEFORE `Scenarios.start` (start_day reads the clock).
 - **Screenshots need a real window** (headless GPU capture hangs); the batch
   Add-Content BOM corrupts JSON — use the Write tool for config files.
+- **Godot 4 has NO "standalone" feature tag** — detect exported builds via
+  the ABSENCE of "editor" (`globalize_path("res://")` is useless in exports;
+  use `OS.get_executable_path().get_base_dir()`). ISCC dies on MAX_PATH for
+  the frozen pandapipes tree — the build script compiles through a subst'd
+  drive letter. The obsolete `pathlib` backport in `.venv-heat` blocks
+  PyInstaller (uninstall it). Verify installs by running the STAGED exe with
+  `--headless -- --smoke=sidecars` (never test-install blind).
 - Commits end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`;
   push to origin main + backend gamebridge branches at milestone completion.
 - The user's memory preference: **lean solo work; state the scale and ask

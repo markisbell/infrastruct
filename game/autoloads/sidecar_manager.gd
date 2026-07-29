@@ -23,8 +23,14 @@ var _poll_timer: Timer
 
 
 func _ready() -> void:
-	var game_dir := ProjectSettings.globalize_path("res://")
-	repo_root = game_dir.rstrip("/").get_base_dir()
+	if OS.has_feature("editor"):
+		var game_dir := ProjectSettings.globalize_path("res://")
+		repo_root = game_dir.rstrip("/").get_base_dir()
+	else:
+		# exported build (Godot 4 has no "standalone" tag — check for the
+		# ABSENCE of "editor"): everything (orchestration/, backends/)
+		# sits next to the executable — the installer lays it out that way
+		repo_root = OS.get_executable_path().get_base_dir()
 	_poll_timer = Timer.new()
 	_poll_timer.wait_time = POLL_INTERVAL_S
 	_poll_timer.timeout.connect(_poll)
@@ -100,9 +106,11 @@ func _start(id: String) -> void:
 	var parts: Array[String] = ['cd /d "%s"' % repo_root.path_join(cfg["cwd"])]
 	for key: String in cfg.get("env", {}):
 		parts.append('set "%s=%s"' % [key, cfg["env"][key]])
-	parts.append('"%s" -m %s >> "%s" 2>&1' % [
-		repo_root.path_join(cfg["python"]),
-		cfg["module"],
+	# dev: venv python -m module; installed build: a PyInstaller-frozen exe
+	var run := '"%s"' % repo_root.path_join(cfg["exe"]) if cfg.has("exe") \
+		else '"%s" -m %s' % [repo_root.path_join(cfg["python"]), cfg["module"]]
+	parts.append('%s >> "%s" 2>&1' % [
+		run,
 		# port in the name: parallel instances (live game + stress run) must
 		# never interleave in one file
 		log_dir.path_join("%s_%d.log" % [id, port_of(id)]),
