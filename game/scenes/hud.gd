@@ -160,6 +160,7 @@ func _ready() -> void:
 	_render_thumbnails()  # async: icons replace the monograms as they render
 	_make_breakdown()
 	view.building_clicked.connect(_open_inspector)
+	view.tile_infra_clicked.connect(_open_tile_inspector)
 
 	City.state_changed.connect(_refresh)
 	City.event_logged.connect(_on_event)
@@ -415,6 +416,37 @@ func _inspector_config(kind: String, id: String) -> Dictionary:
 	return {}
 
 
+## Line/pipe clicks: power lines carry real per-segment loading (contract
+## 1.1 edges); heat/water pipes have no per-pipe wire data, so they open
+## the network-total graph — honest about what the solver reports.
+func _open_tile_inspector(category: String, pos: Vector2i) -> void:
+	match category:
+		"cable":
+			var edge := City.topo.line_id_at(pos)
+			if edge == "":
+				return  # stub or tripped: nothing solved here
+			var buried: bool = int(City.model.cables.get(pos, 1)) \
+				== BuildingDefs.LINE_UNDERGROUND
+			_show_config({
+				"title": ("Underground cable" if buried else "Overhead line"),
+				"unit": "%", "dec": 0, "base_zero": true, "y": "Loading [%]",
+				"limits": [{"value": 100.0, "label": "rating",
+					"color": Color(0.95, 0.3, 0.25)}],
+				"series": [{"key": City.topo.line_key(edge), "label": "Loading",
+					"color": Color(0.31, 0.76, 0.97)}]}, edge)
+		"heat_pipe":
+			_show_config({"title": "District heating network", "unit": "kW",
+				"dec": 0, "base_zero": true, "y": "Total heat load [kW]",
+				"limits": [],
+				"series": [{"key": "net:heat", "label": "Heat load",
+					"color": Color(0.9, 0.35, 0.25)}]}, "all zones")
+		"water_pipe":
+			_show_config({"title": "Water network", "unit": "m³/h", "dec": 2,
+				"base_zero": true, "y": "Total demand [m³/h]", "limits": [],
+				"series": [{"key": "net:water", "label": "Demand",
+					"color": Color(0.25, 0.75, 0.5)}]}, "all zones")
+
+
 func _open_inspector(id: String) -> void:
 	if not City.model.buildings.has(id):
 		return
@@ -422,6 +454,10 @@ func _open_inspector(id: String) -> void:
 	var config := _inspector_config(kind, id)
 	if config.is_empty():
 		return
+	_show_config(config, id)
+
+
+func _show_config(config: Dictionary, subtitle: String) -> void:
 	if _inspector == null:
 		_inspector = PanelContainer.new()
 		_inspector.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -456,7 +492,7 @@ func _open_inspector(id: String) -> void:
 			network_signal.connect(func(_t: int, _r: Dictionary) -> void:
 				if _inspector.visible:
 					_inspector_graph.queue_redraw())
-	_inspector_title.text = "%s   (%s)" % [config["title"], id]
+	_inspector_title.text = "%s   (%s)" % [config["title"], subtitle]
 	_inspector_live.text = "Today opaque · yesterday faded · dashed = limit"
 	var series_typed: Array[Dictionary] = []
 	series_typed.assign(config["series"])

@@ -26,6 +26,8 @@ const KENNEY := "res://assets/kenney/"
 
 ## Left click with NO tool active selects infrastructure (HUD inspector).
 signal building_clicked(id: String)
+## Same for line/pipe tiles: category is "cable" | "heat_pipe" | "water_pipe".
+signal tile_infra_clicked(category: String, pos: Vector2i)
 
 ## Network color language (user direction): heat = red/blue double pipe
 ## (forward/return — physically honest, the backend models both sides);
@@ -1321,6 +1323,12 @@ func _apply_tool(pos: Vector2i) -> void:
 			var id: String = City.model.building_tiles.get(pos, "")
 			if id != "":
 				building_clicked.emit(id)
+			elif City.model.cables.has(pos):
+				tile_infra_clicked.emit("cable", pos)
+			elif City.model.heat_pipes.has(pos):
+				tile_infra_clicked.emit("heat_pipe", pos)
+			elif City.model.water_pipes.has(pos):
+				tile_infra_clicked.emit("water_pipe", pos)
 			_painting = false
 		Tool.ROAD:
 			City.build_road(pos)

@@ -234,6 +234,24 @@ static func _kind_transition(cable: Dictionary, pos: Vector2i) -> bool:
 	return false
 
 
+## The solved segment covering a cable tile ("L<idx>"), "" if none (stubs,
+## tripped tiles).
+func line_id_at(pos: Vector2i) -> String:
+	for edge_id: String in line_tiles:
+		if (line_tiles[edge_id] as Array).has(pos):
+			return edge_id
+	return ""
+
+
+## Stable telemetry key for a segment: its middle tile — unlike the
+## L-indices, which are renumbered on every topology rebuild, the middle
+## tile of a physical run survives most edits.
+func line_key(edge_id: String) -> String:
+	var path: Array = line_tiles[edge_id]
+	var mid: Vector2i = path[path.size() / 2]
+	return "line:%d,%d" % [mid.x, mid.y]
+
+
 static func _bus_name(key: Variant) -> String:
 	return "bb_%s" % key if not str(key).begins_with("j:") \
 		else "bj_%s" % str(key).trim_prefix("j:").replace(",", "_")

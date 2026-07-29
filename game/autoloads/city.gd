@@ -642,6 +642,10 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		_telemetry_put("dev:" + device_id, t, float(device.get("output_kw", NAN)))
 		if device.get("soc") != null:
 			_telemetry_put("soc:" + device_id, t, 100.0 * float(device["soc"]))
+	for edge_id: String in result.get("edges", {}):
+		if topo.line_tiles.has(edge_id):  # per-segment loading (line clicks)
+			_telemetry_put(topo.line_key(edge_id), t,
+				float(result["edges"][edge_id].get("loading_percent", NAN)))
 
 	_check_protection(t, result)
 	_update_capacity_warnings(t, result)
@@ -707,12 +711,17 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 		if cold_houses > 0 and t % 8 == 0:
 			log_event("cold_homes", "warning",
 				"%d houses without adequate heat (%.0f°C outside)" % [cold_houses, temp])
-	# telemetry: zone supply temperatures + plant/storage outputs
+	# telemetry: zone supply temperatures + plant/storage outputs + the
+	# network total (what a pipe click shows — no per-pipe wire data)
+	var net_heat := 0.0
 	for zone_id: String in heat_topo.zones_info:
+		net_heat += DemandModel.heat_zone_demand_kw(
+			heat_topo.zones_info[zone_id]["houses"], t, temp)
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
 		if not zone_result.is_empty():
 			_telemetry_put("t:" + zone_id, t,
 				float(zone_result.get("detail", {}).get("t_supply_c", NAN)))
+	_telemetry_put("net:heat", t, net_heat)
 	for device_id: String in result.get("devices", {}):
 		var device: Dictionary = result["devices"][device_id]
 		_telemetry_put("dev:" + device_id, t,
@@ -795,12 +804,17 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 			log_event("dry_taps", "critical",
 				"Water pressure collapsed — %.0f%% of homes short of water"
 				% (100.0 * hurt))
-	# telemetry: zone pressures + source flows/levels
+	# telemetry: zone pressures + source flows/levels + the network total
+	var temp_net := float(weather.sample(t)["temp_c"])
+	var net_water := 0.0
 	for zone_id: String in water_topo.zones_info:
+		net_water += DemandModel.water_zone_demand_m3h(
+			water_topo.zones_info[zone_id]["houses"], t, temp_net)
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
 		if not zone_result.is_empty():
 			_telemetry_put("pb:" + zone_id, t,
 				float(zone_result.get("detail", {}).get("p_bar", NAN)))
+	_telemetry_put("net:water", t, net_water)
 	for device_id: String in result.get("devices", {}):
 		var device: Dictionary = result["devices"][device_id]
 		var q := float(device.get("detail", {}).get("q_m3h", NAN))
