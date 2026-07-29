@@ -90,6 +90,27 @@ const WATER_SOURCE_KINDS: Array[String] = ["well", "pumping_station", "water_tow
 
 const COSTS := {"road": 40, "cable": 120, "zone": 10, "heat_pipe": 350, "water_pipe": 180}
 
+## Fixed O&M per building per game-day, € (Phase 7 economy; rationale in
+## tools/balancing/economy.md — sized so a ~25-house town runs thin-but-
+## positive margins and growth widens them).
+const UPKEEP_DAY := {
+	"substation": 5.0, "heat_exchanger": 6.0, "water_station": 5.0,
+	"boiler_plant": 30.0, "chp_plant": 50.0, "heat_pump_plant": 25.0,
+	"heat_storage": 8.0, "grid_connection": 20.0, "gas_plant": 40.0,
+	"wind_farm": 35.0, "solar_park": 15.0, "battery": 12.0,
+	"well": 8.0, "pumping_station": 15.0, "water_tower": 10.0,
+}
+
+## Mean time between random equipment failures, game-days (Phase 7 events).
+## Slack-ish kinds (grid connection, the heat slack plant) are exempt in
+## EventSystem — losing the pressure/voltage boundary isn't an "outage",
+## it's an unsolvable network.
+const MTBF_DAYS := {
+	"gas_plant": 45.0, "chp_plant": 45.0, "heat_pump_plant": 60.0,
+	"wind_farm": 60.0, "solar_park": 90.0, "battery": 90.0,
+	"pumping_station": 50.0, "well": 90.0, "heat_storage": 90.0,
+}
+
 
 static func get_def(kind: String) -> Dictionary:
 	return DEFS.get(kind, {})

@@ -273,6 +273,10 @@ func _make_breakdown() -> void:
 		note.modulate = Color(1, 1, 1, 0.7)
 		box.add_child(note)
 		_breakdown_notes[row[0]] = note
+	_make_budget_section(box)
+
+
+var _budget_label: Label
 
 
 func _refresh_breakdown() -> void:
@@ -286,6 +290,128 @@ func _refresh_breakdown() -> void:
 	for network: String in _breakdown_bars:
 		(_breakdown_bars[network] as ProgressBar).value = float(City.satisfaction[network])
 		(_breakdown_notes[network] as Label).text = "%d outage-min on record" % outages[network]
+	var e: Dictionary = City.econ_yesterday
+	var income := float(e.get("income_elec", 0.0)) + float(e.get("income_heat", 0.0)) \
+		+ float(e.get("income_water", 0.0)) + float(e.get("income_feedin", 0.0))
+	var costs := float(e.get("cost_fuel", 0.0)) + float(e.get("cost_upkeep", 0.0)) \
+		+ float(e.get("cost_grid", 0.0)) + float(e.get("cost_interest", 0.0))
+	_budget_label.text = "— Budget (yesterday) —
+Income  €%.0f   (el %.0f · heat %.0f · water %.0f · feed-in %.0f)
+Costs   €%.0f   (fuel %.0f · upkeep %.0f · grid %.0f · interest %.0f)
+Net     €%.0f       Loans outstanding €%.0f" % [
+		income, e.get("income_elec", 0.0), e.get("income_heat", 0.0),
+		e.get("income_water", 0.0), e.get("income_feedin", 0.0),
+		costs, e.get("cost_fuel", 0.0), e.get("cost_upkeep", 0.0),
+		e.get("cost_grid", 0.0), e.get("cost_interest", 0.0),
+		income + costs, City.loans]
+
+
+func _make_budget_section(box: VBoxContainer) -> void:
+	_budget_label = Label.new()
+	_budget_label.add_theme_font_size_override("font_size", 11)
+	box.add_child(_budget_label)
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	var take := Button.new()
+	take.text = "Take €100k loan"
+	take.focus_mode = Control.FOCUS_NONE
+	take.pressed.connect(func() -> void:
+		City.take_loan(100_000.0)
+		_refresh_breakdown())
+	row.add_child(take)
+	var repay := Button.new()
+	repay.text = "Repay €100k"
+	repay.focus_mode = Control.FOCUS_NONE
+	repay.pressed.connect(func() -> void:
+		City.repay_loan(100_000.0)
+		_refresh_breakdown())
+	row.add_child(repay)
+
+
+# ─── scenario UI (Phase 7): objective line, win/lose banner, picker ───
+
+var _objective: Label
+var _banner: Label
+
+
+func show_objective(text: String) -> void:
+	if _objective == null:
+		_objective = Label.new()
+		_objective.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_objective.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_objective.offset_top = 48.0
+		_objective.add_theme_color_override("font_color", Color(1.0, 0.9, 0.5))
+		_objective.add_theme_font_size_override("font_size", 15)
+		add_child(_objective)
+	_objective.text = text
+	_objective.visible = text != ""
+
+
+func show_banner(text: String, color: Color) -> void:
+	if _banner == null:
+		_banner = Label.new()
+		_banner.set_anchors_preset(Control.PRESET_CENTER)
+		_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_banner.grow_vertical = Control.GROW_DIRECTION_BOTH
+		_banner.add_theme_font_size_override("font_size", 42)
+		_banner.add_theme_constant_override("outline_size", 8)
+		add_child(_banner)
+	_banner.text = text
+	_banner.add_theme_color_override("font_color", color)
+	_banner.visible = true
+
+
+## Scenario + difficulty picker shown at boot; calls back with (id, diff).
+func show_scenario_picker(on_pick: Callable) -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0.05, 0.06, 0.1, 0.75)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(dim)
+	var panel := PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	add_child(panel)
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(460, 0)
+	box.add_theme_constant_override("separation", 8)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "infrastruct — choose a scenario"
+	title.add_theme_font_size_override("font_size", 18)
+	box.add_child(title)
+	var diff_row := HBoxContainer.new()
+	box.add_child(diff_row)
+	diff_row.add_child(Label.new())
+	(diff_row.get_child(0) as Label).text = "Difficulty: "
+	var diff_group := ButtonGroup.new()
+	var picked := {"diff": "normal"}
+	for key: String in ["easy", "normal", "hard"]:
+		var toggle := Button.new()
+		toggle.text = key
+		toggle.toggle_mode = true
+		toggle.button_group = diff_group
+		toggle.focus_mode = Control.FOCUS_NONE
+		toggle.set_pressed_no_signal(key == "normal")
+		toggle.pressed.connect(func() -> void: picked["diff"] = key)
+		diff_row.add_child(toggle)
+	for scenario: Dictionary in Scenarios.catalog():
+		var button := Button.new()
+		button.text = scenario["name"]
+		button.tooltip_text = scenario["desc"]
+		button.focus_mode = Control.FOCUS_NONE
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.pressed.connect(func() -> void:
+			dim.queue_free()
+			panel.queue_free()
+			on_pick.call(scenario["id"], picked["diff"]))
+		box.add_child(button)
+		var desc := Label.new()
+		desc.text = scenario["desc"]
+		desc.add_theme_font_size_override("font_size", 11)
+		desc.modulate = Color(1, 1, 1, 0.65)
+		desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		box.add_child(desc)
 
 
 # ─── palette thumbnails: each tool's real 3D visual, rendered once into a

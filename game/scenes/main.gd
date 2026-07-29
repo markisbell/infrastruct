@@ -68,27 +68,77 @@ func _ready() -> void:
 			_smoke_yearcurves()
 		"citylife":
 			_smoke_citylife()
+		"economy":
+			_smoke_economy()
+		"events":
+			_smoke_events()
+		"scenarios":
+			_smoke_scenarios()
 		_:
 			_boot_game()
 
 
-## Boot terrain: scanned for a flat central plateau (buildable start) with
-## the full 0-5 relief within the starting camera's reach.
-const BOOT_TERRAIN_SEED := 19
+var _hud: Hud
+var _scenario_state := {}
+var _tutorial_steps: Array[Dictionary] = []
+var _tutorial_idx := 0
 
 
 func _boot_game() -> void:
-	City.model.terrain.set_seed(BOOT_TERRAIN_SEED)
-	view.redraw()
-	var hud := Hud.new()
-	hud.view = view
-	add_child(hud)
+	_hud = Hud.new()
+	_hud.view = view
+	add_child(_hud)
 	if SidecarManager.load_config():
 		SidecarManager.start_all()
 		SidecarManager.state_changed.connect(_on_sidecar_state)
 		_add_debug_panel()
+	GameClock.speed = 0.0  # paused until a scenario is picked
+	_hud.show_scenario_picker(_start_scenario)
+
+
+func _start_scenario(id: String, difficulty_key: String) -> void:
+	_scenario_state = Scenarios.start(id, difficulty_key)
+	view.redraw()
+	if id == "tutorial":
+		_tutorial_steps = Scenarios.tutorial_steps()
+		_tutorial_idx = 0
+		_hud.show_objective(_tutorial_steps[0]["text"])
+		City.world_changed.connect(_check_tutorial)
+	else:
+		for scenario: Dictionary in Scenarios.catalog():
+			if scenario["id"] == id and id not in ["sandbox"]:
+				_hud.show_objective("GOAL: " + scenario["desc"])
+	GameClock.sim_step.connect(_on_scenario_step)
 	# lively default: one sim step every ~2 s of play (SPACE pauses, +/- adjust)
 	GameClock.speed = 8.0
+
+
+func _check_tutorial() -> void:
+	if _tutorial_steps.is_empty() or _tutorial_idx >= _tutorial_steps.size() - 1:
+		return
+	if (_tutorial_steps[_tutorial_idx]["done"] as Callable).call():
+		_tutorial_idx += 1
+		_hud.show_objective(_tutorial_steps[_tutorial_idx]["text"])
+
+
+func _on_scenario_step(t: int) -> void:
+	_check_tutorial()  # house-count steps advance on sim time, not builds
+	if _scenario_state.get("done", true) \
+			or _scenario_state.get("id", "") in ["sandbox", "tutorial"]:
+		return
+	if t % 96 != 0:  # verdicts fall at midnight
+		return
+	var verdict := Scenarios.evaluate(_scenario_state, t / 96)
+	if verdict == "":
+		return
+	_scenario_state["done"] = true
+	if verdict == "win":
+		_hud.show_banner("SCENARIO COMPLETE", Color(0.4, 0.95, 0.5))
+		City.log_event("scenario_won", "info", "Scenario objective reached!")
+	else:
+		_hud.show_banner("SCENARIO FAILED", Color(0.95, 0.3, 0.25))
+		City.log_event("scenario_lost", "critical", "Scenario failed.")
+	GameClock.pause()
 
 
 func _on_sidecar_state(id: String, state: SidecarManager.State) -> void:
@@ -1137,7 +1187,7 @@ func _smoke_hilltower() -> void:
 ## farm either (300 kW of export trips a 98 kVA feeder).
 func _build_reference_city(seed_houses: int) -> void:
 	City.place_building("grid_connection", Vector2i(6, 4))
-	for x in range(8, 31):
+	for x in range(8, 32):  # ..31: the east column hangs off (31,5)
 		City.build_cable(Vector2i(x, 5))
 	City.place_building("gas_plant", Vector2i(16, 3))
 	City.place_building("solar_park", Vector2i(20, 3))
@@ -1152,6 +1202,8 @@ func _build_reference_city(seed_houses: int) -> void:
 		City.build_road(Vector2i(x, 11))
 	for x in range(8, 25):
 		City.build_zone(Vector2i(x, 9))
+	for x in range(8, 25):
+		City.build_zone(Vector2i(x, 10))  # served by the y=11 road
 	for x in range(8, 19):
 		City.build_zone(Vector2i(x, 12))
 	City.place_building("boiler_plant", Vector2i(6, 13))
@@ -1393,6 +1445,311 @@ func _smoke_citylife() -> void:
 	if not ok:  # unsupplied-step trace (t, v_pu, status) — the debugging view
 		report["A_dark_steps"] = dark_steps
 	print("SMOKE_CITYLIFE ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+# ─── Phase 7 acceptance scenarios (game layer) ───
+
+static func _econ_delta(now: Dictionary, then: Dictionary) -> Dictionary:
+	var out := {}
+	for key: String in now:
+		var d: float = now[key] - float(then.get(key, 0.0))
+		if absf(d) > 0.005:
+			out[key] = snappedf(d, 0.01)
+	return out
+
+
+static func _econ_net(delta: Dictionary) -> float:
+	var net := 0.0
+	for key: String in delta:
+		if not key.begins_with("loan"):
+			net += delta[key]
+	return net
+
+
+## Economy acceptance: tariffs earn on DELIVERED energy/water, fuel tracks
+## the solved plant output, seasons move both — and a blackout day visibly
+## costs revenue. Window totals land in tools/balancing/economy_windows.csv.
+func _smoke_economy() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_ECONOMY", "health timeout")
+		return
+	City.reset_for_scenario(42)
+	City.growth_enabled = false
+	_build_reference_city(24)
+	City._topo_dirty = true
+	if not await _wait_three_registered(240.0):
+		_fail("SMOKE_ECONOMY", "register timeout")
+		return
+	var snaps: Array[Dictionary] = []
+	for start_day: int in [301, 133]:  # winter, summer — 2 days each
+		GameClock.restore({"total_minutes": start_day * 1440.0, "speed": 0.0})
+		Orchestrator.start()
+		var before := City.econ_total.duplicate()
+		await _run_steps(192, 600.0, 200.0)
+		snaps.append(_econ_delta(City.econ_total, before))
+	# a scripted blackout day: the grid trips, delivered energy collapses
+	GameClock.restore({"total_minutes": 303.0 * 1440.0, "speed": 0.0})
+	City.grid_trip_until = 1_000_000
+	Orchestrator.start()
+	var before_dark := City.econ_total.duplicate()
+	await _run_steps(96, 400.0, 200.0)
+	var dark := _econ_delta(City.econ_total, before_dark)
+	var winter: Dictionary = snaps[0]
+	var summer: Dictionary = snaps[1]
+	# balancing sheet: category totals per window
+	var csv := "category,winter_2d,summer_2d,blackout_1d\n"
+	var keys := {}
+	for window: Dictionary in [winter, summer, dark]:
+		for key: String in window:
+			keys[key] = true
+	var sorted_keys := keys.keys()
+	sorted_keys.sort()
+	for key: String in sorted_keys:
+		csv += "%s,%.2f,%.2f,%.2f\n" % [key, winter.get(key, 0.0),
+			summer.get(key, 0.0), dark.get(key, 0.0)]
+	var csv_path := ProjectSettings.globalize_path("res://") \
+		+ "../tools/balancing/economy_windows.csv"
+	var f := FileAccess.open(csv_path, FileAccess.WRITE)
+	if f:
+		f.store_string(csv)
+		f.close()
+	var report := {
+		"ok": float(winter.get("income_elec", 0.0)) > 0.0
+			and float(winter.get("income_heat", 0.0)) > 0.0
+			and float(winter.get("income_water", 0.0)) > 0.0
+			and float(winter.get("cost_fuel", 0.0)) < 0.0
+			and float(winter.get("cost_upkeep", 0.0)) < 0.0
+			and float(winter.get("income_heat", 0.0)) > 2.0 * float(summer.get("income_heat", 0.0))
+			and absf(float(winter.get("cost_fuel", 0.0))) > absf(float(summer.get("cost_fuel", 0.0)))
+			and _econ_net(winter) + _econ_net(summer) > 0.0
+			and float(dark.get("income_elec", 0.0)) < 0.2 * float(winter.get("income_elec", 1.0)) / 2.0,
+		"winter_2d": winter, "summer_2d": summer, "blackout_1d": dark,
+		"net_winter": snappedf(_econ_net(winter), 0.01),
+		"net_summer": snappedf(_econ_net(summer), 0.01),
+		"csv": csv_path,
+	}
+	print("SMOKE_ECONOMY ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+## Failure events: every kind exercised scripted, consequences physically
+## solved — storm cut-out, equipment failure + repair, planned maintenance,
+## hydrant fire flow (pressure sag), pipe burst (topology loss + recovery).
+func _smoke_events() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_EVENTS", "health timeout")
+		return
+	City.reset_for_scenario(42)
+	City.growth_enabled = false
+	_build_reference_city(24)
+	City.place_building("wind_farm", Vector2i(27, 3))  # storm test subject
+	City._topo_dirty = true
+	if not await _wait_three_registered(240.0):
+		_fail("SMOKE_EVENTS", "register timeout")
+		return
+	var wind_id: String = City.model.buildings_of_kind("wind_farm")[0]
+	var gas_id: String = City.model.buildings_of_kind("gas_plant")[0]
+	var pump_id: String = City.model.buildings_of_kind("pumping_station")[0]
+	var zone_id: String = "wz_" + City.model.buildings_of_kind("water_station")[0]
+	var wind_out := func() -> float:
+		return float(City.last_result.get("devices", {})
+			.get(wind_id, {}).get("output_kw", -1.0))
+	var gas_out := func() -> float:
+		return float(City.last_result.get("devices", {})
+			.get(gas_id, {}).get("output_kw", -1.0))
+	var pump_q := func() -> float:
+		return float(City.last_water_result.get("devices", {})
+			.get(pump_id, {}).get("detail", {}).get("q_m3h", -1.0))
+
+	# steady breeze so the turbines have something to lose — 7 m/s ≈ 26 kW;
+	# 10 m/s was 141 kW and TRIPPED the feeder, islanding half the city
+	City.weather.force_wind(0, 1_000_000, 7.0)
+	GameClock.restore({"total_minutes": 301.0 * 1440.0 + 17.0 * 60.0, "speed": 0.0})
+	Orchestrator.start()
+	await _run_steps(6, 240.0)
+	var wind_pre: float = wind_out.call()
+	var p_bar_pre := _water_p_bar(zone_id)
+	var pump_pre: float = pump_q.call()
+
+	# 1. STORM: forced above the 25 m/s cut-out — output must drop to zero
+	City._apply_event(City.event_system.force_storm(City.weather, City.current_t), City.current_t)
+	await _run_steps(4, 240.0)
+	var wind_storm: float = wind_out.call()
+	var gas_storm: float = gas_out.call()  # dark + windless: gas carries the town
+
+	# 2. EQUIPMENT FAILURE on the gas plant (repair crew: 24 steps)
+	City._apply_event(City.event_system.force_equipment_failure(gas_id, City.current_t), City.current_t)
+	await _run_steps(4, 240.0)
+	var gas_down: float = gas_out.call()
+	await _run_steps(24, 300.0)
+	var gas_back: float = gas_out.call()
+
+	# 3. PLANNED MAINTENANCE on the pumping station
+	City._apply_event(City.event_system.schedule_maintenance(pump_id, City.current_t, 8), City.current_t)
+	await _run_steps(4, 240.0)
+	var pump_maint: float = pump_q.call()
+
+	# 4. FIRE: hydrant flow sags the zone pressure, physically solved
+	await _run_steps(8, 240.0)  # let the pump come back first
+	var p_bar_before_fire := _water_p_bar(zone_id)
+	City._apply_event(City.event_system.force_fire(zone_id, City.current_t), City.current_t)
+	await _run_steps(4, 240.0)
+	var p_bar_fire := _water_p_bar(zone_id)
+
+	# 5. PIPE BURST on the trunk: the only head is cut off — network down,
+	# repair + resync bring it back
+	await _run_steps(8, 240.0)
+	City._apply_event(City.event_system.make_burst(Vector2i(10, 17),
+		["%s" % zone_id], City.current_t), City.current_t)
+	await _run_steps(10, 300.0)
+	var water_down_during_burst := not City.water_registered \
+		or City.water_topo.zones_info.is_empty()
+	await _run_steps(24, 400.0)
+	var supplied_after := _water_supplied(zone_id)
+
+	var report := {
+		"ok": wind_pre > 10.0 and wind_storm == 0.0 and gas_storm > 5.0
+			and gas_down == 0.0 and gas_back > 5.0
+			and pump_pre > 0.0 and pump_maint == 0.0
+			and p_bar_fire < p_bar_before_fire - 0.05
+			and water_down_during_burst and supplied_after >= 0.99,
+		"wind_pre": snappedf(wind_pre, 0.1), "wind_storm": wind_storm,
+		"gas_storm": snappedf(gas_storm, 0.1), "gas_down": gas_down,
+		"gas_back": snappedf(gas_back, 0.1),
+		"pump_pre": snappedf(pump_pre, 0.1), "pump_maint": pump_maint,
+		"p_bar_pre": snappedf(p_bar_pre, 0.01),
+		"p_bar_before_fire": snappedf(p_bar_before_fire, 0.01),
+		"p_bar_fire": snappedf(p_bar_fire, 0.01),
+		"water_down_during_burst": water_down_during_burst,
+		"supplied_after_burst": snappedf(supplied_after, 0.01),
+		"orch": Orchestrator.stats,
+	}
+	print("SMOKE_EVENTS ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+## Scenario acceptance: greenfield is winnable (with a loan), the inherited
+## grid loses on its own, the energy transition is winnable by retiring the
+## fossil plant, and the tutorial chain advances step by step.
+func _smoke_scenarios() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_SCENARIOS", "health timeout")
+		return
+
+	# ── A: greenfield — loan, build, grow to the win
+	var state := Scenarios.start("greenfield", "normal")
+	City.take_loan(200_000.0)
+	_build_reference_city(6)
+	City._topo_dirty = true
+	if not await _wait_three_registered(240.0):
+		_fail("SMOKE_SCENARIOS", "register timeout (greenfield)")
+		return
+	var verdict_green := ""
+	for i in 8:
+		GameClock.restore({"total_minutes": (10.0 + i) * 1440.0, "speed": 0.0})
+		Orchestrator.start()
+		await _run_steps(96, 400.0, 240.0)
+		verdict_green = Scenarios.evaluate(state, City.current_t / 96)
+		if verdict_green != "":
+			break
+	var green_houses := City.model.houses.size()
+
+	# ── B: inherited grid — do nothing, watch it lose
+	state = Scenarios.start("brownfield", "normal")
+	City._topo_dirty = true
+	if not await _wait_registered(240.0):
+		_fail("SMOKE_SCENARIOS", "register timeout (brownfield)")
+		return
+	var verdict_brown := ""
+	for i in 16:
+		GameClock.restore({"total_minutes": (301.0 + i) * 1440.0, "speed": 0.0})
+		Orchestrator.start()
+		await _run_steps(96, 400.0, 240.0)
+		verdict_brown = Scenarios.evaluate(state, City.current_t / 96)
+		if verdict_brown != "":
+			break
+	var brown_happiness := City.happiness
+	var brown_state := state.duplicate()
+
+	# ── C: energy transition — retire the fossil plant, win
+	GameClock.restore({"total_minutes": 100.0 * 1440.0, "speed": 0.0})
+	state = Scenarios.start("transition", "normal")
+	City._topo_dirty = true
+	if not await _wait_three_registered(240.0):
+		_fail("SMOKE_SCENARIOS", "register timeout (transition)")
+		return
+	var fossil: Vector2i = City.model.buildings[
+		City.model.buildings_of_kind("gas_plant")[0]]["anchor"]
+	City.bulldoze(fossil)
+	City.place_building("solar_park", Vector2i(20, 3))
+	City.place_building("battery", Vector2i(25, 4))
+	var verdict_transition := ""
+	for i in 10:
+		GameClock.restore({"total_minutes": (100.0 + i) * 1440.0, "speed": 0.0})
+		Orchestrator.start()
+		await _run_steps(96, 400.0, 240.0)
+		verdict_transition = Scenarios.evaluate(state, City.current_t / 96)
+		if verdict_transition != "":
+			break
+
+	# ── D: tutorial chain — perform each step, predicates must advance
+	Scenarios.start("tutorial", "normal")
+	var steps := Scenarios.tutorial_steps()
+	var tutorial_ok := true
+	City.place_building("grid_connection", Vector2i(6, 4))
+	tutorial_ok = tutorial_ok and (steps[0]["done"] as Callable).call()
+	for x in range(8, 13):
+		City.build_cable(Vector2i(x, 5))
+	City.place_building("substation", Vector2i(12, 6))
+	City._refresh_topo_assignment()
+	tutorial_ok = tutorial_ok and (steps[1]["done"] as Callable).call()
+	for x in range(8, 17):
+		City.build_road(Vector2i(x, 8))
+	for x in range(8, 17):
+		City.build_zone(Vector2i(x, 9))
+	tutorial_ok = tutorial_ok and (steps[2]["done"] as Callable).call()
+	for x in range(8, 11):
+		City.model.spawn_house(Vector2i(x, 9))
+	City._refresh_topo_assignment()
+	tutorial_ok = tutorial_ok and (steps[3]["done"] as Callable).call()
+	City.place_building("boiler_plant", Vector2i(6, 13))
+	for x in range(8, 13):
+		City.build_heat_pipe(Vector2i(x, 14))
+	tutorial_ok = tutorial_ok and (steps[4]["done"] as Callable).call()
+	City.place_building("heat_exchanger", Vector2i(13, 14))
+	City._refresh_topo_assignment()
+	tutorial_ok = tutorial_ok and (steps[5]["done"] as Callable).call()
+	City.place_building("water_tower", Vector2i(6, 17))
+	for x in range(7, 13):
+		City.build_water_pipe(Vector2i(x, 17))
+	tutorial_ok = tutorial_ok and (steps[6]["done"] as Callable).call()
+	City.place_building("water_station", Vector2i(13, 17))
+	City._refresh_topo_assignment()
+	tutorial_ok = tutorial_ok and (steps[7]["done"] as Callable).call()
+
+	var report := {
+		"ok": verdict_green == "win" and green_houses >= 25
+			and verdict_brown == "lose" and brown_happiness < 20.0
+			and verdict_transition == "win" and tutorial_ok,
+		"greenfield": verdict_green, "greenfield_houses": green_houses,
+		"brownfield": verdict_brown,
+		"brownfield_happiness": snappedf(brown_happiness, 0.1),
+		"brownfield_state": brown_state,
+		"transition": verdict_transition,
+		"tutorial_chain": tutorial_ok,
+		"orch": Orchestrator.stats,
+	}
+	print("SMOKE_SCENARIOS ", JSON.stringify(report))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if report["ok"] else 1)
 

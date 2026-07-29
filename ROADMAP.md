@@ -456,6 +456,20 @@ Tasks:
 
 **Goal:** turn the simulator into a game.
 
+> **Status (2026-07-29): done** — economy (tariffs on DELIVERED kWh/m³ +
+> Grundgebühr, fuel from solved StepResults, upkeep, wholesale import/feed-in,
+> loans; budget section in the `I` panel; constants + measured windows in
+> `tools/balancing/economy.md` — ≈ +€30/day at 24 houses, blackout days book €0
+> electricity). Events (seeded MTBF failures, player-schedulable maintenance,
+> storm 27 m/s → real turbine cut-out, heat wave/deep frost/drought, W 405 fire
+> flow sagging zone pressure by 0.09 bar, pipe bursts tripping the topology) —
+> all five kinds smoke-verified physically. Scenarios: greenfield (win at 29
+> houses, loan-financed), inherited grid (loses through the misery streak on its
+> own), energy transition (win by retiring the fossil plant), tutorial chain +
+> picker with easy/normal/hard difficulty. Mid-pipe emitter leaks (rtwaterflow
+> native machinery) need a contract 1.2 device kind → Phase 8. The human tutorial
+> playthrough remains for the user to run — everything scripted passes.
+
 Tasks:
 1. Economy: construction + running costs (fuel tracks usage from StepResults), utility
    tariffs as income (per kWh/m³ actually delivered), budget UI, loans.
