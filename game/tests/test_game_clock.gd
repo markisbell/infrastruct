@@ -44,8 +44,13 @@ func test_save_envelope_roundtrip() -> void:
 	var model := WorldModel.new()
 	model.set_cable(Vector2i(1, 2), 1)
 	GameClock.restore({"total_minutes": 999.0, "speed": 3.0})
+	# game context must survive the roundtrip (envelope v3)
+	City.scenario_state = {"id": "greenfield", "start_day": 3, "done": false}
+	City.infinite_money = true
 	var path := "user://gdunit_save_test.json"
 	assert_int(SaveGame.save_to(path, model)).is_equal(OK)
+	City.scenario_state = {}
+	City.infinite_money = false
 
 	GameClock.restore({"total_minutes": 0.0, "speed": 1.0})
 	var loaded: Dictionary = SaveGame.load_from(path)
@@ -53,6 +58,9 @@ func test_save_envelope_roundtrip() -> void:
 	var restored: WorldModel = loaded["model"]
 	assert_bool(restored.equals(model)).is_true()
 	assert_float(GameClock.total_minutes).is_equal_approx(999.0, 0.001)
+	assert_str(str(City.scenario_state.get("id", ""))).is_equal("greenfield")
+	assert_bool(City.infinite_money).is_true()
+	City.reset_for_scenario(42)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 

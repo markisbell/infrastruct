@@ -122,6 +122,9 @@ var _cash_frac := 0.0
 var _econ_day := -1
 ## Difficulty knobs (Phase 7 task 4), set by the scenario picker.
 var difficulty := {"growth_scale": 1.0, "event_scale": 1.0, "money_scale": 1.0}
+## The scenario runner's state (id, start_day, streaks, done) — owned here
+## so saves carry it; the main scene reads/writes it.
+var scenario_state := {}
 
 var _line_streak := {}
 var _slack_streak := 0
@@ -1225,6 +1228,13 @@ func serialize() -> Dictionary:
 		"heat_outage_minutes": heat_outage_minutes.duplicate(),
 		"water_outage_minutes": water_outage_minutes.duplicate(),
 		"weather_seed": weather.seed_value,
+		# game context (envelope v3): a load restores HOW you were playing
+		"scenario_state": scenario_state.duplicate(),
+		"difficulty": difficulty.duplicate(),
+		"infinite_money": infinite_money,
+		"events_enabled": events_enabled,
+		"growth_enabled": growth_enabled,
+		"grid_capacity_override": grid_capacity_override,
 	}
 
 
@@ -1239,7 +1249,24 @@ func restore(data: Dictionary) -> void:
 	heat_outage_minutes = data.get("heat_outage_minutes", {})
 	water_outage_minutes = data.get("water_outage_minutes", {})
 	weather = WeatherSystem.new(int(data.get("weather_seed", 42)))
+	scenario_state = data.get("scenario_state", {})
+	difficulty = data.get("difficulty",
+		{"growth_scale": 1.0, "event_scale": 1.0, "money_scale": 1.0})
+	infinite_money = bool(data.get("infinite_money", false))
+	events_enabled = bool(data.get("events_enabled", false))
+	growth_enabled = bool(data.get("growth_enabled", true))
+	grid_capacity_override = float(data.get("grid_capacity_override", -1.0))
+	event_system = EventSystem.new(int(data.get("weather_seed", 42)))
 	tripped_tiles.clear()
+	tripped_substations.clear()
+	capacity_warnings.clear()
+	telemetry.clear()   # rings belong to the previous city
+	zone_supplied.clear()
+	heat_zone_supplied.clear()
+	water_zone_supplied.clear()
+	last_result = {}
+	last_heat_result = {}
+	last_water_result = {}
 	grid_trip_until = -1
 	_topo_dirty = true
 	state_changed.emit()

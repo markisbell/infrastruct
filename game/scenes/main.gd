@@ -86,7 +86,6 @@ func _ready() -> void:
 
 
 var _hud: Hud
-var _scenario_state := {}
 var _tutorial_steps: Array[Dictionary] = []
 var _tutorial_idx := 0
 
@@ -99,12 +98,13 @@ func _boot_game() -> void:
 		SidecarManager.start_all()
 		SidecarManager.state_changed.connect(_on_sidecar_state)
 		_add_debug_panel()
-	GameClock.speed = 0.0  # paused until a scenario is picked
+	GameClock.speed = 0.0  # paused until a scenario is picked (or loaded)
+	GameClock.sim_step.connect(_on_scenario_step)  # runner works for loads too
 	_hud.show_scenario_picker(_start_scenario)
 
 
 func _start_scenario(id: String, difficulty_key: String) -> void:
-	_scenario_state = Scenarios.start(id, difficulty_key)
+	City.scenario_state = Scenarios.start(id, difficulty_key)
 	view.redraw()
 	if id == "tutorial":
 		_tutorial_steps = Scenarios.tutorial_steps()
@@ -115,7 +115,6 @@ func _start_scenario(id: String, difficulty_key: String) -> void:
 		for scenario: Dictionary in Scenarios.catalog():
 			if scenario["id"] == id and id not in ["sandbox"]:
 				_hud.show_objective("GOAL: " + scenario["desc"])
-	GameClock.sim_step.connect(_on_scenario_step)
 	# lively default: one sim step every ~2 s of play (SPACE pauses, +/- adjust)
 	GameClock.speed = 8.0
 
@@ -130,15 +129,15 @@ func _check_tutorial() -> void:
 
 func _on_scenario_step(t: int) -> void:
 	_check_tutorial()  # house-count steps advance on sim time, not builds
-	if _scenario_state.get("done", true) \
-			or _scenario_state.get("id", "") in ["sandbox", "tutorial"]:
+	if City.scenario_state.get("done", true) \
+			or City.scenario_state.get("id", "") in ["sandbox", "tutorial"]:
 		return
 	if t % 96 != 0:  # verdicts fall at midnight
 		return
-	var verdict := Scenarios.evaluate(_scenario_state, t / 96)
+	var verdict := Scenarios.evaluate(City.scenario_state, t / 96)
 	if verdict == "":
 		return
-	_scenario_state["done"] = true
+	City.scenario_state["done"] = true
 	if verdict == "win":
 		_hud.show_banner("SCENARIO COMPLETE", Color(0.4, 0.95, 0.5))
 		City.log_event("scenario_won", "info", "Scenario objective reached!")
@@ -170,10 +169,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.is_pressed():
 		var key: InputEventKey = event
 		match key.keycode:
-			KEY_F5:
-				SaveGame.save_to(SaveGame.DEFAULT_PATH)
+			KEY_F5:  # quicksave/-load (the Save/Load buttons offer slots)
+				if _hud:
+					_hud._save_slot(SaveGame.DEFAULT_PATH)
+				else:
+					SaveGame.save_to(SaveGame.DEFAULT_PATH)
 			KEY_F6:
-				if SaveGame.load_from(SaveGame.DEFAULT_PATH)["ok"]:
+				if _hud:
+					_hud._load_slot(SaveGame.DEFAULT_PATH)
+				elif SaveGame.load_from(SaveGame.DEFAULT_PATH)["ok"]:
 					view.redraw()
 			KEY_F1:
 				if _debug_panel:

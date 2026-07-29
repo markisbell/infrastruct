@@ -150,6 +150,13 @@ func _ready() -> void:
 	_tool_label = Label.new()
 	_tool_label.text = "Tool: none — TAB build menu · I happiness breakdown · right-drag orbit · Q/E snap 90° · R rotate ghost · SPACE pause · V overlays"
 	row.add_child(_tool_label)
+	for pair: Array in [["Save", "save"], ["Load", "load"]]:
+		var slot_button := Button.new()
+		slot_button.text = pair[0]
+		slot_button.focus_mode = Control.FOCUS_NONE
+		var mode: String = pair[1]
+		slot_button.pressed.connect(func() -> void: show_slot_dialog(mode))
+		row.add_child(slot_button)
 
 	var events_panel := PanelContainer.new()
 	events_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -506,6 +513,108 @@ func _show_config(config: Dictionary, subtitle: String) -> void:
 	_inspector.visible = true
 
 
+# ─── save / load (envelope v3): four slots with day/time/house labels ───
+
+const SLOTS := [
+	["Quick", "user://save.json"],
+	["Slot 1", "user://save_slot_1.json"],
+	["Slot 2", "user://save_slot_2.json"],
+	["Slot 3", "user://save_slot_3.json"],
+]
+
+
+## One line describing a slot's content, "" when empty/unreadable.
+func _slot_summary(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if parsed == null or not (parsed is Dictionary):
+		return ""
+	var envelope: Dictionary = parsed
+	var minutes := float(envelope.get("clock", {}).get("total_minutes", 0.0))
+	var houses: int = envelope.get("model", {}).get("houses", {}).size()
+	var scenario: String = envelope.get("city", {}) \
+		.get("scenario_state", {}).get("id", "sandbox")
+	var stamp := Time.get_datetime_dict_from_unix_time(
+		int(envelope.get("saved_at_unix", 0)))
+	return "%s · Day %d %02d:%02d · %d houses · saved %02d.%02d. %02d:%02d" % [
+		scenario, int(minutes / 1440.0), int(minutes / 60.0) % 24,
+		int(minutes) % 60, houses,
+		stamp["day"], stamp["month"], stamp["hour"], stamp["minute"]]
+
+
+func _load_slot(path: String) -> void:
+	var result := SaveGame.load_from(path)
+	if not result["ok"]:
+		City.log_event("load_failed", "warning", str(result.get("error", "?")))
+		return
+	view.redraw()
+	_restore_objective()
+	City.log_event("loaded", "info", "Game loaded")
+
+
+func _save_slot(path: String) -> void:
+	if SaveGame.save_to(path) == OK:
+		City.log_event("saved", "info", "Game saved")
+
+
+## After a load: put the scenario goal back on screen (tutorial saves
+## resume as free play — step progress isn't persisted).
+func _restore_objective() -> void:
+	var id: String = City.scenario_state.get("id", "")
+	if id in ["", "sandbox", "tutorial"] or City.scenario_state.get("done", false):
+		show_objective("")
+		return
+	for scenario: Dictionary in Scenarios.catalog():
+		if scenario["id"] == id:
+			show_objective("GOAL: " + scenario["desc"])
+
+
+## The slot dialog, shared by Save and Load.
+func show_slot_dialog(mode: String) -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0.05, 0.06, 0.1, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(dim)
+	var panel := PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	panel.grow_vertical = Control.GROW_DIRECTION_BOTH
+	add_child(panel)
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(430, 0)
+	box.add_theme_constant_override("separation", 6)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "Save game" if mode == "save" else "Load game"
+	title.add_theme_font_size_override("font_size", 16)
+	box.add_child(title)
+	var close_dialog := func() -> void:
+		dim.queue_free()
+		panel.queue_free()
+	for slot: Array in SLOTS:
+		var summary := _slot_summary(slot[1])
+		var button := Button.new()
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.focus_mode = Control.FOCUS_NONE
+		button.text = "%s — %s" % [slot[0], summary if summary != "" else "empty"]
+		if mode == "load" and summary == "":
+			button.disabled = true
+		var path: String = slot[1]
+		button.pressed.connect(func() -> void:
+			if mode == "save":
+				_save_slot(path)
+			else:
+				_load_slot(path)
+			close_dialog.call())
+		box.add_child(button)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.focus_mode = Control.FOCUS_NONE
+	cancel.pressed.connect(close_dialog)
+	box.add_child(cancel)
+
+
 # ─── scenario UI (Phase 7): objective line, win/lose banner, picker ───
 
 var _objective: Label
@@ -590,6 +699,34 @@ func show_scenario_picker(on_pick: Callable) -> void:
 		desc.modulate = Color(1, 1, 1, 0.65)
 		desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(desc)
+	# resume a saved game instead
+	var any_save := false
+	for slot: Array in SLOTS:
+		if _slot_summary(slot[1]) != "":
+			any_save = true
+			break
+	if any_save:
+		var loads := Label.new()
+		loads.text = "— or load a saved game —"
+		loads.add_theme_font_size_override("font_size", 11)
+		loads.modulate = Color(1, 1, 1, 0.65)
+		box.add_child(loads)
+		for slot: Array in SLOTS:
+			var summary := _slot_summary(slot[1])
+			if summary == "":
+				continue
+			var load_button := Button.new()
+			load_button.text = "%s — %s" % [slot[0], summary]
+			load_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			load_button.focus_mode = Control.FOCUS_NONE
+			var path: String = slot[1]
+			load_button.pressed.connect(func() -> void:
+				dim.queue_free()
+				panel.queue_free()
+				_load_slot(path)
+				if GameClock.speed == 0.0:
+					GameClock.speed = 8.0)
+			box.add_child(load_button)
 
 
 # ─── palette thumbnails: each tool's real 3D visual, rendered once into a
