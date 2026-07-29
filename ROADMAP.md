@@ -414,6 +414,20 @@ Tasks:
 
 **Goal:** demand stops being static; the city becomes a moving target.
 
+> **Status (2026-07-29): done** — electricity and water run on the bundled
+> residential profile pack (demandlib BDEW H0 day types; rtwaterflow's W 410
+> archetype shapes — `tools/profiles/gen_profiles.py`); space heating stays the
+> live weather physics and DHW keeps its VDI-style day shape (the heat scenarios
+> are temperature-calibrated). Growth v2 (happiness-scaled rate, supply-margin
+> gate, abandonment) and Happiness v2 (weighted per-network satisfaction with
+> weeks-scale memory, `I` breakdown panel) are in. Acceptance: `yearcurves`
+> (4 seasonal windows to CSV — winter heat 4.7x summer, BDEW double peak,
+> summer midday grid EXPORT under PV, +17% summer water; deterministic, so
+> golden by construction) and `citylife` (well-built town grows 7→25 at
+> happiness 100; wind-only town behind an 18 kW connection collapses to a
+> ghost town through trips and abandonment). Commercial/industrial archetypes
+> follow when those zones exist (Phase 7 economy).
+
 Tasks:
 1. Per-building-type demand profiles (residential/commercial/industrial) with diurnal,
    weekday/weekend, and seasonal shape. Generate offline with `demandlib`/`OpenDHW`

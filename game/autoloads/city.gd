@@ -26,6 +26,11 @@ var model := WorldModel.new()
 var weather := WeatherSystem.new(42)
 var money := START_MONEY
 var happiness := 100.0
+## Happiness v2 (Phase 6): per-network satisfaction 0..100 with MEMORY —
+## outages hit fast, trust recovers slowly (~weeks of clean supply for a
+## bad blackout). happiness = weighted blend; water weighs heaviest, heat
+## by season (a January heat outage is a catastrophe, a July one a shrug).
+var satisfaction := {"power": 100.0, "heat": 100.0, "water": 100.0}
 var outage_minutes := {}          # zone_id -> minutes
 var events: Array[Dictionary] = []
 
@@ -50,6 +55,8 @@ var _last_water_doc_json := ""
 
 ## Scenario hook: overrides the grid connection's capacity_kw when > 0.
 var grid_capacity_override := -1.0
+## Scenario hook: freezes growth/abandonment (constant-demand recordings).
+var growth_enabled := true
 
 var _line_streak := {}
 var _slack_streak := 0
@@ -434,10 +441,11 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 			outage_minutes[zone_id] = outage_minutes.get(zone_id, 0) + GameClock.SIM_STEP_MINUTES
 			unsupplied_houses += houses
 
-	# happiness: outages hurt fast, recovery is slow (memory arrives Phase 6)
 	if total_houses > 0:
 		var hurt := float(unsupplied_houses) / total_houses
-		happiness = clampf(happiness - 6.0 * hurt + (0.25 if hurt == 0.0 else 0.0), 0.0, 100.0)
+		satisfaction["power"] = clampf(satisfaction["power"] - 9.0 * hurt
+			+ (SATISFACTION_RECOVERY if hurt == 0.0 else 0.0), 0.0, 100.0)
+		_update_happiness(t)
 
 	_check_protection(t, result)
 	_grow(t)
@@ -483,9 +491,12 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 			heat_outage_minutes[zone_id] = heat_outage_minutes.get(zone_id, 0) \
 				+ GameClock.SIM_STEP_MINUTES
 			cold_houses += houses
-	if total > 0 and cold_houses > 0:
-		happiness = clampf(
-			happiness - 5.0 * cold_factor * float(cold_houses) / total, 0.0, 100.0)
+	if total > 0:
+		var hurt := float(cold_houses) / total
+		satisfaction["heat"] = clampf(satisfaction["heat"]
+			- 7.0 * cold_factor * hurt
+			+ (SATISFACTION_RECOVERY if hurt == 0.0 else 0.0), 0.0, 100.0)
+		_update_happiness(t)
 		if cold_houses > 0 and t % 8 == 0:
 			log_event("cold_homes", "warning",
 				"%d houses without adequate heat (%.0f°C outside)" % [cold_houses, temp])
@@ -520,12 +531,15 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 			water_outage_minutes[zone_id] = water_outage_minutes.get(zone_id, 0) \
 				+ GameClock.SIM_STEP_MINUTES
 			dry_weight += (1.0 - supplied) * houses
-	if total > 0 and dry_weight > 0.0:
-		happiness = clampf(happiness - 8.0 * dry_weight / total, 0.0, 100.0)
-		if t % 8 == 0:
+	if total > 0:
+		var hurt := dry_weight / total
+		satisfaction["water"] = clampf(satisfaction["water"] - 12.0 * hurt
+			+ (SATISFACTION_RECOVERY * 0.8 if hurt == 0.0 else 0.0), 0.0, 100.0)
+		_update_happiness(t)
+		if dry_weight > 0.0 and t % 8 == 0:
 			log_event("dry_taps", "critical",
 				"Water pressure collapsed — %.0f%% of homes short of water"
-				% (100.0 * dry_weight / total))
+				% (100.0 * hurt))
 	state_changed.emit()
 	water_result.emit(t, result)
 
@@ -582,8 +596,48 @@ func _apply_repairs(t: int) -> void:
 		world_changed.emit()
 
 
+const SATISFACTION_RECOVERY := 0.06  # per clean step (~6/day): weeks-scale memory
+const ABANDON_HAPPINESS := 35.0
+
+
+## Weighted blend of the per-network satisfactions. Water always weighs
+## heaviest; heat's weight follows the season (cold_factor). Only networks
+## the town actually HAS count — a village with no district heating isn't
+## shielded by a perfect score for a service that doesn't exist.
+func _update_happiness(t: int) -> void:
+	var temp := float(weather.sample(t)["temp_c"])
+	var cold_norm := clampf((18.0 - temp) / 24.0, 0.15, 1.25) / 1.25  # 0.12..1
+	var weights := {"water": 0.45, "power": 0.25,
+		"heat": 0.3 * (0.25 + 0.75 * cold_norm)}
+	var active := {"power": not topo.zones_info.is_empty(),
+		"heat": not heat_topo.zones_info.is_empty(),
+		"water": not water_topo.zones_info.is_empty()}
+	var acc := 0.0
+	var total_weight := 0.0
+	for key: String in weights:
+		if not active[key]:
+			continue
+		acc += weights[key] * float(satisfaction[key])
+		total_weight += weights[key]
+	if total_weight > 0.0:
+		happiness = clampf(acc / total_weight, 0.0, 100.0)
+
+
+## Growth v2 (ROADMAP Phase 6 task 2): the growth rate follows happiness,
+## new houses only spawn where the supply has spare margin, and sustained
+## misery empties houses back out — a stabilizing feedback loop that also
+## reads as failure.
 func _grow(t: int) -> void:
-	if happiness < GROWTH_HAPPINESS_MIN or t % 4 != 0:
+	if not growth_enabled:
+		return
+	if happiness < ABANDON_HAPPINESS:
+		_abandon(t)
+		return
+	var interval := 4 if happiness >= 90.0 \
+		else (8 if happiness >= 75.0 else (16 if happiness >= GROWTH_HAPPINESS_MIN else 0))
+	if interval == 0 or t % interval != 0:
+		return
+	if not _supply_margin_ok():
 		return
 	var capacity: int = BuildingDefs.get_def("substation")["house_capacity"]
 	var radius: int = BuildingDefs.get_def("substation")["zone_radius"]
@@ -597,6 +651,52 @@ func _grow(t: int) -> void:
 			_refresh_topo_assignment()
 			world_changed.emit()
 			return  # one house per growth tick, city-wide
+
+
+## Spare-margin gate: nobody moves into a town running at its limits.
+## (Power margin — houses hang off power zones; heat/water shortfalls
+## already gate growth through happiness.)
+func _supply_margin_ok() -> bool:
+	if last_result.get("status", "") == "failed":
+		return false
+	for edge_id: String in last_result.get("edges", {}):
+		if float(last_result["edges"][edge_id].get("loading_percent", 0.0)) > 95.0:
+			return false
+	var slack_ids := model.buildings_of_kind("grid_connection")
+	if not slack_ids.is_empty():
+		var capacity: float = grid_capacity_override if grid_capacity_override > 0.0 \
+			else BuildingDefs.get_def("grid_connection")["capacity_kw"]
+		var import_kw := float(last_result.get("devices", {})
+			.get(slack_ids[0], {}).get("output_kw", 0.0))
+		if import_kw > 0.85 * capacity:
+			return false
+	return true
+
+
+## Sustained misery: one household leaves every 4 game-hours, from the zone
+## with the worst outage record first.
+func _abandon(t: int) -> void:
+	if t % 16 != 0 or model.houses.is_empty():
+		return
+	var houses := model.houses.keys()
+	houses.sort()  # deterministic
+	var victim: Vector2i = houses[0]
+	var worst_zone := ""
+	var worst := -1
+	for zone_id: String in outage_minutes:
+		if outage_minutes[zone_id] > worst:
+			worst = outage_minutes[zone_id]
+			worst_zone = zone_id
+	if worst_zone != "":
+		for pos: Vector2i in houses:
+			if topo.house_zone.get(pos, "") == worst_zone:
+				victim = pos
+				break
+	model.remove_house(victim)
+	_refresh_topo_assignment()
+	log_event("abandoned", "warning",
+		"A family left town — supply too unreliable")
+	world_changed.emit()
 
 
 ## Bulk helper for scenarios/tests: spawn n houses around a substation.
@@ -638,9 +738,11 @@ func reset_for_scenario(weather_seed: int) -> void:
 	heat_outage_minutes = {}
 	water_outage_minutes = {}
 	happiness = 100.0
+	satisfaction = {"power": 100.0, "heat": 100.0, "water": 100.0}
 	tripped_tiles.clear()
 	grid_trip_until = -1
 	grid_capacity_override = -1.0
+	growth_enabled = true
 	registered = false
 	heat_registered = false
 	water_registered = false
@@ -666,6 +768,7 @@ func reset_for_scenario(weather_seed: int) -> void:
 func serialize() -> Dictionary:
 	return {
 		"money": money, "happiness": happiness,
+		"satisfaction": satisfaction.duplicate(),
 		"outage_minutes": outage_minutes.duplicate(),
 		"heat_outage_minutes": heat_outage_minutes.duplicate(),
 		"water_outage_minutes": water_outage_minutes.duplicate(),
@@ -676,6 +779,9 @@ func serialize() -> Dictionary:
 func restore(data: Dictionary) -> void:
 	money = int(data.get("money", START_MONEY))
 	happiness = float(data.get("happiness", 100.0))
+	var sat: Dictionary = data.get("satisfaction", {})
+	for key: String in satisfaction:
+		satisfaction[key] = float(sat.get(key, 100.0))
 	outage_minutes = data.get("outage_minutes", {})
 	heat_outage_minutes = data.get("heat_outage_minutes", {})
 	water_outage_minutes = data.get("water_outage_minutes", {})

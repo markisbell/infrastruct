@@ -129,7 +129,7 @@ func _ready() -> void:
 	_status = Label.new()
 	row.add_child(_status)
 	_tool_label = Label.new()
-	_tool_label.text = "Tool: none — TAB build menu · Q/E rotate view · R rotate ghost · SPACE pause · V overlays"
+	_tool_label.text = "Tool: none — TAB build menu · I happiness breakdown · Q/E rotate view · R rotate ghost · SPACE pause · V overlays"
 	row.add_child(_tool_label)
 
 	var events_panel := PanelContainer.new()
@@ -142,6 +142,7 @@ func _ready() -> void:
 
 	_make_build_menu()
 	_render_thumbnails()  # async: icons replace the monograms as they render
+	_make_breakdown()
 
 	City.state_changed.connect(_refresh)
 	City.event_logged.connect(_on_event)
@@ -223,6 +224,68 @@ func _make_tile(item: Dictionary) -> Button:
 	button.pressed.connect(func() -> void: _select_tool(item["tool"]))
 	_tool_buttons[item["tool"]] = button
 	return button
+
+
+# ─── happiness breakdown (Phase 6: see WHAT is wrong, not just that
+# something is) — per-network satisfaction bars + outage records ───
+
+var _breakdown: PanelContainer
+var _breakdown_bars := {}    # network -> ProgressBar
+var _breakdown_notes := {}   # network -> Label
+
+const BREAKDOWN_ROWS := [
+	["power", "Electricity", Color(0.95, 0.8, 0.25)],
+	["heat", "Heat", Color(0.9, 0.4, 0.25)],
+	["water", "Water", Color(0.25, 0.65, 0.9)],
+]
+
+
+func _make_breakdown() -> void:
+	_breakdown = PanelContainer.new()
+	_breakdown.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_breakdown.offset_top = 44.0
+	_breakdown.offset_left = 8.0
+	_breakdown.visible = false
+	add_child(_breakdown)
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(280, 0)
+	_breakdown.add_child(box)
+	var title := Label.new()
+	title.text = "Happiness — what's wrong? (I closes)"
+	title.add_theme_font_size_override("font_size", 12)
+	box.add_child(title)
+	for row: Array in BREAKDOWN_ROWS:
+		var label := Label.new()
+		label.text = row[1]
+		label.add_theme_color_override("font_color", row[2])
+		box.add_child(label)
+		var bar := ProgressBar.new()
+		bar.min_value = 0.0
+		bar.max_value = 100.0
+		bar.show_percentage = true
+		var fill := StyleBoxFlat.new()
+		fill.bg_color = row[2]
+		bar.add_theme_stylebox_override("fill", fill)
+		box.add_child(bar)
+		_breakdown_bars[row[0]] = bar
+		var note := Label.new()
+		note.add_theme_font_size_override("font_size", 11)
+		note.modulate = Color(1, 1, 1, 0.7)
+		box.add_child(note)
+		_breakdown_notes[row[0]] = note
+
+
+func _refresh_breakdown() -> void:
+	if not _breakdown.visible:
+		return
+	var outages := {
+		"power": City.total_outage_minutes(),
+		"heat": City.total_heat_outage_minutes(),
+		"water": City.total_water_outage_minutes(),
+	}
+	for network: String in _breakdown_bars:
+		(_breakdown_bars[network] as ProgressBar).value = float(City.satisfaction[network])
+		(_breakdown_notes[network] as Label).text = "%d outage-min on record" % outages[network]
 
 
 # ─── palette thumbnails: each tool's real 3D visual, rendered once into a
@@ -355,6 +418,7 @@ func _refresh() -> void:
 		City.total_outage_minutes(), City.total_heat_outage_minutes(),
 		City.total_water_outage_minutes(),
 		("  ·  ⟳ rebuilding grid…" if City.is_syncing() else "")]
+	_refresh_breakdown()
 
 
 func _on_event(event: Dictionary) -> void:
@@ -382,6 +446,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_select_tool(TOOL_KEYS[key.keycode])
 	elif key.keycode == KEY_TAB:
 		_build_menu.visible = not _build_menu.visible
+	elif key.keycode == KEY_I:
+		_breakdown.visible = not _breakdown.visible
+		_refresh_breakdown()
 	elif key.keycode == KEY_SPACE:
 		GameClock.speed = 1.0 if GameClock.speed == 0.0 else 0.0
 	elif key.keycode == KEY_EQUAL or key.keycode == KEY_KP_ADD:

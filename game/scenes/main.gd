@@ -64,6 +64,10 @@ func _ready() -> void:
 			_smoke_towerheight()
 		"hilltower":
 			_smoke_hilltower()
+		"yearcurves":
+			_smoke_yearcurves()
+		"citylife":
+			_smoke_citylife()
 		_:
 			_boot_game()
 
@@ -608,7 +612,7 @@ func _wait_heat_registered(timeout_s: float) -> bool:
 	return true
 
 
-func _run_steps(n: int, timeout_s: float) -> void:
+func _run_steps(n: int, timeout_s: float, speed: float = 60.0) -> void:
 	# derive the target from the CLOCK: current_t only updates on sim-step
 	# emissions and is stale right after a GameClock.restore — resync it too,
 	# or a BACKWARDS restore leaves current_t past end_t and the wait loop
@@ -617,7 +621,7 @@ func _run_steps(n: int, timeout_s: float) -> void:
 	City.current_t = start_t
 	var end_t := start_t + n
 	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000)
-	GameClock.speed = 60.0
+	GameClock.speed = speed
 	while City.current_t < end_t and Time.get_ticks_msec() < deadline:
 		await get_tree().create_timer(0.25).timeout
 	GameClock.pause()
@@ -1119,6 +1123,276 @@ func _smoke_hilltower() -> void:
 		"water_status": City.last_water_result.get("status", "?"),
 	}
 	print("SMOKE_HILLTOWER ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+# ─── Phase 6 acceptance scenarios (living demand) ───
+
+## The three-network reference town both Phase 6 smokes run on — built
+## COMPACT on purpose: the first draft strung the substation ~600 m of
+## NAYY 4x50 away from grid and plants, and at the 40-house evening peak
+## the voltage sagged under 0.90 pu — chronic evening brownouts, power
+## satisfaction 12/100. Keep feeders electrically short; no oversized wind
+## farm either (300 kW of export trips a 98 kVA feeder).
+func _build_reference_city(seed_houses: int) -> void:
+	City.place_building("grid_connection", Vector2i(6, 4))
+	for x in range(8, 31):
+		City.build_cable(Vector2i(x, 5))
+	City.place_building("gas_plant", Vector2i(16, 3))
+	City.place_building("solar_park", Vector2i(20, 3))
+	City.place_building("battery", Vector2i(25, 4))
+	# the substation sits FIVE tiles from the grid connection: at the full
+	# ~28-house evening peak the drop stays ~2-3% (v_pu ≥ 0.95) — the first
+	# drafts sagged to 0.889 at range and bled satisfaction every evening
+	City.place_building("substation", Vector2i(12, 6))
+	for x in range(8, 25):
+		City.build_road(Vector2i(x, 8))
+	for x in range(8, 25):
+		City.build_road(Vector2i(x, 11))
+	for x in range(8, 25):
+		City.build_zone(Vector2i(x, 9))
+	for x in range(8, 19):
+		City.build_zone(Vector2i(x, 12))
+	City.place_building("boiler_plant", Vector2i(6, 13))
+	for x in range(8, 15):
+		City.build_heat_pipe(Vector2i(x, 14))
+	City.place_building("heat_exchanger", Vector2i(15, 14))
+	City.place_building("water_tower", Vector2i(6, 17))
+	for x in range(7, 15):
+		City.build_water_pipe(Vector2i(x, 17))
+	City.place_building("water_station", Vector2i(15, 17))
+	City.place_building("well", Vector2i(10, 19))
+	City.build_water_pipe(Vector2i(10, 18))
+	City.place_building("pumping_station", Vector2i(12, 19))
+	City.build_water_pipe(Vector2i(12, 18))
+	for y in range(6, 20):  # east cable column feeds the pump at (14,19)
+		City.build_cable(Vector2i(31, y))
+	for x in range(14, 31):
+		City.build_cable(Vector2i(x, 19))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("substation")[0], seed_houses)
+
+
+func _wait_three_registered(timeout_s: float) -> bool:
+	return await _wait_registered(timeout_s) \
+		and await _wait_heat_registered(60.0) \
+		and await _wait_water_registered(60.0)
+
+
+## Long-run seasonal recording (ROADMAP Phase 6 task 4 + acceptance): four
+## 3-day workweek windows across the year, demand recorded per step to CSV;
+## the load-duration shape checks are qualitative inequalities (winter heat
+## peak, BDEW double peak, summer PV surplus, summer water surge) — robust
+## where golden files would rot.
+func _smoke_yearcurves() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_YEARCURVES", "health timeout")
+		return
+	City.reset_for_scenario(42)
+	City.growth_enabled = false  # constant town: curves must come from demand
+	_build_reference_city(24)
+	City._topo_dirty = true
+	if not await _wait_three_registered(240.0):
+		_fail("SMOKE_YEARCURVES", "register timeout")
+		return
+	var slack_id: String = City.model.buildings_of_kind("grid_connection")[0]
+	var rows: Array = []
+	var statuses := {"bad": 0, "total": 0}
+	City.power_result.connect(func(t: int, result: Dictionary) -> void:
+		var elec := 0.0
+		for zone_id: String in City.topo.zones_info:
+			elec += DemandModel.zone_demand_kw(
+				City.topo.zones_info[zone_id]["houses"], t)
+		var temp := float(City.weather.sample(t)["temp_c"])
+		var heat := 0.0
+		for zone_id: String in City.heat_topo.zones_info:
+			heat += DemandModel.heat_zone_demand_kw(
+				City.heat_topo.zones_info[zone_id]["houses"], t, temp)
+		var water := 0.0
+		for zone_id: String in City.water_topo.zones_info:
+			water += DemandModel.water_zone_demand_m3h(
+				City.water_topo.zones_info[zone_id]["houses"], t, temp)
+		var import_kw := float(result.get("devices", {})
+			.get(slack_id, {}).get("output_kw", 0.0))
+		rows.append([t, snappedf(elec, 0.01), snappedf(heat, 0.01),
+			snappedf(water, 0.0001), snappedf(import_kw, 0.01), temp]))
+	for sig: Signal in [City.power_result, City.heat_result, City.water_result]:
+		sig.connect(func(_t: int, result: Dictionary) -> void:
+			statuses["total"] += 1
+			if result.get("status", "failed") == "failed":
+				statuses["bad"] += 1)
+	# windows start on workdays (day % 7 == 0): winter/transition/summer/autumn
+	for start_day: int in [301, 42, 133, 224]:
+		GameClock.restore({"total_minutes": start_day * 1440.0, "speed": 0.0})
+		Orchestrator.start()
+		await _run_steps(288, 900.0, 200.0)
+	# ── aggregate ──
+	var window_of := func(t: int) -> String:
+		var day := t / 96
+		if day >= 301: return "winter"
+		if day >= 224: return "autumn"
+		if day >= 133: return "summer"
+		return "transition"
+	var mean := func(filter: Callable, column: int) -> float:
+		var acc := 0.0
+		var n := 0
+		for row: Array in rows:
+			if filter.call(row):
+				acc += row[column]
+				n += 1
+		return acc / maxf(n, 1.0)
+	var hour_of := func(t: int) -> int: return (t % 96) / 4
+	var heat_winter: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "winter", 2)
+	var heat_summer: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "summer", 2)
+	var elec_w_evening: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "winter" and hour_of.call(r[0]) >= 18 and hour_of.call(r[0]) < 21, 1)
+	var elec_w_night: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "winter" and hour_of.call(r[0]) >= 2 and hour_of.call(r[0]) < 5, 1)
+	var elec_w_midday: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "winter" and hour_of.call(r[0]) >= 11 and hour_of.call(r[0]) < 14, 1)
+	var elec_s_midday: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "summer" and hour_of.call(r[0]) >= 11 and hour_of.call(r[0]) < 14, 1)
+	var elec_s_evening: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "summer" and hour_of.call(r[0]) >= 18 and hour_of.call(r[0]) < 21, 1)
+	var water_winter: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "winter", 3)
+	var water_summer: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "summer", 3)
+	var import_s_midday: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "summer" and hour_of.call(r[0]) >= 11 and hour_of.call(r[0]) < 14, 4)
+	var import_s_evening: float = mean.call(func(r: Array) -> bool:
+		return window_of.call(r[0]) == "summer" and hour_of.call(r[0]) >= 18 and hour_of.call(r[0]) < 21, 4)
+	# ── CSV (the durable record for tools/balancing) ──
+	var csv := "t,day,elec_kw,heat_kw,water_m3h,grid_import_kw,temp_c\n"
+	for row: Array in rows:
+		csv += "%d,%d,%s,%s,%s,%s,%s\n" % [row[0], row[0] / 96, row[1], row[2],
+			row[3], row[4], row[5]]
+	var csv_path := ProjectSettings.globalize_path("res://") + "../logs/yearcurves.csv"
+	var f := FileAccess.open(csv_path, FileAccess.WRITE)
+	if f:
+		f.store_string(csv)
+		f.close()
+	var report := {
+		"ok": heat_winter > 3.0 * heat_summer
+			and elec_w_evening > 2.0 * elec_w_night
+			and elec_w_evening > 1.15 * elec_w_midday
+			and elec_s_midday > 0.9 * elec_s_evening
+			and water_summer > 1.15 * water_winter
+			and import_s_midday < import_s_evening - 20.0
+			and statuses["bad"] == 0
+			# drift/leak guard: failed solves and protocol desync are the
+			# signal; a few in-flight overrun skips at 200x fast-forward are
+			# the designed never-stall behavior, so the bound is generous
+			and Orchestrator.stats["missed"] < 0.10 * Orchestrator.stats["dispatched"]
+			and Orchestrator.stats["completed"] == Orchestrator.stats["dispatched"],
+		"heat_kw_winter": snappedf(heat_winter, 0.1), "heat_kw_summer": snappedf(heat_summer, 0.1),
+		"elec_winter_evening": snappedf(elec_w_evening, 0.1),
+		"elec_winter_midday": snappedf(elec_w_midday, 0.1),
+		"elec_winter_night": snappedf(elec_w_night, 0.1),
+		"elec_summer_midday": snappedf(elec_s_midday, 0.1),
+		"elec_summer_evening": snappedf(elec_s_evening, 0.1),
+		"water_m3h_winter": snappedf(water_winter, 0.001),
+		"water_m3h_summer": snappedf(water_summer, 0.001),
+		"grid_import_summer_midday": snappedf(import_s_midday, 0.1),
+		"grid_import_summer_evening": snappedf(import_s_evening, 0.1),
+		"failed_steps": statuses["bad"], "results_seen": statuses["total"],
+		"samples": rows.size(), "csv": csv_path,
+		"orch": Orchestrator.stats,
+	}
+	print("SMOKE_YEARCURVES ", JSON.stringify(report))
+	SidecarManager.stop_all()
+	get_tree().quit(0 if report["ok"] else 1)
+
+
+## Growth feedback (ROADMAP Phase 6 acceptance): a well-built city grows
+## through a compressed year without intervention; a fragile one (wind-only
+## behind an undersized grid connection) stalls and empties out.
+func _smoke_citylife() -> void:
+	SidecarManager.load_config("orchestration/sidecars_stress.json")
+	SidecarManager.start_all()
+	if not await _wait_all_healthy(240.0):
+		_fail("SMOKE_CITYLIFE", "health timeout")
+		return
+
+	# ── phase A: the reference town, seeded small
+	City.reset_for_scenario(42)
+	_build_reference_city(6)
+	City._topo_dirty = true
+	if not await _wait_three_registered(240.0):
+		_fail("SMOKE_CITYLIFE", "register timeout (A)")
+		return
+	var houses_start_a := City.model.houses.size()
+	var dark_steps: Array = []
+	City.power_result.connect(func(t: int, result: Dictionary) -> void:
+		for zone_id: String in City.topo.zones_info:
+			if not City.zone_supplied.get(zone_id, true) \
+					and City.topo.zones_info[zone_id]["houses"] > 0 \
+					and dark_steps.size() < 40:
+				var zone: Dictionary = result.get("zones", {}).get(zone_id, {})
+				dark_steps.append("t%d %s sup=%s vpu=%s status=%s trip=%s" % [t,
+					zone_id, str(zone.get("supplied", "?")),
+					str(zone.get("detail", {}).get("v_pu", "?")),
+					str(result.get("status", "?")),
+					str(City.grid_trip_until > t)]))
+	for start_day: int in [10, 70, 130, 190, 250, 310]:
+		GameClock.restore({"total_minutes": start_day * 1440.0, "speed": 0.0})
+		Orchestrator.start()
+		await _run_steps(192, 600.0, 240.0)
+	var houses_end_a := City.model.houses.size()
+	var happiness_a := City.happiness
+	var satisfaction_a := City.satisfaction.duplicate()
+
+	# ── phase B: fragile — wind-only behind an 18 kW grid connection
+	City.reset_for_scenario(42)
+	City.grid_capacity_override = 18.0
+	City.place_building("grid_connection", Vector2i(6, 4))
+	for x in range(8, 42):
+		City.build_cable(Vector2i(x, 5))
+	City.place_building("wind_farm", Vector2i(10, 3))
+	City.place_building("substation", Vector2i(30, 6))
+	for x in range(24, 41):
+		City.build_road(Vector2i(x, 8))
+	for x in range(24, 41):
+		City.build_zone(Vector2i(x, 9))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("substation")[0], 12)
+	var seen := {"trip": false, "abandoned": false}
+	City.event_logged.connect(func(event: Dictionary) -> void:
+		if event["kind"] == "grid_trip":
+			seen["trip"] = true
+		elif event["kind"] == "abandoned":
+			seen["abandoned"] = true)
+	City._topo_dirty = true
+	if not await _wait_registered(240.0):
+		_fail("SMOKE_CITYLIFE", "register timeout (B)")
+		return
+	var houses_start_b := City.model.houses.size()
+	for start_day: int in [10, 70, 130, 190, 250, 310]:
+		GameClock.restore({"total_minutes": start_day * 1440.0, "speed": 0.0})
+		Orchestrator.start()
+		await _run_steps(192, 600.0, 240.0)
+	var houses_end_b := City.model.houses.size()
+	var happiness_b := City.happiness
+
+	var ok: bool = houses_end_a >= houses_start_a + 12 and happiness_a >= 80.0 \
+		and houses_end_b <= houses_start_b + 2 and happiness_b < 55.0 \
+		and (seen["trip"] or seen["abandoned"])
+	var report := {
+		"ok": ok,
+		"A_houses": [houses_start_a, houses_end_a],
+		"A_happiness": snappedf(happiness_a, 0.1),
+		"A_satisfaction": satisfaction_a,
+		"B_houses": [houses_start_b, houses_end_b],
+		"B_happiness": snappedf(happiness_b, 0.1),
+		"B_trip_seen": seen["trip"], "B_abandoned_seen": seen["abandoned"],
+		"orch": Orchestrator.stats,
+	}
+	if not ok:  # unsupplied-step trace (t, v_pu, status) — the debugging view
+		report["A_dark_steps"] = dark_steps
+	print("SMOKE_CITYLIFE ", JSON.stringify(report))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if report["ok"] else 1)
 
