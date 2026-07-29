@@ -388,6 +388,16 @@ func _electrical_building_at(pos: Vector2i) -> bool:
 	return def.get("network", "") == "power" or def.get("device", "") != ""
 
 
+## Is the neighbor tile part of a building of the given network? (pipe
+## connection stubs — heat plants/exchangers, water sources/stations)
+func _network_building_at(pos: Vector2i, network: String) -> bool:
+	var id: String = City.model.building_tiles.get(pos, "")
+	if id == "":
+		return false
+	return BuildingDefs.get_def(
+		City.model.buildings[id]["kind"]).get("network", "") == network
+
+
 ## Line tile visuals by kind. Overhead: pole, crossarm, wire half-spans,
 ## and a sloped SERVICE DROP to any adjacent electrical building (the
 ## visible connection). Underground: a trench strip with a marker post
@@ -461,12 +471,18 @@ func _make_pipe(pos: Vector2i) -> Node3D:
 ## the tile center to its edge — handles straights, bends, tees and crosses
 ## without piece-picking. Side convention is world-axis based (X-runs offset
 ## in Z, Z-runs offset in X) so straights never zigzag.
+## Double heat pipe toward every connected NEIGHBOR — pipe tiles and heat
+## buildings alike: a plant or exchanger next to the pipe gets visible
+## supply/return stubs plus a valve box at the joint (same idea as the
+## electrical service drops).
 func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
 	var connections := ""
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	for i in 4:
 		if City.model.heat_pipes.has(pos + directions[i]):
 			connections += str(i)
+		elif _network_building_at(pos + directions[i], "heat"):
+			connections += "b%d" % i
 	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
 	if node.get_meta("pipes", "") == wanted:
 		return
@@ -479,9 +495,17 @@ func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
 	var any_connection := false
 	for i in 4:
 		var d := directions[i]
-		if not City.model.heat_pipes.has(pos + d):
+		var to_building: bool = not City.model.heat_pipes.has(pos + d) \
+			and _network_building_at(pos + d, "heat")
+		if not City.model.heat_pipes.has(pos + d) and not to_building:
 			continue
 		any_connection = true
+		if to_building:
+			# valve box where the pair enters the building
+			node.add_child(_box(
+				Vector3(0.1, 0.3, 0.44) if d.y == 0 else Vector3(0.44, 0.3, 0.1),
+				Color(0.5, 0.52, 0.56),
+				Vector3(d.x * 0.48, PIPE_HEIGHT, d.y * 0.48)))
 		var horizontal := d.y == 0  # segment runs along world X
 		var perp := Vector3(0, 0, 0.13) if horizontal else Vector3(0.13, 0, 0)
 		var dh := _ground_y(pos + d) - _ground_y(pos)
@@ -527,12 +551,16 @@ func _make_water_pipe(pos: Vector2i) -> Node3D:
 
 ## Water main: a single green pipe on the same low supports as the heat
 ## pair — one fatter cylinder per connected direction, center joint knuckle.
+## Green main toward every connected neighbor — pipe tiles AND water
+## buildings: towers/wells/pumps/stations get a visible stub + collar.
 func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
 	var connections := ""
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	for i in 4:
 		if City.model.water_pipes.has(pos + directions[i]):
 			connections += str(i)
+		elif _network_building_at(pos + directions[i], "water"):
+			connections += "b%d" % i
 	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
 	if node.get_meta("pipes", "") == wanted:
 		return
@@ -544,9 +572,17 @@ func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
 	var any_connection := false
 	for i in 4:
 		var d := directions[i]
-		if not City.model.water_pipes.has(pos + d):
+		var to_building: bool = not City.model.water_pipes.has(pos + d) \
+			and _network_building_at(pos + d, "water")
+		if not City.model.water_pipes.has(pos + d) and not to_building:
 			continue
 		any_connection = true
+		if to_building:
+			# collar where the main enters the building
+			node.add_child(_box(
+				Vector3(0.1, 0.26, 0.24) if d.y == 0 else Vector3(0.24, 0.26, 0.1),
+				Color(0.5, 0.52, 0.56),
+				Vector3(d.x * 0.48, PIPE_HEIGHT, d.y * 0.48)))
 		var seg := MeshInstance3D.new()
 		var cyl := CylinderMesh.new()
 		cyl.top_radius = 0.07
