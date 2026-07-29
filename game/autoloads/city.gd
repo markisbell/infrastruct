@@ -141,8 +141,11 @@ func build_zone(pos: Vector2i) -> bool:
 		and _after_build(false)
 
 
-func build_cable(pos: Vector2i) -> bool:
-	return _paid(BuildingDefs.COSTS["cable"]) and model.set_cable(pos, 1) \
+## kind: LINE_OVERHEAD (default — poles and wires) or LINE_UNDERGROUND
+## (buried, pricier). Both live on one electrical graph.
+func build_cable(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
+	var cost_key := "cable" if kind == BuildingDefs.LINE_UNDERGROUND else "overhead_line"
+	return _paid(BuildingDefs.COSTS[cost_key]) and model.set_cable(pos, kind) \
 		and _after_build(true)
 
 

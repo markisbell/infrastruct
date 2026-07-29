@@ -261,8 +261,9 @@ func _take_screenshot() -> void:
 	City.model.terrain.force_height(Vector2i(100, 116), Vector2i(112, 138), 1)
 	City.model.terrain.force_height(Vector2i(103, 121), Vector2i(109, 133), 3)
 	City.place_building("grid_connection", Vector2i(118, 120))
-	for x in range(120, 141):
-		City.build_cable(Vector2i(x, 121))
+	for x in range(120, 141):  # buried out of the station, overhead onward
+		City.build_cable(Vector2i(x, 121), BuildingDefs.LINE_UNDERGROUND
+			if x < 128 else BuildingDefs.LINE_OVERHEAD)
 	City.place_building("substation", Vector2i(134, 122))
 	City.place_building("wind_farm", Vector2i(124, 116))
 	for y in range(117, 121):  # reaches (126,117), adjacent to the farm —
@@ -1648,7 +1649,7 @@ func _smoke_scenarios() -> void:
 
 	# ── A: greenfield — loan, build, grow to the win
 	var state := Scenarios.start("greenfield", "normal")
-	City.take_loan(200_000.0)
+	City.take_loan(300_000.0)  # the 110/20 kV station alone is 120k
 	_build_reference_city(6)
 	City._topo_dirty = true
 	if not await _wait_three_registered(240.0):

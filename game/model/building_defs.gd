@@ -10,8 +10,11 @@ const TILE_M := 25.0  # one tile edge in meters (cable lengths derive from it)
 ## the power net as the aggregated "cpl_heat" coupling_load (contract §4).
 const DEFS := {
 	"substation": {
+		# the 20/0.4 kV district transformer station (Ortsnetzstation):
+		# 250 kVA rating serves its ~40-house zone with headroom
 		"size": Vector2i(1, 1), "cost": 12_000, "device": "", "network": "power",
 		"color": Color(0.25, 0.75, 0.85), "zone_radius": 12, "house_capacity": 40,
+		"rating_kva": 250.0,
 	},
 	"heat_exchanger": {
 		"size": Vector2i(1, 1), "cost": 15_000, "device": "", "network": "heat",
@@ -38,8 +41,11 @@ const DEFS := {
 		"params": {"e_kwh": 500.0, "p_max_kw": 100.0}, "color": Color(0.75, 0.55, 0.3),
 	},
 	"grid_connection": {
-		"size": Vector2i(2, 2), "cost": 30_000, "device": "slack", "network": "power",
-		"params": {"vm_pu": 1.0}, "capacity_kw": 250.0,
+		# the 110/20 kV interface to the transmission grid — a 10 MVA
+		# station (user correction: 250 kW was a substation-trafo number).
+		# Cost is gameplay-priced, not utility-priced (balancing sheet).
+		"size": Vector2i(2, 2), "cost": 120_000, "device": "slack", "network": "power",
+		"params": {"vm_pu": 1.0}, "capacity_kw": 10_000.0,
 		"color": Color(0.85, 0.3, 0.3),
 	},
 	"gas_plant": {
@@ -88,7 +94,12 @@ const DEFS := {
 const HEAT_PLANT_KINDS: Array[String] = ["boiler_plant", "chp_plant", "heat_pump_plant"]
 const WATER_SOURCE_KINDS: Array[String] = ["well", "pumping_station", "water_tower"]
 
-const COSTS := {"road": 40, "cable": 120, "zone": 10, "heat_pipe": 350, "water_pipe": 180}
+## Line kinds on the cable layer (WorldModel.cables values).
+const LINE_OVERHEAD := 1     # pole-and-wire Freileitung — cheap, visible
+const LINE_UNDERGROUND := 2  # buried cable — pricier, out of sight
+
+const COSTS := {"road": 40, "overhead_line": 120, "cable": 320, "zone": 10,
+	"heat_pipe": 350, "water_pipe": 180}
 
 ## Fixed O&M per building per game-day, € (Phase 7 economy; rationale in
 ## tools/balancing/economy.md — sized so a ~25-house town runs thin-but-

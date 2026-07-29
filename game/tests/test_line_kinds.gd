@@ -1,0 +1,59 @@
+extends GdUnitTestSuite
+## Grid rework: overhead vs underground line kinds share one electrical
+## graph; kind transitions split pandapower segments; ratings semantics.
+
+
+func _two_kind_city() -> WorldModel:
+	var model := WorldModel.new()
+	model.place_building("grid_connection", Vector2i(0, 4))  # 2x2 (0-1, 4-5)
+	for x in range(2, 6):
+		model.set_cable(Vector2i(x, 5), BuildingDefs.LINE_OVERHEAD)
+	for x in range(6, 10):
+		model.set_cable(Vector2i(x, 5), BuildingDefs.LINE_UNDERGROUND)
+	model.place_building("substation", Vector2i(10, 5))
+	return model
+
+
+func test_kind_transition_splits_segments() -> void:
+	var topo := PowerTopology.build(_two_kind_city(), {})
+	var lines: Array = topo.doc["native"]["lines"]["lines"]
+	assert_int(lines.size()).is_equal(2)
+	var std_types := {}
+	for line: Dictionary in lines:
+		std_types[line["std_type"]] = true
+	assert_bool(std_types.has("48-AL1/8-ST1A 0.4")).is_true()
+	assert_bool(std_types.has("NAYY 4x150 SE")).is_true()
+	# the joint became a junction bus
+	var junction_buses := 0
+	for bus: Dictionary in topo.doc["native"]["grid_structure"]["buses"]:
+		if str(bus["name"]).begins_with("bj_"):
+			junction_buses += 1
+	assert_int(junction_buses).is_greater_equal(1)
+	# both ends still electrically connected
+	assert_bool(bool(topo.connected["substation_2"])).is_true()
+
+
+func test_uniform_run_stays_one_segment() -> void:
+	var model := WorldModel.new()
+	model.place_building("grid_connection", Vector2i(0, 4))
+	for x in range(2, 10):
+		model.set_cable(Vector2i(x, 5), BuildingDefs.LINE_UNDERGROUND)
+	model.place_building("substation", Vector2i(10, 5))
+	var topo := PowerTopology.build(model, {})
+	var lines: Array = topo.doc["native"]["lines"]["lines"]
+	assert_int(lines.size()).is_equal(1)
+	assert_str(str(lines[0]["std_type"])).is_equal("NAYY 4x150 SE")
+
+
+func test_grid_connection_is_hv_interface() -> void:
+	# user correction: the grid connection is the 110/20 kV interface
+	# (~10 MVA), not a 250 kW distribution trafo
+	assert_float(float(BuildingDefs.get_def("grid_connection")["capacity_kw"])) \
+		.is_equal(10_000.0)
+	assert_float(float(BuildingDefs.get_def("substation")["rating_kva"])) \
+		.is_equal(250.0)
+
+
+func test_line_costs_differ() -> void:
+	assert_int(int(BuildingDefs.COSTS["cable"])) \
+		.is_greater(int(BuildingDefs.COSTS["overhead_line"]))

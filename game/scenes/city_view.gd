@@ -9,7 +9,7 @@ extends Node3D
 
 enum Tool { NONE, ROAD, ZONE, CABLE, SUBSTATION, GAS, WIND, SOLAR, BATTERY, GRID,
 	BULLDOZE, PIPE, HEAT_SUB, BOILER, CHP, HEATPUMP, HEATSTORE,
-	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER }
+	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER, UCABLE }
 
 const TOOL_BUILDING := {
 	Tool.SUBSTATION: "substation", Tool.GAS: "gas_plant", Tool.WIND: "wind_farm",
@@ -340,6 +340,12 @@ func _road_piece(mask: int) -> Array:
 func _make_cable(pos: Vector2i) -> Node3D:
 	var node := Node3D.new()
 	node.position = _center(pos)
+	return node  # everything kind-dependent is built by _orient_cable
+
+
+## The wooden distribution pole + crossarm (also the palette thumbnail).
+func _pole_visual() -> Node3D:
+	var node := Node3D.new()
 	var pole := MeshInstance3D.new()
 	var pole_mesh := CylinderMesh.new()
 	pole_mesh.top_radius = 0.035
@@ -355,41 +361,93 @@ func _make_cable(pos: Vector2i) -> Node3D:
 	arm.position.y = 0.78
 	arm.material_override = pole.material_override
 	node.add_child(arm)
-	return node  # wire segments added by _orient_cable
+	return node
 
 
+func _wire_segment(from: Vector3, to: Vector3, thickness: float,
+		color: Color) -> MeshInstance3D:
+	var wire := MeshInstance3D.new()
+	wire.set_meta("wire", true)
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(thickness, thickness, from.distance_to(to))
+	wire.mesh = mesh
+	wire.transform = Transform3D(
+		Basis.looking_at((to - from).normalized(), Vector3.UP),
+		(from + to) / 2.0)
+	wire.material_override = _flat(color)
+	return wire
+
+
+## Is the neighbor tile part of a building that belongs on the grid —
+## power buildings, or any coupled plant (heat pumps, water pumps...)?
+func _electrical_building_at(pos: Vector2i) -> bool:
+	var id: String = City.model.building_tiles.get(pos, "")
+	if id == "":
+		return false
+	var def := BuildingDefs.get_def(City.model.buildings[id]["kind"])
+	return def.get("network", "") == "power" or def.get("device", "") != ""
+
+
+## Line tile visuals by kind. Overhead: pole, crossarm, wire half-spans,
+## and a sloped SERVICE DROP to any adjacent electrical building (the
+## visible connection). Underground: a trench strip with a marker post
+## (Kabelmerkstein) and a grey riser box where it enters a building.
 func _orient_cable(pos: Vector2i, node: Node3D) -> void:
-	var connections := ""
+	var kind := int(City.model.cables.get(pos, BuildingDefs.LINE_OVERHEAD))
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+	var connections := "%d|" % kind
 	for i in 4:
 		if City.model.cables.has(pos + directions[i]):
 			connections += str(i)
+		if _electrical_building_at(pos + directions[i]):
+			connections += "b%d" % i
 	var wanted := "%s@%s" % [connections, _terrain_fingerprint]
 	if node.get_meta("wires", "") == wanted:
 		return
 	node.set_meta("wires", wanted)
 	for child in node.get_children():
-		if child.has_meta("wire"):
-			child.queue_free()
+		child.queue_free()
+	if kind == BuildingDefs.LINE_UNDERGROUND:
+		_orient_cable_underground(pos, node, directions)
+		return
+	node.add_child(_pole_visual())
 	for i in 4:
 		var d := directions[i]
-		if not City.model.cables.has(pos + d):
-			continue
-		# half-span from own pole top to the tile edge; across a terrain step
-		# the wire slopes up/down to meet the neighbor's half at the edge
-		var dh := (_ground_y(pos + d) - _ground_y(pos)) / 2.0
-		var from := Vector3(0, 0.74, 0)
-		var to := Vector3(d.x * 0.5, 0.74 + dh, d.y * 0.5)
-		var wire := MeshInstance3D.new()
-		wire.set_meta("wire", true)
-		var wire_mesh := BoxMesh.new()
-		wire_mesh.size = Vector3(0.03, 0.03, from.distance_to(to))
-		wire.mesh = wire_mesh
-		wire.transform = Transform3D(
-			Basis.looking_at((to - from).normalized(), Vector3.UP),
-			(from + to) / 2.0)
-		wire.material_override = _flat(Color(0.2, 0.2, 0.22))
-		node.add_child(wire)
+		var dh := _ground_y(pos + d) - _ground_y(pos)
+		if City.model.cables.has(pos + d):
+			# half-span to the tile edge; slopes across terrain steps
+			node.add_child(_wire_segment(Vector3(0, 0.74, 0),
+				Vector3(d.x * 0.5, 0.74 + dh / 2.0, d.y * 0.5),
+				0.03, Color(0.2, 0.2, 0.22)))
+		elif _electrical_building_at(pos + d):
+			# service drop: from the crossarm down to the building's edge
+			node.add_child(_wire_segment(Vector3(0, 0.74, 0),
+				Vector3(d.x * 0.5, 0.32 + dh, d.y * 0.5),
+				0.025, Color(0.16, 0.16, 0.18)))
+
+
+func _orient_cable_underground(pos: Vector2i, node: Node3D,
+		directions: Array[Vector2i]) -> void:
+	var trench := Color(0.36, 0.33, 0.29)
+	node.add_child(_box(Vector3(0.18, 0.025, 0.18), trench, Vector3(0, 0.012, 0)))
+	# marker post so buried runs stay findable on the map
+	node.add_child(_box(Vector3(0.05, 0.2, 0.05), Color(0.85, 0.75, 0.35),
+		Vector3(0.2, 0.1, 0.2)))
+	for i in 4:
+		var d := directions[i]
+		if City.model.cables.has(pos + d):
+			var strip := _box(Vector3(0.16 if d.y != 0 else 0.5,
+				0.025, 0.16 if d.x != 0 else 0.5), trench,
+				Vector3(d.x * 0.25, 0.012, d.y * 0.25))
+			strip.set_meta("wire", true)  # loading overlay tints the trench
+			node.add_child(strip)
+		elif _electrical_building_at(pos + d):
+			# riser box where the cable comes up into the building
+			node.add_child(_box(Vector3(0.4 if d.x != 0 else 0.16, 0.025,
+				0.4 if d.y != 0 else 0.16), trench,
+				Vector3(d.x * 0.3, 0.012, d.y * 0.3)))
+			node.add_child(_box(Vector3(0.12, 0.22, 0.12), Color(0.55, 0.57, 0.6),
+				Vector3(d.x * 0.42, 0.11, d.y * 0.42)))
 
 
 func _make_pipe(pos: Vector2i) -> Node3D:
@@ -1142,7 +1200,9 @@ func _apply_tool(pos: Vector2i) -> void:
 		Tool.ZONE:
 			City.build_zone(pos)
 		Tool.CABLE:
-			City.build_cable(pos)
+			City.build_cable(pos, BuildingDefs.LINE_OVERHEAD)
+		Tool.UCABLE:
+			City.build_cable(pos, BuildingDefs.LINE_UNDERGROUND)
 		Tool.PIPE:
 			City.build_heat_pipe(pos)
 		Tool.WATER_PIPE:

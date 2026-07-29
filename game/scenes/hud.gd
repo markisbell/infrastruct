@@ -20,6 +20,7 @@ const TOOL_KEYS := {
 	KEY_C: CityView.Tool.CHP,
 	KEY_U: CityView.Tool.HEATPUMP,
 	KEY_T: CityView.Tool.HEATSTORE,
+	KEY_G: CityView.Tool.UCABLE,
 	KEY_W: CityView.Tool.WATER_PIPE,
 	KEY_A: CityView.Tool.WATER_SUB,
 	KEY_N: CityView.Tool.WELL,
@@ -52,15 +53,18 @@ func _build_items() -> Array:
 				"desc": "Paint building land. Houses appear when a powered substation covers it and people are happy."},
 		]},
 		{"cat": "Electricity", "items": [
-			{"tool": CityView.Tool.CABLE, "label": "Cable", "mono": "Cb", "key": "3",
-				"color": Color(0.25, 0.25, 0.3), "cost": BuildingDefs.COSTS["cable"],
-				"desc": "LV feeder (~98 kW). Connects plants and substations; sustained overload trips it."},
+			{"tool": CityView.Tool.CABLE, "label": "Overhead line", "mono": "Oh", "key": "3",
+				"color": Color(0.45, 0.36, 0.28), "cost": BuildingDefs.COSTS["overhead_line"],
+				"desc": "Pole-and-wire feeder (~145 kVA). Cheap and visible; sustained overload trips it."},
+			{"tool": CityView.Tool.UCABLE, "label": "Underground cable", "mono": "Ug", "key": "G",
+				"color": Color(0.36, 0.33, 0.29), "cost": BuildingDefs.COSTS["cable"],
+				"desc": "Buried NAYY 4x150 (~187 kVA). Pricier, out of sight — joins overhead runs freely."},
 			{"tool": CityView.Tool.SUBSTATION, "label": "Substation", "mono": "Su", "key": "4",
 				"kind": "substation",
-				"desc": "Defines a power supply zone (radius 12). Houses inside draw electricity here."},
+				"desc": "20/0.4 kV district transformer (250 kVA), supply zone radius 12. Houses inside draw electricity here."},
 			{"tool": CityView.Tool.GRID, "label": "Grid connection", "mono": "Gr", "key": "9",
 				"kind": "grid_connection",
-				"desc": "External grid feed, 250 kW. The whole city blacks out if you overload it."},
+				"desc": "The 110/20 kV interface to the transmission grid — 10 MVA. Your city's lifeline and wholesale meter."},
 			{"tool": CityView.Tool.GAS, "label": "Gas plant", "mono": "Ga", "key": "5",
 				"kind": "gas_plant",
 				"desc": "500 kW dispatchable generation — runs when wind and sun don't."},
@@ -487,7 +491,23 @@ func _thumbnail_scene(tool: CityView.Tool) -> Node3D:
 			lot.add_child(house)
 			return lot
 		CityView.Tool.CABLE:
-			return view._make_cable(Vector2i.ZERO)
+			return view._pole_visual()
+		CityView.Tool.UCABLE:
+			var trench := Node3D.new()
+			var strip := MeshInstance3D.new()
+			var strip_mesh := BoxMesh.new()
+			strip_mesh.size = Vector3(0.9, 0.05, 0.2)
+			strip.mesh = strip_mesh
+			strip.material_override = view._flat(Color(0.36, 0.33, 0.29))
+			trench.add_child(strip)
+			var marker := MeshInstance3D.new()
+			var marker_mesh := BoxMesh.new()
+			marker_mesh.size = Vector3(0.08, 0.3, 0.08)
+			marker.mesh = marker_mesh
+			marker.position = Vector3(0.2, 0.15, 0.15)
+			marker.material_override = view._flat(Color(0.85, 0.75, 0.35))
+			trench.add_child(marker)
+			return trench
 		CityView.Tool.PIPE:
 			return _pipe_sample([[CityView.PIPE_SUPPLY_COLOR, 0.13],
 				[CityView.PIPE_RETURN_COLOR, -0.13]], 0.055)

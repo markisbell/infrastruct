@@ -40,21 +40,24 @@ static func start(id: String, difficulty_key: String) -> Dictionary:
 	City.reset_for_scenario(42)
 	City.difficulty = diff.duplicate()
 	City.events_enabled = id != "tutorial"  # tutorial stays predictable
+	# prebuilds run on the reset's deep pockets; the scenario's start
+	# budget lands AFTER (the inherited town wasn't paid for by the player)
+	var start_money := 500_000
 	match id:
 		"sandbox":
-			City.money = int(500_000 * diff["money_scale"])
 			City.model.terrain.set_seed(19)
 		"tutorial":
-			City.money = int(400_000 * diff["money_scale"])
+			start_money = 400_000
 		"greenfield":
-			City.money = int(350_000 * diff["money_scale"])
+			start_money = 350_000
 			City.model.terrain.set_seed(19)
 		"brownfield":
-			City.money = int(120_000 * diff["money_scale"])
+			start_money = 120_000
 			_build_brownfield()
 		"transition":
-			City.money = int(300_000 * diff["money_scale"])
+			start_money = 300_000
 			_build_transition()
+	City.money = int(start_money * diff["money_scale"])
 	City._topo_dirty = true
 	# the CLOCK is the time authority (City.current_t is stale between steps)
 	return {"id": id, "start_day": int(GameClock.total_minutes / (15.0 * 96.0)),
@@ -158,7 +161,7 @@ static func tutorial_steps() -> Array[Dictionary]:
 		{"text": "ELECTRICITY 1/4 — Build a Grid connection (TAB menu or key 9). It is your link to the wholesale grid.",
 			"done": func() -> bool:
 				return not City.model.buildings_of_kind("grid_connection").is_empty()},
-		{"text": "ELECTRICITY 2/4 — Place a Substation (4) and connect it to the grid connection with Cables (3).",
+		{"text": "ELECTRICITY 2/4 — Place a Substation (4) and connect it to the grid connection with Overhead lines (3) or buried Cables (G).",
 			"done": func() -> bool:
 				return City.topo.connected.get(
 					City.model.buildings_of_kind("substation")[0], false) \

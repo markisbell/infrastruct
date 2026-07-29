@@ -15,10 +15,16 @@ extends RefCounted
 
 const NEIGHBORS: Array[Vector2i] = [
 	Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-## Game cables are LV distribution feeders: ~98 kVA thermal at 0.4 kV. One
-## healthy zone (40 houses, 72 kW peak) loads one feeder to ~73 %; hanging a
-## second zone on the same cable overloads it — build separate feeders.
-const STD_TYPE := "NAYY 4x50 SE"
+## Two LV feeder builds share one electrical graph (they join freely; a
+## kind transition becomes a junction bus so every pandapower line segment
+## carries ONE std_type): overhead Freileitung 48-AL1 (~145 kVA) vs the
+## buried NAYY 4x150 (~187 kVA, pricier, out of sight). One healthy zone
+## (40 houses, ~76 kW peak) loads an overhead feeder to ~52 % — hanging a
+## second zone plus a cold-snap coupling load on it still overloads.
+const STD_TYPES := {
+	BuildingDefs.LINE_OVERHEAD: "48-AL1/8-ST1A 0.4",
+	BuildingDefs.LINE_UNDERGROUND: "NAYY 4x150 SE",
+}
 
 var doc := {}                    # contract topology document ({} if no slack)
 var line_tiles := {}             # "L<idx>" -> Array[Vector2i] (path incl. endpoints)
@@ -36,11 +42,11 @@ static func build(model: WorldModel, tripped: Dictionary) -> PowerTopology:
 
 
 func _build(model: WorldModel, tripped: Dictionary) -> void:
-	# live cable set minus tripped tiles
+	# live cable set minus tripped tiles (value = line kind)
 	var cable := {}
 	for pos: Vector2i in model.cables:
 		if not tripped.has(pos):
-			cable[pos] = true
+			cable[pos] = int(model.cables[pos])
 
 	# 1. bus tiles: building connection points + junctions
 	var tile_building := {}  # cable tile -> building id (first wins)
@@ -55,7 +61,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	for pos: Vector2i in cable:
 		if tile_building.has(pos):
 			bus_tiles[pos] = tile_building[pos]
-		elif _degree(cable, pos) >= 3:
+		elif _degree(cable, pos) >= 3 or _kind_transition(cable, pos):
 			bus_tiles[pos] = "j:%d,%d" % [pos.x, pos.y]
 
 	# 2. walk lines between bus tiles
@@ -132,11 +138,15 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			continue
 		var idx := lines_out.size()
 		line_tiles["L%d" % idx] = line["path"]
+		# kind transitions are junction buses, so the path interior is
+		# kind-uniform; the middle tile names the segment's build
+		var path: Array = line["path"]
+		var mid_kind: int = cable.get(path[path.size() / 2], BuildingDefs.LINE_OVERHEAD)
 		lines_out.append({
 			"name": "L%d" % idx,
 			"from_bus": bus_index[line["a"]], "to_bus": bus_index[line["b"]],
-			"length_km": (line["path"] as Array).size() * BuildingDefs.TILE_M / 1000.0,
-			"std_type": STD_TYPE,
+			"length_km": path.size() * BuildingDefs.TILE_M / 1000.0,
+			"std_type": STD_TYPES.get(mid_kind, STD_TYPES[BuildingDefs.LINE_OVERHEAD]),
 		})
 
 	var zones: Array[Dictionary] = []
@@ -211,6 +221,17 @@ static func _degree(cable: Dictionary, pos: Vector2i) -> int:
 		if cable.has(pos + offset):
 			degree += 1
 	return degree
+
+
+## Overhead-to-underground joints become junction buses so each segment
+## keeps one std_type. Only the lower-kind side is marked — one junction
+## per joint, not two adjacent ones.
+static func _kind_transition(cable: Dictionary, pos: Vector2i) -> bool:
+	for offset: Vector2i in NEIGHBORS:
+		var n: Vector2i = pos + offset
+		if cable.has(n) and cable[n] > cable[pos]:
+			return true
+	return false
 
 
 static func _bus_name(key: Variant) -> String:
