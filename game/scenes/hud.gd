@@ -125,6 +125,9 @@ func _build_items() -> Array:
 				"desc": "Pressure head + 200 m³ buffer. Rides through pump outages; taller = more bar."},
 		]},
 		{"cat": "Service", "items": [
+			{"tool": CityView.Tool.NONE, "label": "Inspect", "mono": "?", "key": "Esc",
+				"color": Color(0.31, 0.76, 0.97), "cost": 0,
+				"desc": "No tool: click any building or line/pipe to open its daily graph. Esc always returns here."},
 			{"tool": CityView.Tool.REPAIR, "label": "Repair crew", "mono": "Rp", "key": "M",
 				"color": Color(1.0, 0.75, 0.2), "cost": City.CREW_COST,
 				"desc": "Send a crew to a TRIPPED line or transformer (~2 h work). Overload trips don't fix themselves."},
@@ -744,7 +747,8 @@ func _refresh() -> void:
 		GameClock.day(), GameClock.time_of_day_string(), GameClock.season_name(),
 		float(City.weather.sample(City.current_t)["temp_c"]),
 		("PAUSED" if GameClock.speed == 0.0 else "%.0fx" % GameClock.speed),
-		_fmt_money(City.money), City.happiness, houses, demand,
+		("∞" if City.infinite_money else _fmt_money(City.money)),
+		City.happiness, houses, demand,
 		City.total_outage_minutes(), City.total_heat_outage_minutes(),
 		City.total_water_outage_minutes(),
 		("  ·  ⟳ rebuilding grid…" if City.is_syncing() else "")]
@@ -772,7 +776,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.is_pressed():
 		return
 	var key: InputEventKey = event
-	if TOOL_KEYS.has(key.keycode):
+	if key.keycode == KEY_ESCAPE:
+		_select_tool(CityView.Tool.NONE)  # back to inspect mode
+	elif TOOL_KEYS.has(key.keycode):
 		_select_tool(TOOL_KEYS[key.keycode])
 	elif key.keycode == KEY_TAB:
 		_build_menu.visible = not _build_menu.visible

@@ -152,6 +152,12 @@ func _draw() -> void:
 		draw_string(font, Vector2(plot_right - 90, y - 3), str(limit["label"]),
 			HORIZONTAL_ALIGNMENT_RIGHT, 88, FONT_SIZE - 1, color)
 
+	# no samples anywhere yet: say so instead of showing a bare grid
+	if values.size() <= limits.size():
+		draw_string(font, Vector2(plot_left + 20, (plot_top + plot_bottom) / 2.0),
+			"collecting data — solvers must be running (network connected?)",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, FONT_SIZE, Color(0.75, 0.7, 0.4))
+
 	# curves: yesterday faded (the full-day reference), today opaque
 	var now_frac := float(City.current_t % 96) / 95.0
 	for entry: Dictionary in series:

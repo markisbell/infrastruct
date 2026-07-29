@@ -103,6 +103,9 @@ var _last_water_doc_json := ""
 var grid_capacity_override := -1.0
 ## Scenario hook: freezes growth/abandonment (constant-demand recordings).
 var growth_enabled := true
+## Sandbox: building never costs, the HUD shows ∞ (income/expenses still
+## tick through the books, they just never gate anything).
+var infinite_money := false
 
 # ─── Phase 7 game layer ───
 var event_system := EventSystem.new(42)
@@ -238,6 +241,8 @@ func bulldoze(pos: Vector2i) -> bool:
 
 
 func _paid(cost: int) -> bool:
+	if infinite_money:
+		return true
 	if money < cost:
 		return false
 	money -= cost
@@ -1166,6 +1171,7 @@ func reset_for_scenario(weather_seed: int) -> void:
 	grid_trip_until = -1
 	grid_capacity_override = -1.0
 	growth_enabled = true
+	infinite_money = false
 	event_system = EventSystem.new(weather_seed)
 	events_enabled = false
 	loans = 0.0

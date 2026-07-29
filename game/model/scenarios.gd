@@ -46,6 +46,7 @@ static func start(id: String, difficulty_key: String) -> Dictionary:
 	match id:
 		"sandbox":
 			City.model.terrain.set_seed(19)
+			City.infinite_money = true  # no goals, no budget — just build
 		"tutorial":
 			start_money = 400_000
 		"greenfield":
