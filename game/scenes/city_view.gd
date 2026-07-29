@@ -1264,7 +1264,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif _orbiting:
 			# free orbit around the current focus; Q/E snap back to 90° views
 			_orbit_travel += mm.relative.length()
-			_cam_yaw += mm.relative.x * 0.4
+			_cam_yaw -= mm.relative.x * 0.4
 			_cam_yaw_target = _cam_yaw
 			_place_camera()
 		elif mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
