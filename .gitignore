@@ -16,3 +16,4 @@ venv/
 tests/e2e/out/
 orchestration/logs/
 game/reports/
+logs/
