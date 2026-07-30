@@ -1,8 +1,10 @@
 name: ci
 
+# Manual only (user request): every push was burning CI minutes and
+# spamming mail. Trigger from the Actions tab ("Run workflow") or:
+#   gh workflow run ci --ref main
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 env:
   GODOT_VERSION: 4.7.1
