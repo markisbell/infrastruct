@@ -109,12 +109,31 @@ var _cold_material := StandardMaterial3D.new()
 var _house_scene_cache := {}
 
 var _terrain_mesh: MeshInstance3D
+var _water_mesh: MeshInstance3D
 var _terrain_fingerprint := ""
 
+## Animated river surface: albedo shimmer + low roughness for sun glints.
+const WATER_SHADER := "
+shader_type spatial;
+uniform vec3 shallow : source_color = vec3(0.17, 0.43, 0.60);
+uniform vec3 deep : source_color = vec3(0.07, 0.23, 0.40);
+void fragment() {
+	vec3 world = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	float wave = sin(world.x * 1.9 + TIME * 0.9) * sin(world.z * 1.4 + TIME * 0.7)
+		+ 0.5 * sin((world.x + world.z) * 3.1 - TIME * 1.3);
+	ALBEDO = mix(deep, shallow, 0.5 + 0.28 * wave);
+	ROUGHNESS = 0.12;
+	SPECULAR = 0.7;
+}
+"
+
 ## Grass ramp by height level (0 = valley, MAX = rocky top); skirts earthen.
+## Realism pass: warmer, more saturated meadow greens (SynerGame reference)
+## plus per-tile jitter toward hay — see MEADOW_JITTER in _rebuild_terrain.
 const TERRAIN_COLORS: Array[Color] = [
-	Color(0.34, 0.50, 0.28), Color(0.38, 0.53, 0.28), Color(0.44, 0.55, 0.29),
-	Color(0.50, 0.55, 0.30), Color(0.55, 0.52, 0.35), Color(0.58, 0.55, 0.45)]
+	Color(0.36, 0.56, 0.24), Color(0.40, 0.59, 0.25), Color(0.46, 0.61, 0.26),
+	Color(0.52, 0.60, 0.28), Color(0.57, 0.56, 0.34), Color(0.60, 0.57, 0.45)]
+const MEADOW_JITTER := Color(0.58, 0.60, 0.26)  # dry-grass tint to lerp toward
 ## bright warm earth: skirts face away from the sun, so the bluish ambient
 ## dominates them — a dark brown reads as water there, this stays soil
 const TERRAIN_SKIRT_COLOR := Color(0.72, 0.58, 0.4)
@@ -148,20 +167,53 @@ func _ready() -> void:
 
 
 func _build_environment() -> void:
+	# realism pass (SynerGame reference): warm soft daylight + sky ambient +
+	# SSAO + filmic tonemap + gentle glow/fog — Forward+ features
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-52, -35, 0)
+	sun.rotation_degrees = Vector3(-50, -32, 0)
 	sun.shadow_enabled = true
-	sun.light_energy = 1.25
+	sun.light_color = Color(1.0, 0.965, 0.89)  # late-morning warmth
+	sun.light_energy = 1.5
+	sun.shadow_blur = 1.2
 	sun.directional_shadow_max_distance = 220.0
+	sun.directional_shadow_split_1 = 0.08
 	add_child(sun)
 	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.55, 0.7, 0.82)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	# near-neutral fill: a blue ambient turned every shadow-side face (esp.
-	# terrain skirts) into "water" — keep just a hint of sky in it
-	env.ambient_light_color = Color(0.78, 0.78, 0.8)
-	env.ambient_light_energy = 0.5
+	env.background_mode = Environment.BG_SKY
+	var sky_material := ProceduralSkyMaterial.new()
+	sky_material.sky_top_color = Color(0.33, 0.52, 0.78)
+	sky_material.sky_horizon_color = Color(0.74, 0.82, 0.88)
+	sky_material.ground_bottom_color = Color(0.32, 0.38, 0.3)
+	sky_material.ground_horizon_color = Color(0.72, 0.79, 0.83)
+	env.sky = Sky.new()
+	env.sky.sky_material = sky_material
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	# sky ambient at reduced energy: full blue fill made shadow-side faces
+	# (esp. terrain skirts) read as water — the old vertex-color gotcha —
+	# and too much of it flattens the sun shadows the look depends on
+	env.ambient_light_sky_contribution = 0.55
+	env.ambient_light_energy = 0.65
+	# ACES over FILMIC: filmic bleached the greens pastel; ACES keeps the
+	# SynerGame-style saturated meadow under the same sun
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	env.tonemap_white = 6.0
+	env.ssao_enabled = true
+	env.ssao_intensity = 2.0
+	env.ssao_power = 1.5
+	env.glow_enabled = true
+	env.glow_intensity = 0.25
+	env.glow_bloom = 0.02
+	env.glow_hdr_threshold = 1.1
+	env.fog_enabled = true
+	env.fog_light_color = Color(0.78, 0.84, 0.9)
+	# the camera orbits ~90 units out — exponential fog stronger than this
+	# washes the WHOLE frame pastel (first attempt: 0.0035 = 27% fog on
+	# everything); this keeps it a distant-hill hint only
+	env.fog_density = 0.0006
+	env.fog_sky_affect = 0.0
+	env.adjustment_enabled = true
+	env.adjustment_saturation = 1.28
+	env.adjustment_contrast = 1.06
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
@@ -246,6 +298,9 @@ func _rebuild_terrain() -> void:
 	_terrain_fingerprint = terrain.fingerprint()
 	if _terrain_mesh:
 		_terrain_mesh.queue_free()
+	if _water_mesh:
+		_water_mesh.queue_free()
+		_water_mesh = null
 	# heights moved under everything: flush all layers so _diff recreates
 	# them at the new ground levels (matters after loading a save)
 	for layer: Dictionary in [_roads, _cables, _pipes, _water_pipes, _zones,
@@ -260,13 +315,28 @@ func _rebuild_terrain() -> void:
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
+	var water_verts := PackedVector3Array()
+	var water_normals := PackedVector3Array()
+	var water_colors := PackedColorArray()
+	var water_indices := PackedInt32Array()
 	for x in WORLD_TILES:
 		for z in WORLD_TILES:
 			var pos := Vector2i(x, z)
 			var h := terrain.height(pos)
 			var y := _tile_y(terrain, pos)
-			var color := WATER_COLOR if terrain.is_water(pos) \
-				else TERRAIN_COLORS[clampi(h, 0, TERRAIN_COLORS.size() - 1)]
+			if terrain.is_water(pos):
+				# water lives on its own surface (animated shader below)
+				_emit_quad(water_verts, water_normals, water_colors,
+					water_indices,
+					[Vector3(x, y, z), Vector3(x + 1, y, z),
+						Vector3(x + 1, y, z + 1), Vector3(x, y, z + 1)],
+					Vector3.UP, WATER_COLOR)
+				continue
+			# meadow patchiness: hash-jitter each tile toward dry grass —
+			# flat single-color plains read as plastic, this reads as land
+			var color := TERRAIN_COLORS[clampi(h, 0, TERRAIN_COLORS.size() - 1)]
+			var jitter := float(_tile_hash(pos, terrain.seed_value + 17) % 100) / 100.0
+			color = color.lerp(MEADOW_JITTER, jitter * 0.18)
 			_emit_quad(verts, normals, colors, indices,
 				[Vector3(x, y, z), Vector3(x + 1, y, z),
 					Vector3(x + 1, y, z + 1), Vector3(x, y, z + 1)],
@@ -302,11 +372,34 @@ func _rebuild_terrain() -> void:
 	_terrain_mesh.position.y = -0.01  # tile decals at ground level stay on top
 	var material := StandardMaterial3D.new()
 	material.vertex_color_use_as_albedo = true
+	# Forward+ treats vertex colors as LINEAR by default — our palette is
+	# authored in sRGB; without this flag every green renders bleached
+	material.vertex_color_is_srgb = true
+	material.roughness = 0.95  # grass never glints
 	# skirt quads are wound per-side; skip the culling bookkeeping entirely —
 	# lighting stays correct via the explicit face normals
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_terrain_mesh.material_override = material
 	add_child(_terrain_mesh)
+	if water_verts.size() > 0:
+		var water_arrays := []
+		water_arrays.resize(Mesh.ARRAY_MAX)
+		water_arrays[Mesh.ARRAY_VERTEX] = water_verts
+		water_arrays[Mesh.ARRAY_NORMAL] = water_normals
+		water_arrays[Mesh.ARRAY_COLOR] = water_colors
+		water_arrays[Mesh.ARRAY_INDEX] = water_indices
+		var water_array_mesh := ArrayMesh.new()
+		water_array_mesh.add_surface_from_arrays(
+			Mesh.PRIMITIVE_TRIANGLES, water_arrays)
+		_water_mesh = MeshInstance3D.new()
+		_water_mesh.mesh = water_array_mesh
+		_water_mesh.position.y = -0.01
+		var water_shader := Shader.new()
+		water_shader.code = WATER_SHADER
+		var water_material := ShaderMaterial.new()
+		water_material.shader = water_shader
+		_water_mesh.material_override = water_material
+		add_child(_water_mesh)
 
 
 ## Rendered surface height of a tile: its plateau, dipped for water — the
@@ -342,16 +435,17 @@ const DECO_KINDS := {
 ## category -> [weighted variant pool, density (fraction of member tiles)]
 const DECO_POOLS := {
 	"grove":    {"pool": ["tree", "tree", "tree", "tree_high", "tree_high",
-		"plant", "patch_grass"], "density": 0.45},
+		"plant", "patch_grass"], "density": 0.62},
 	"rocks":    {"pool": ["stones", "stones", "rocks_low", "rocks_low",
 		"rocks_high", "patch_dirt"], "density": 0.25},
 	"riparian": {"pool": ["tree", "tree", "plant", "plant", "patch_grass"],
-		"density": 0.32},
+		"density": 0.45},
 	"sparse":   {"pool": ["patch_dirt", "patch_grass", "stones", "plant",
 		"tree"], "density": 0.012},
 }
 ## cluster field: > this = grove, < negative rock threshold = stone field
-const GROVE_LEVEL := 0.28
+## (grove threshold lowered in the graphics pass: bigger forest masses)
+const GROVE_LEVEL := 0.22
 const ROCKS_LEVEL := -0.42
 
 var _deco_nodes := {}        # variant -> MultiMeshInstance3D
@@ -506,7 +600,7 @@ func _make_zone(pos: Vector2i) -> Node3D:
 	var mesh := PlaneMesh.new()
 	mesh.size = Vector2(0.92, 0.92)
 	quad.mesh = mesh
-	quad.material_override = _flat(Color(0.45, 0.8, 0.4, 0.28), true)
+	quad.material_override = _flat(Color(0.45, 0.8, 0.4, 0.14), true)
 	quad.position = _center(pos) + Vector3(0, 0.01, 0)
 	return quad
 

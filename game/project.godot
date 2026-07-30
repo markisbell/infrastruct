@@ -30,5 +30,8 @@ window/size/viewport_height=800
 
 [rendering]
 
-renderer/rendering_method="gl_compatibility"
+; Forward+ (graphics realism pass): SSAO, soft shadows, filmic tonemapping
+; and sky ambient — the SynerGame-style look needs them.
+renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="gl_compatibility"
+anti_aliasing/quality/msaa_3d=2

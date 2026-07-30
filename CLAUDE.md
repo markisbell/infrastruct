@@ -210,6 +210,13 @@ pandapower pins, keep separate), `.venv-water` (rtwaterflow).
   restore clock BEFORE `Scenarios.start` (start_day reads the clock).
 - **Screenshots need a real window** (headless GPU capture hangs); the batch
   Add-Content BOM corrupts JSON — use the Write tool for config files.
+- **Renderer is Forward+ since the graphics pass (2026-07-30)** — SSAO,
+  soft shadows, ACES, sky ambient, animated water shader. Exported builds
+  need a Vulkan-capable GPU (Win 11 era hardware is fine). CRITICAL
+  Forward+ gotcha: vertex colors are LINEAR by default — vertex-colored
+  meshes (terrain) need `vertex_color_is_srgb = true` or every authored
+  color renders bleached pastel (cost one debugging loop). Headless smokes
+  are unaffected (dummy driver).
 - **Godot 4 has NO "standalone" feature tag** — detect exported builds via
   the ABSENCE of "editor" (`globalize_path("res://")` is useless in exports;
   use `OS.get_executable_path().get_base_dir()`). ISCC dies on MAX_PATH for
