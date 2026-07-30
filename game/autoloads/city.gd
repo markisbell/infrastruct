@@ -287,6 +287,14 @@ func _sync_topology() -> void:
 	topo = PowerTopology.build(model, tripped_tiles)
 	heat_topo = HeatTopology.build(model, tripped_tiles)
 	water_topo = WaterTopology.build(model, tripped_tiles)
+	# surface builder warnings (island networks etc.) — they were silent,
+	# which made "why is my second network dead?" undebuggable in play
+	var warned: Dictionary = get_meta("topo_warned", {})
+	for warning: String in (topo.warnings + heat_topo.warnings + water_topo.warnings):
+		if not warned.has(warning):
+			warned[warning] = true
+			log_event("topology", "warning", warning)
+	set_meta("topo_warned", warned)
 	_syncing = true
 	_register_async()
 
@@ -950,12 +958,21 @@ func _check_protection(t: int, result: Dictionary) -> void:
 		else:
 			trafo_streak.erase(sub_id)
 	set_meta("trafo_streak", trafo_streak)
-	# grid connection capacity (game-side protection on the slack)
+	# grid connection capacity (game-side protection on the slack): TOTAL
+	# import across all CONNECTED 110/20 kV stations vs their combined MVA —
+	# a second grid connection genuinely adds import headroom
 	var slack_ids := model.buildings_of_kind("grid_connection")
 	if not slack_ids.is_empty():
-		var capacity: float = grid_capacity_override if grid_capacity_override > 0.0 \
+		var per_cap: float = grid_capacity_override if grid_capacity_override > 0.0 \
 			else BuildingDefs.get_def("grid_connection")["capacity_kw"]
-		var import_kw := float(result.get("devices", {}).get(slack_ids[0], {}).get("output_kw", 0.0))
+		var import_kw := 0.0
+		var n_connected := 0
+		for slack_id: String in slack_ids:
+			if topo.connected.get(slack_id, false):
+				n_connected += 1
+			import_kw += float(result.get("devices", {})
+				.get(slack_id, {}).get("output_kw", 0.0))
+		var capacity := per_cap * maxf(float(n_connected), 1.0)
 		if import_kw > capacity:
 			_slack_streak += 1
 			if _slack_streak >= GRID_TRIP_STREAK and grid_trip_until <= t:

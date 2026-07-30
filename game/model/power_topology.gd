@@ -65,19 +65,25 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		if not tripped.has(pos):
 			cable[pos] = int(model.cables[pos])
 
-	# 1. bus tiles: building connection points + junctions
-	var tile_building := {}  # cable tile -> building id (first wins)
+	# 1. bus tiles: building connection points + junctions. A cable tile
+	# adjacent to SEVERAL buildings serves them ALL — the first id names the
+	# bus, the rest attach through short service edges below (first-wins
+	# used to silently orphan every later neighbor of a shared tile)
+	var tile_buildings := {}  # cable tile -> Array[String] (adjacent buildings)
 	for id: String in model.buildings:
 		var entry: Dictionary = model.buildings[id]
 		for tile: Vector2i in BuildingDefs.footprint(entry["kind"], entry["anchor"]):
 			for offset: Vector2i in NEIGHBORS:
 				var n: Vector2i = tile + offset
-				if cable.has(n) and not tile_building.has(n):
-					tile_building[n] = id
+				if cable.has(n):
+					if not tile_buildings.has(n):
+						tile_buildings[n] = []
+					if not (tile_buildings[n] as Array).has(id):
+						tile_buildings[n].append(id)
 	var bus_tiles := {}  # tile -> bus key (building id or "j:x,y")
 	for pos: Vector2i in cable:
-		if tile_building.has(pos):
-			bus_tiles[pos] = tile_building[pos]
+		if tile_buildings.has(pos):
+			bus_tiles[pos] = tile_buildings[pos][0]
 		elif _degree(cable, pos) >= 3 or _kind_transition(cable, pos):
 			bus_tiles[pos] = "j:%d,%d" % [pos.x, pos.y]
 
@@ -116,24 +122,40 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			walked["%s>%s" % [cur, prev]] = true
 			if bus_tiles[pos] != bus_tiles[cur]:
 				raw_lines.append({"a": bus_tiles[pos], "b": bus_tiles[cur], "path": path})
+	# service edges: every EXTRA building on a shared connection tile joins
+	# the first one over that tile (one-tile segment, the tile's line kind)
+	var linked := {}
+	for pos: Vector2i in tile_buildings:
+		var ids: Array = tile_buildings[pos]
+		for i in range(1, ids.size()):
+			var pair := "%s|%s" % [ids[0], ids[i]]
+			if linked.has(pair):
+				continue
+			linked[pair] = true
+			var stub: Array[Vector2i] = [pos]
+			raw_lines.append({"a": ids[0], "b": ids[i], "path": stub})
 
-	# 3. reachability from the slack building over the line graph
+	# 3. reachability from EVERY grid connection: each 110/20 kV station
+	# energizes its own island (parallel ext_grids — the backend maps every
+	# slack device onto its own substation row). Seeding only the first one
+	# left later stations dead (user report: "newer grid connections don't
+	# get activated").
 	var slack_ids := model.buildings_of_kind("grid_connection")
 	has_slack = not slack_ids.is_empty()
 	if not has_slack:
 		warnings.append("no grid connection — network unsolvable, everything unpowered")
 		return
-	var slack_id: String = slack_ids[0]
-	if slack_ids.size() > 1:
-		warnings.append("multiple grid connections; using %s" % slack_id)
 	var adjacency := {}
 	for line: Dictionary in raw_lines:
 		for pair: Array in [[line["a"], line["b"]], [line["b"], line["a"]]]:
 			if not adjacency.has(pair[0]):
 				adjacency[pair[0]] = []
 			adjacency[pair[0]].append(pair[1])
-	var reachable := {slack_id: true}
-	var queue: Array = [slack_id]
+	var reachable := {}
+	var queue: Array = []
+	for slack_id: String in slack_ids:
+		reachable[slack_id] = true
+		queue.append(slack_id)
 	while not queue.is_empty():
 		var key: Variant = queue.pop_back()
 		for neighbor: Variant in adjacency.get(key, []):

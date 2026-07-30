@@ -45,8 +45,10 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		if not tripped.has(pos):
 			pipe[pos] = true
 
-	# 1. bus tiles: heat-building connection points + junctions
-	var tile_building := {}
+	# 1. bus tiles: heat-building connection points + junctions. A pipe tile
+	# adjacent to SEVERAL heat buildings serves them ALL (service edges
+	# below) — first-wins orphaned every later neighbor of a shared tile
+	var tile_buildings := {}
 	for id: String in model.buildings:
 		if not _relevant(model, id):
 			continue
@@ -54,12 +56,15 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		for tile: Vector2i in BuildingDefs.footprint(entry["kind"], entry["anchor"]):
 			for offset: Vector2i in NEIGHBORS:
 				var n: Vector2i = tile + offset
-				if pipe.has(n) and not tile_building.has(n):
-					tile_building[n] = id
+				if pipe.has(n):
+					if not tile_buildings.has(n):
+						tile_buildings[n] = []
+					if not (tile_buildings[n] as Array).has(id):
+						tile_buildings[n].append(id)
 	var bus_tiles := {}
 	for pos: Vector2i in pipe:
-		if tile_building.has(pos):
-			bus_tiles[pos] = tile_building[pos]
+		if tile_buildings.has(pos):
+			bus_tiles[pos] = tile_buildings[pos][0]
 		elif _degree(pipe, pos) >= 3:
 			bus_tiles[pos] = "j:%d,%d" % [pos.x, pos.y]
 
@@ -95,6 +100,18 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			walked["%s>%s" % [cur, prev]] = true
 			if bus_tiles[pos] != bus_tiles[cur]:
 				raw_pipes.append({"a": bus_tiles[pos], "b": bus_tiles[cur], "path": path})
+	# service edges: every EXTRA building on a shared connection tile joins
+	# the first one over that tile (one-tile stub trunk)
+	var linked := {}
+	for pos: Vector2i in tile_buildings:
+		var ids: Array = tile_buildings[pos]
+		for i in range(1, ids.size()):
+			var pair := "%s|%s" % [ids[0], ids[i]]
+			if linked.has(pair):
+				continue
+			linked[pair] = true
+			var stub: Array[Vector2i] = [pos]
+			raw_pipes.append({"a": ids[0], "b": ids[i], "path": stub})
 
 	# 3. reachability from the slack plant
 	var plant_ids: Array[String] = []
@@ -122,6 +139,11 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	for id: String in model.buildings:
 		if _relevant(model, id):
 			connected[id] = reachable.has(id)
+	for id: String in plant_ids:
+		if not reachable.has(id):
+			warnings.append(("heat plant %s sits on a separate pipe network — "
+				+ "only the slack plant's network is solved; connect the networks") % id)
+			break
 
 	# 4. junction/pipe/consumer/producer docs (reachable subgraph only)
 	var node_name := {}
