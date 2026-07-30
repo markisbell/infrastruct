@@ -293,44 +293,53 @@ static func _tile_y(terrain: Terrain, pos: Vector2i) -> float:
 
 # ─── environment decoration (Kenney mini-forest, deterministic scatter) ───
 #
-# Empty tiles get trees / stones / earth patches, picked per tile from a
-# seeded hash (no stored state, byte-stable across sessions) and rendered
-# as ONE MultiMesh per variant — thousands of props, a handful of draw
-# calls. Anything built on a tile removes its prop (occupancy filter runs
-# per redraw); zoned land is kept clean (that's building land).
+# Props CLUSTER like real terrain features (user direction: grouped, not
+# sprinkled anywhere): a low-frequency noise field carves GROVES (dense
+# trees) and STONE FIELDS (dense rocks), rivers grow a riparian tree
+# strip, and the land between stays almost bare — the occasional lone
+# patch or boulder. Deterministic per (tile, terrain seed), rendered as
+# ONE MultiMesh per variant. Anything built on a tile removes its prop
+# (occupancy filter runs per redraw); zoned land is kept clean.
 
-const DECO_DENSITY := 0.08   # fraction of eligible empty tiles
 const MINI_FOREST := "mini-forest/Models/GLB format/"
-## variant -> {file, fit (footprint in world units), bands: which height
-## bands it appears in (0 = valleys/waterside, 1 = grass mid, 2 = rocky top).
+## variant -> {file, fit (footprint in world units)}.
 ## The pack also ships bridge.glb — the hook for river crossings later.
 const DECO_KINDS := {
-	"tree":        {"file": "tree.glb",        "fit": 0.55, "bands": [0, 1]},
-	"tree_high":   {"file": "tree-high.glb",   "fit": 0.5,  "bands": [0, 1]},
-	"plant":       {"file": "plant.glb",       "fit": 0.35, "bands": [0, 1]},
-	"stones":      {"file": "stones.glb",      "fit": 0.35, "bands": [1, 2]},
-	"rocks_low":   {"file": "rocks-low.glb",   "fit": 0.5,  "bands": [1, 2]},
-	"rocks_high":  {"file": "rocks-high.glb",  "fit": 0.55, "bands": [2]},
-	"patch_dirt":  {"file": "patch-dirt.glb",  "fit": 0.85, "bands": [0, 1]},
-	"patch_grass": {"file": "patch-grass.glb", "fit": 0.85, "bands": [0, 1]},
+	"tree":        {"file": "tree.glb",        "fit": 0.55},
+	"tree_high":   {"file": "tree-high.glb",   "fit": 0.5},
+	"plant":       {"file": "plant.glb",       "fit": 0.35},
+	"stones":      {"file": "stones.glb",      "fit": 0.35},
+	"rocks_low":   {"file": "rocks-low.glb",   "fit": 0.5},
+	"rocks_high":  {"file": "rocks-high.glb",  "fit": 0.55},
+	"patch_dirt":  {"file": "patch-dirt.glb",  "fit": 0.85},
+	"patch_grass": {"file": "patch-grass.glb", "fit": 0.85},
 }
+## category -> [weighted variant pool, density (fraction of member tiles)]
+const DECO_POOLS := {
+	"grove":    {"pool": ["tree", "tree", "tree", "tree_high", "tree_high",
+		"plant", "patch_grass"], "density": 0.45},
+	"rocks":    {"pool": ["stones", "stones", "rocks_low", "rocks_low",
+		"rocks_high", "patch_dirt"], "density": 0.25},
+	"riparian": {"pool": ["tree", "tree", "plant", "plant", "patch_grass"],
+		"density": 0.32},
+	"sparse":   {"pool": ["patch_dirt", "patch_grass", "stones", "plant",
+		"tree"], "density": 0.012},
+}
+## cluster field: > this = grove, < negative rock threshold = stone field
+const GROVE_LEVEL := 0.28
+const ROCKS_LEVEL := -0.42
 
 var _deco_nodes := {}        # variant -> MultiMeshInstance3D
 var _deco_lib := {}          # variant -> {mesh, base: Transform3D} | null
 var _deco_scatter: Array[Dictionary] = []   # per terrain fingerprint
 var _deco_scatter_fp := ""
+var _deco_noise := FastNoiseLite.new()
 
 
 static func _tile_hash(pos: Vector2i, seed_value: int) -> int:
 	# cheap 2D integer hash — deterministic prop placement per (tile, seed)
 	var h := pos.x * 73856093 ^ pos.y * 19349663 ^ seed_value * 83492791
 	return absi(h)
-
-
-static func _deco_band(terrain: Terrain, pos: Vector2i) -> int:
-	if terrain.near_water(pos, 2) or terrain.height(pos) <= 1:
-		return 0  # valleys and riversides: lush
-	return 1 if terrain.height(pos) <= 3 else 2  # grass mid vs rocky top
 
 
 func _rebuild_deco() -> void:
@@ -340,19 +349,43 @@ func _rebuild_deco() -> void:
 	if terrain.fingerprint() != _deco_scatter_fp:
 		_deco_scatter_fp = terrain.fingerprint()
 		_deco_scatter.clear()
+		_deco_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+		_deco_noise.seed = terrain.seed_value + 4021
+		_deco_noise.frequency = 0.045  # grove/stone-field features ~20 tiles
+		# pass 1: river tiles as a set — the riparian strip needs cheap
+		# neighborhood lookups, not 13 noise evaluations per tile
+		var water := {}
 		for x in WORLD_TILES:
 			for z in WORLD_TILES:
 				var pos := Vector2i(x, z)
+				if terrain.is_water(pos):
+					water[pos] = true
+		# pass 2: category per tile, then the category's density gate
+		for x in WORLD_TILES:
+			for z in WORLD_TILES:
+				var pos := Vector2i(x, z)
+				if water.has(pos):
+					continue
+				var c := _deco_noise.get_noise_2d(float(x), float(z))
+				var category := "sparse"
+				if c > GROVE_LEVEL:
+					category = "grove"
+				elif c < ROCKS_LEVEL:
+					category = "rocks"
+				else:
+					for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0),
+							Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1),
+							Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
+							Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2),
+							Vector2i(0, -2)]:
+						if water.has(pos + offset):
+							category = "riparian"
+							break
 				var h := _tile_hash(pos, terrain.seed_value)
-				if h % 1000 >= int(DECO_DENSITY * 1000.0) or terrain.is_water(pos):
+				var spec: Dictionary = DECO_POOLS[category]
+				if h % 1000 >= int(float(spec["density"]) * 1000.0):
 					continue
-				var band := _deco_band(terrain, pos)
-				var pool: Array[String] = []
-				for variant: String in DECO_KINDS:
-					if band in (DECO_KINDS[variant]["bands"] as Array):
-						pool.append(variant)
-				if pool.is_empty():
-					continue
+				var pool: Array = spec["pool"]
 				_deco_scatter.append({"pos": pos,
 					"variant": pool[(h / 1000) % pool.size()], "h": h})
 	# occupancy pass: a prop lives only on truly empty, unzoned land

@@ -121,10 +121,12 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   (roads/lines/pipes/zones/buildings — no bridges yet); wells within 3
   tiles of water yield ×1.5 (`WaterTopology.WELL_RIVER_BONUS`). Sandbox +
   greenfield (terrain seed 19) carry rivers; prebuilt scenarios stay flat.
-  DECORATION: Kenney mini-forest props (trees/stones/earth) scatter on
-  ~8 % of empty unzoned tiles — deterministic per (tile, seed) hash, one
-  MultiMesh per variant (`city_view._rebuild_deco`, skipped headless),
-  occupancy-filtered every redraw so building clears props.
+  DECORATION: Kenney mini-forest props CLUSTER (user direction — grouped,
+  not sprinkled): a low-frequency noise field carves GROVES (dense trees)
+  and STONE FIELDS, rivers grow a riparian tree strip, sparse lone props
+  between — deterministic per (tile, seed), one MultiMesh per variant
+  (`city_view._rebuild_deco`, skipped headless), occupancy-filtered every
+  redraw so building clears props.
 - **Inspector**: left-click with no tool → daily profile graph in rtpowerflow's
   ProfileGraph conventions (0–24 h, 2 h ticks, unit y-axis, staircase, dashed
   limits, now marker, yesterday faded, hover readout). Buildings show their
