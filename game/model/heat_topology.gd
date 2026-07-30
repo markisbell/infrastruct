@@ -209,6 +209,30 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			devices.append({"id": id, "kind": "storage_heat", "node": node_name[id],
 				"params": model.building_params(id)})
 
+	# Secondary plants and storages are BRIDGE-side elements (feed-ins /
+	# buffers) — invisible to the backend's native zero-flow validation. On
+	# a pipe STUB (degree-1 junction) the whole bundle used to be rejected
+	# ("dead-end node without consumer/producer" → HEAT REJECTED, network
+	# dark; user report: a second boiler plant wouldn't place). Ship the
+	# backend's own remedy automatically: the canonical bypass consumer
+	# (SPEC §3.2 mdot+qext pair) — the trickle valve every real plant stub
+	# has. The bypass name matches no zone, so its profile stays untouched.
+	var degree := {}
+	for entry: Dictionary in raw_pipes:
+		if reachable.has(entry["a"]) and reachable.has(entry["b"]):
+			degree[entry["a"]] = int(degree.get(entry["a"], 0)) + 1
+			degree[entry["b"]] = int(degree.get(entry["b"], 0)) + 1
+	var standby: Array[float] = []
+	for i in 96:
+		standby.append(100.0)
+	for device: Dictionary in devices:
+		var id: String = device["id"]
+		if id == slack_id or int(degree.get(id, 0)) != 1:
+			continue
+		consumers.append({"node": node_name[id], "name": "bypass_" + id,
+			"q_sh_w": zeros, "q_dhw_w": standby,
+			"controlled_mdot_kg_per_s": 0.02, "q_design_w": 100.0})
+
 	var temps: Array[float] = []
 	var grounds: Array[float] = []
 	for i in 96:

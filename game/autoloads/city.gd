@@ -1124,6 +1124,13 @@ func _update_capacity_warnings(t: int, result: Dictionary) -> void:
 				"level": "crit" if percent >= 90.0 or tripped_substations.has(sub_id) else "warn",
 				"percent": percent, "pos": model.buildings[sub_id]["anchor"],
 				"text": "TRIP" if tripped_substations.has(sub_id) else "%d%%" % int(percent)}
+	# equipment failures (MTBF events, maintenance windows): the reason a
+	# plant sits silent must be VISIBLE in the world, not only one feed line
+	# (user report: "a windpark failed without reason")
+	for id: String in model.buildings:
+		if event_system.is_down(id, t):
+			capacity_warnings["down_" + id] = {"level": "crit", "percent": 0.0,
+				"pos": model.buildings[id]["anchor"], "text": "DOWN"}
 	# tripped/crewed line sections get their own markers (sparse: every 6th tile)
 	var awaiting: Array = []
 	var crewed: Array = []

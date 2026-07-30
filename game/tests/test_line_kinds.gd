@@ -78,6 +78,21 @@ func test_dispatch_repair_charges_and_schedules() -> void:
 	City.reset_for_scenario(42)
 
 
+func test_equipment_failure_shows_a_down_marker() -> void:
+	# user report: "a windpark failed without reason" — the MTBF event was
+	# only one feed line; the failed building now carries a DOWN marker
+	City.reset_for_scenario(42)
+	var wind := City.model.place_building("wind_farm", Vector2i(30, 30))
+	City._apply_event(City.event_system.force_equipment_failure(wind, 10), 10)
+	City._update_capacity_warnings(12, {})
+	assert_bool(City.capacity_warnings.has("down_" + wind)).is_true()
+	assert_str(str(City.capacity_warnings["down_" + wind]["text"])).is_equal("DOWN")
+	# after the auto-crew finishes, the marker clears
+	City._update_capacity_warnings(200, {})
+	assert_bool(City.capacity_warnings.has("down_" + wind)).is_false()
+	City.reset_for_scenario(42)
+
+
 func test_line_costs_differ() -> void:
 	assert_int(int(BuildingDefs.COSTS["cable"])) \
 		.is_greater(int(BuildingDefs.COSTS["overhead_line"]))

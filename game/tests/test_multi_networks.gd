@@ -85,6 +85,36 @@ func test_second_water_island_warns_and_stays_out() -> void:
 		return w.contains("separate pipe network"))).is_true()
 
 
+func test_second_boiler_on_a_stub_gets_an_auto_bypass() -> void:
+	# user report: a second boiler plant wouldn't place — its dead-end stub
+	# junction made the backend reject the WHOLE bundle (zero-flow guard).
+	# The builder now ships the canonical bypass consumer at such nodes.
+	var model := WorldModel.new()
+	model.place_building("boiler_plant", Vector2i(0, 0))       # slack, 2x2
+	for x in range(2, 11):
+		model.set_heat_pipe(Vector2i(x, 1), 1)
+	model.place_building("heat_exchanger", Vector2i(11, 1))
+	var boiler_b := model.place_building("boiler_plant", Vector2i(4, 3))
+	model.set_heat_pipe(Vector2i(4, 2), 1)                     # the stub
+	var topo := HeatTopology.build(model, {})
+	assert_bool(bool(topo.connected[boiler_b])).is_true()
+	var device_ids := []
+	for device: Dictionary in topo.doc["devices"]:
+		device_ids.append(device["id"])
+	assert_array(device_ids).contains([boiler_b])              # feed-in shipped
+	var bypass := {}
+	for consumer: Dictionary in topo.doc["native"]["consumers"]["consumers"]:
+		if str(consumer["name"]) == "bypass_" + boiler_b:
+			bypass = consumer
+	assert_bool(bypass.is_empty()).is_false()
+	assert_float(float(bypass["controlled_mdot_kg_per_s"])).is_greater(0.0)
+	# a plant ON the through-going trunk needs no bypass
+	var boiler_c := model.place_building("boiler_plant", Vector2i(6, 2))
+	topo = HeatTopology.build(model, {})
+	for consumer: Dictionary in topo.doc["native"]["consumers"]["consumers"]:
+		assert_str(str(consumer["name"])).is_not_equal("bypass_" + boiler_c)
+
+
 func test_heat_exchanger_one_pipe_tile_from_plant_connects() -> void:
 	var model := WorldModel.new()
 	model.place_building("boiler_plant", Vector2i(0, 0))  # 2x2
