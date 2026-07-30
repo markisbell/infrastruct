@@ -129,6 +129,14 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   redraw so building clears props. The BULLDOZER on empty land clears a
   tile's props explicitly (`WorldModel.deco_cleared`, saved additively —
   derived scatter needs remembered removals).
+- **Construction UX** (2026-07-30): line tools (road/zone/cable/pipes)
+  drag-and-draw — hold LMB sketches a faded ghost path (grid-interpolated),
+  release builds; blocked tiles (obstacle/water/money) turn RED from the
+  first blockage on and only the green prefix commits (`City.plan_path`/
+  `build_path`, `WorldModel.can_set_*` dry-runs). Building ghosts: R
+  rotates, F flips (`flip` serialized additively, visual-only like rot).
+  Builders validate-then-pay (the old pay-first order leaked money on
+  blocked tiles).
 - **Inspector**: left-click with no tool → daily profile graph in rtpowerflow's
   ProfileGraph conventions (0–24 h, 2 h ticks, unit y-axis, staircase, dashed
   limits, now marker, yesterday faded, hover readout). Buildings show their
