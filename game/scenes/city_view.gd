@@ -260,15 +260,36 @@ func redraw() -> void:
 	_diff(_water_pipes, model.water_pipes, _make_water_pipe)
 	_diff(_houses, model.houses, _make_house)
 	_diff(_buildings, model.buildings, _make_building)
-	# neighbor-dependent pieces refresh in place
-	for pos: Vector2i in _roads:
-		_orient_road(pos, _roads[pos])
-	for pos: Vector2i in _cables:
-		_orient_cable(pos, _cables[pos])
-	for pos: Vector2i in _pipes:
-		_orient_pipe(pos, _pipes[pos])
-	for pos: Vector2i in _water_pipes:
-		_orient_water_pipe(pos, _water_pipes[pos])
+	# neighbor-dependent pieces refresh in place. When City hands us the
+	# tiles it touched, re-orient only those + neighbors — the full pass is
+	# O(city) per placed tile and stalled drags ~36 ms on a modest town.
+	var dirty: Dictionary = City.dirty_tiles
+	City.dirty_tiles = {}
+	if dirty.is_empty():
+		for pos: Vector2i in _roads:
+			_orient_road(pos, _roads[pos])
+		for pos: Vector2i in _cables:
+			_orient_cable(pos, _cables[pos])
+		for pos: Vector2i in _pipes:
+			_orient_pipe(pos, _pipes[pos])
+		for pos: Vector2i in _water_pipes:
+			_orient_water_pipe(pos, _water_pipes[pos])
+	else:
+		var affected := {}
+		for pos: Vector2i in dirty:
+			affected[pos] = true
+			for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0),
+					Vector2i(0, 1), Vector2i(0, -1)]:
+				affected[pos + offset] = true
+		for pos: Vector2i in affected:
+			if _roads.has(pos):
+				_orient_road(pos, _roads[pos])
+			if _cables.has(pos):
+				_orient_cable(pos, _cables[pos])
+			if _pipes.has(pos):
+				_orient_pipe(pos, _pipes[pos])
+			if _water_pipes.has(pos):
+				_orient_water_pipe(pos, _water_pipes[pos])
 	_update_house_power()
 	_update_overlays()
 

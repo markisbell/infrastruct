@@ -182,11 +182,13 @@ func _process(delta: float) -> void:
 # while painting over obstacles)
 
 func build_road(pos: Vector2i) -> bool:
+	dirty_tiles[pos] = true
 	return model.can_set_road(pos) and _paid(BuildingDefs.COSTS["road"]) \
 		and model.set_road(pos) and _after_build(false)
 
 
 func build_zone(pos: Vector2i) -> bool:
+	dirty_tiles[pos] = true
 	return model.can_set_zone(pos) and _paid(BuildingDefs.COSTS["zone"]) \
 		and model.set_zone(pos) and _after_build(false)
 
@@ -194,12 +196,14 @@ func build_zone(pos: Vector2i) -> bool:
 ## kind: LINE_OVERHEAD (default — poles and wires) or LINE_UNDERGROUND
 ## (buried, pricier). Both live on one electrical graph.
 func build_cable(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
+	dirty_tiles[pos] = true
 	var cost_key := "cable" if kind == BuildingDefs.LINE_UNDERGROUND else "overhead_line"
 	return model.can_set_cable(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
 		and model.set_cable(pos, kind) and _after_build(true)
 
 
 func build_heat_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
+	dirty_tiles[pos] = true
 	var cost_key := "heat_pipe_buried" \
 		if kind == BuildingDefs.LINE_UNDERGROUND else "heat_pipe"
 	return model.can_set_heat_pipe(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
@@ -207,6 +211,7 @@ func build_heat_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> b
 
 
 func build_water_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
+	dirty_tiles[pos] = true
 	var cost_key := "water_pipe_buried" \
 		if kind == BuildingDefs.LINE_UNDERGROUND else "water_pipe"
 	return model.can_set_water_pipe(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
@@ -221,6 +226,8 @@ func place_building(kind: String, anchor: Vector2i, rot: int = 0,
 	if not _paid(def["cost"]):
 		return false
 	model.place_building(kind, anchor, rot, params_override, flip)
+	for tile: Vector2i in BuildingDefs.footprint(kind, anchor):
+		dirty_tiles[tile] = true  # neighboring lines gain service drops
 	log_event("built", "info", "%s built" % kind)
 	return _after_build(true)
 
@@ -275,10 +282,13 @@ func plan_path(build: String, tiles: Array[Vector2i]) -> Array[String]:
 
 ## Commit a drawn path: builds the plan's "ok" tiles (stops at the first
 ## blockage, mirroring the red ghost). Returns the number of tiles built.
+## Signals are BATCHED — one world_changed for the whole path, not one
+## full redraw per tile (a 30-tile drag used to redraw 30 times).
 func build_path(build: String, tiles: Array[Vector2i]) -> int:
 	var plan := plan_path(build, tiles)
 	var built := 0
 	var spec: Dictionary = PATH_BUILDS[build]
+	_batching = true
 	for i in tiles.size():
 		if plan[i] == "blocked":
 			break
@@ -298,6 +308,10 @@ func build_path(build: String, tiles: Array[Vector2i]) -> int:
 				ok = build_water_pipe(tiles[i], spec["kind"])
 		if ok:
 			built += 1
+	_batching = false
+	if built > 0:
+		world_changed.emit()
+		state_changed.emit()
 	return built
 
 
@@ -335,9 +349,13 @@ func _path_can_set(build: String, pos: Vector2i) -> bool:
 
 
 func bulldoze(pos: Vector2i) -> bool:
+	dirty_tiles[pos] = true
 	if model.building_tiles.has(pos):
 		var id: String = model.building_tiles[pos]
 		var def := BuildingDefs.get_def(model.buildings[id]["kind"])
+		for tile: Vector2i in BuildingDefs.footprint(
+				model.buildings[id]["kind"], model.buildings[id]["anchor"]):
+			dirty_tiles[tile] = true
 		model.remove_building(id)
 		money += int(def["cost"] * 0.25)
 		return _after_build(true)
@@ -378,14 +396,22 @@ func _paid(cost: int) -> bool:
 	return true
 
 
+## Tiles touched since the last redraw — the view re-orients only these
+## (+ neighbors) instead of every road/cable/pipe in the city (the O(N²)
+## drag stall the stress smoke measured at ~36 ms/tile on a 47-house town).
+var dirty_tiles := {}
+var _batching := false
+
+
 func _after_build(topology_relevant: bool) -> bool:
 	if topology_relevant:
 		_topo_dirty = true
 	else:
 		_assign_dirty = true  # zone/house reassignment is deferred to _process
 	_topo_timer = 0.0  # restart the idle countdown — see TOPO_DEBOUNCE_S
-	world_changed.emit()
-	state_changed.emit()
+	if not _batching:  # build_path emits ONCE for the whole drawn path
+		world_changed.emit()
+		state_changed.emit()
 	return true
 
 
