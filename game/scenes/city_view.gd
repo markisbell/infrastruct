@@ -388,12 +388,14 @@ func _rebuild_deco() -> void:
 				var pool: Array = spec["pool"]
 				_deco_scatter.append({"pos": pos,
 					"variant": pool[(h / 1000) % pool.size()], "h": h})
-	# occupancy pass: a prop lives only on truly empty, unzoned land
+	# occupancy pass: a prop lives only on truly empty, unzoned land the
+	# bulldozer hasn't cleared
 	var model: WorldModel = City.model
 	var buckets := {}
 	for entry: Dictionary in _deco_scatter:
 		var pos: Vector2i = entry["pos"]
-		if not model.is_tile_free(pos) or model.zoning.has(pos):
+		if not model.is_tile_free(pos) or model.zoning.has(pos) \
+				or model.deco_cleared.has(pos):
 			continue
 		var variant: String = entry["variant"]
 		if not buckets.has(variant):

@@ -59,6 +59,24 @@ func test_water_survives_save_roundtrip() -> void:
 	assert_bool(restored.terrain.is_water(Vector2i(1, 1))).is_true()
 
 
+func test_bulldozer_clears_props_and_it_survives_saves() -> void:
+	City.reset_for_scenario(42)
+	var pos := Vector2i(40, 40)
+	# empty land: the bulldozer clears the tile's environment prop
+	assert_bool(City.bulldoze(pos)).is_true()
+	assert_bool(City.model.deco_cleared.has(pos)).is_true()
+	# idempotent: a second pass has nothing left to clear
+	assert_bool(City.bulldoze(pos)).is_false()
+	# water is never marked (nothing grows there)
+	City.model.terrain.force_water(Vector2i(50, 50), Vector2i(50, 50))
+	assert_bool(City.bulldoze(Vector2i(50, 50))).is_false()
+	# cleared tiles survive the save roundtrip
+	var restored := WorldModel.from_json(City.model.to_json())
+	assert_bool(restored.deco_cleared.has(pos)).is_true()
+	assert_bool(restored.equals(City.model)).is_true()
+	City.reset_for_scenario(42)
+
+
 func test_well_near_river_yields_more() -> void:
 	var model := WorldModel.new()
 	# tower head + station + two wells: one at the river, one far away

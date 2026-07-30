@@ -15,6 +15,9 @@ var roads: Dictionary = {}           # Vector2i -> true
 var zoning: Dictionary = {}          # Vector2i -> int (1 = residential)
 var houses: Dictionary = {}          # Vector2i -> {"level": int}
 var buildings: Dictionary = {}       # id (String) -> {"kind": String, "anchor": Vector2i}
+## Tiles the bulldozer cleared of environment props (trees/stones are
+## DERIVED from the seed, so removal must be remembered explicitly).
+var deco_cleared: Dictionary = {}    # Vector2i -> true
 var next_building_id := 1
 
 ## Vector2i -> building id — derived from `buildings`, rebuilt on load.
@@ -231,6 +234,7 @@ func to_json() -> String:
 		"zoning": _dict_to_keys(zoning),
 		"houses": _dict_to_keys(houses),
 		"buildings": _buildings_out(),
+		"deco_cleared": _dict_to_keys(deco_cleared),  # additive (old saves lack it)
 		"next_building_id": next_building_id,
 	})
 
@@ -251,6 +255,7 @@ static func from_json(text: String) -> WorldModel:
 	model.roads = _keys_to_dict(dict.get("roads", {}), TYPE_BOOL)
 	model.zoning = _keys_to_dict(dict.get("zoning", {}), TYPE_INT)
 	model.houses = _keys_to_dict(dict.get("houses", {}), TYPE_DICTIONARY)
+	model.deco_cleared = _keys_to_dict(dict.get("deco_cleared", {}), TYPE_BOOL)
 	model.next_building_id = int(dict.get("next_building_id", 1))
 	for id: String in dict.get("buildings", {}):
 		var raw: Dictionary = dict["buildings"][id]
@@ -267,7 +272,8 @@ func equals(other: WorldModel) -> bool:
 	return cables == other.cables and heat_pipes == other.heat_pipes \
 		and water_pipes == other.water_pipes and roads == other.roads \
 		and zoning == other.zoning and houses == other.houses \
-		and buildings == other.buildings and terrain.equals(other.terrain)
+		and buildings == other.buildings and terrain.equals(other.terrain) \
+		and deco_cleared == other.deco_cleared
 
 
 func _buildings_out() -> Dictionary:

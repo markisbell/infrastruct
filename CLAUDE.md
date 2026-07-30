@@ -126,7 +126,9 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   and STONE FIELDS, rivers grow a riparian tree strip, sparse lone props
   between — deterministic per (tile, seed), one MultiMesh per variant
   (`city_view._rebuild_deco`, skipped headless), occupancy-filtered every
-  redraw so building clears props.
+  redraw so building clears props. The BULLDOZER on empty land clears a
+  tile's props explicitly (`WorldModel.deco_cleared`, saved additively —
+  derived scatter needs remembered removals).
 - **Inspector**: left-click with no tool → daily profile graph in rtpowerflow's
   ProfileGraph conventions (0–24 h, 2 h ticks, unit y-axis, staircase, dashed
   limits, now marker, yesterday faded, hover readout). Buildings show their

@@ -133,7 +133,7 @@ func _build_items() -> Array:
 				"desc": "Send a crew to a TRIPPED line or transformer (~2 h work). Overload trips don't fix themselves."},
 			{"tool": CityView.Tool.BULLDOZE, "label": "Bulldozer", "mono": "X", "key": "0",
 				"color": Color(0.8, 0.25, 0.2), "cost": 0,
-				"desc": "Remove anything (buildings refund 25%)."},
+				"desc": "Remove anything (buildings refund 25%). On empty land it clears trees, stones and brush."},
 		]},
 	]
 

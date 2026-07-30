@@ -243,6 +243,12 @@ func bulldoze(pos: Vector2i) -> bool:
 	if model.zoning.has(pos):
 		model.remove_zone(pos)
 		return _after_build(false)
+	# empty land: clear the environment props (trees/stones/patches). They
+	# are derived from the seed, so the model remembers cleared tiles — the
+	# renderer's scatter filter honors the set. Free, like zone removal.
+	if not model.deco_cleared.has(pos) and not model.terrain.is_water(pos):
+		model.deco_cleared[pos] = true
+		return _after_build(false)
 	return false
 
 
