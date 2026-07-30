@@ -166,6 +166,16 @@ func _ready() -> void:
 	redraw()
 
 
+var _sun: DirectionalLight3D
+var _sky_material: ProceduralSkyMaterial
+var _env: Environment
+## daytime sky anchors — the day/night cycle lerps these toward night navy
+const SKY_TOP_DAY := Color(0.33, 0.52, 0.78)
+const SKY_HORIZON_DAY := Color(0.74, 0.82, 0.88)
+const SKY_TOP_NIGHT := Color(0.045, 0.06, 0.13)
+const SKY_HORIZON_NIGHT := Color(0.10, 0.12, 0.2)
+
+
 func _build_environment() -> void:
 	# realism pass (SynerGame reference): warm soft daylight + sky ambient +
 	# SSAO + filmic tonemap + gentle glow/fog — Forward+ features
@@ -178,13 +188,15 @@ func _build_environment() -> void:
 	sun.directional_shadow_max_distance = 220.0
 	sun.directional_shadow_split_1 = 0.08
 	add_child(sun)
+	_sun = sun
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color = Color(0.33, 0.52, 0.78)
-	sky_material.sky_horizon_color = Color(0.74, 0.82, 0.88)
+	sky_material.sky_top_color = SKY_TOP_DAY
+	sky_material.sky_horizon_color = SKY_HORIZON_DAY
 	sky_material.ground_bottom_color = Color(0.32, 0.38, 0.3)
 	sky_material.ground_horizon_color = Color(0.72, 0.79, 0.83)
+	_sky_material = sky_material
 	env.sky = Sky.new()
 	env.sky.sky_material = sky_material
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
@@ -217,11 +229,107 @@ func _build_environment() -> void:
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
+	_env = env
+	_spawn_clouds()
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	add_child(camera)
 	_place_camera()
 	camera.make_current()
+
+
+# ─── day/night cycle + drifting clouds (user request) ───
+
+var _clouds: Array[Node3D] = []
+const CLOUD_COUNT := 26
+
+
+## Sun elevation/azimuth, light energy/color, ambient and sky colors all
+## follow the GAME clock: nights go dim blue (never black — the city must
+## stay playable), dawn/dusk glow warm, noon is the bright reference look.
+func _update_daylight() -> void:
+	if _sun == null:
+		return
+	var hour := fmod(GameClock.total_minutes, 1440.0) / 60.0
+	# light from ~05:30 to ~19:30 (sin window), so evenings really glow
+	var daylight := clampf(sin((hour - 5.5) / 14.0 * PI), 0.0, 1.0)
+	var dusk := clampf(1.0 - absf(daylight - 0.2) / 0.2, 0.0, 1.0) \
+		* (1.0 if daylight > 0.0 else 0.0)
+	# gamma-eased: evenings stay usable-bright well past 18:00 before the
+	# night floor (0.28 — dim blue, never black) takes over
+	var brightness := pow(daylight, 0.65)
+	_sun.light_energy = lerpf(0.28, 1.5, brightness)
+	var day_color := Color(1.0, 0.965, 0.89).lerp(Color(1.0, 0.62, 0.38), dusk)
+	_sun.light_color = Color(0.62, 0.7, 0.95).lerp(day_color, brightness)
+	# the sun ARCS: shallow at dawn/dusk, high at noon; azimuth sweeps east
+	# to west across the day (at night it parks as faint moonlight)
+	_sun.rotation_degrees.x = -lerpf(10.0, 52.0, daylight)
+	if daylight > 0.0:
+		_sun.rotation_degrees.y = lerpf(-75.0, 15.0,
+			clampf((hour - 5.5) / 14.0, 0.0, 1.0))
+	_env.ambient_light_energy = lerpf(0.32, 0.75, brightness)
+	# fog must darken with the sky — daylight-colored fog washed the night
+	# scene in a bright teal haze
+	_env.fog_light_color = Color(0.05, 0.07, 0.12).lerp(
+		Color(0.78, 0.84, 0.9), daylight)
+	_sky_material.sky_top_color = SKY_TOP_NIGHT.lerp(SKY_TOP_DAY, daylight)
+	_sky_material.sky_horizon_color = SKY_HORIZON_NIGHT.lerp(
+		SKY_HORIZON_DAY, daylight).lerp(Color(0.95, 0.6, 0.4), dusk * 0.6)
+
+
+## A fleet of soft puff clusters drifting with the weather's wind — they
+## cast REAL moving shadows (alpha-hash keeps them in the shadow pass).
+func _spawn_clouds() -> void:
+	var crng := RandomNumberGenerator.new()
+	crng.seed = 777
+	# smooth alpha puffs render clean but can't cast shadows — an invisible
+	# SHADOWS_ONLY twin per puff throws the moving cloud shadow instead
+	# (alpha-hash cast shadows but dithered the puffs into speckle)
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(0.99, 0.99, 1.0, 0.82)
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.roughness = 1.0
+	for i in CLOUD_COUNT:
+		var cloud := Node3D.new()
+		for p in crng.randi_range(3, 5):
+			var sphere := SphereMesh.new()
+			var radius := crng.randf_range(1.4, 2.8)
+			sphere.radius = radius
+			sphere.height = radius
+			sphere.radial_segments = 16
+			sphere.rings = 8
+			var spot := Vector3(crng.randf_range(-2.8, 2.8),
+				crng.randf_range(-0.2, 0.4), crng.randf_range(-1.6, 1.6))
+			var puff := MeshInstance3D.new()
+			puff.mesh = sphere
+			puff.scale = Vector3(1.7, 0.5, 1.25)
+			puff.position = spot
+			puff.material_override = material
+			puff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			cloud.add_child(puff)
+			var shadow_twin := MeshInstance3D.new()
+			shadow_twin.mesh = sphere
+			shadow_twin.scale = puff.scale
+			shadow_twin.position = spot
+			shadow_twin.cast_shadow = \
+				GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+			cloud.add_child(shadow_twin)
+		cloud.position = Vector3(crng.randf_range(0.0, 256.0),
+			crng.randf_range(12.0, 17.0), crng.randf_range(0.0, 256.0))
+		add_child(cloud)
+		_clouds.append(cloud)
+
+
+func _drift_clouds(delta: float) -> void:
+	var wind := float(City.weather.sample(City.current_t).get("wind_ms", 5.0))
+	var speed := 0.35 + wind * 0.05
+	for cloud: Node3D in _clouds:
+		cloud.position.x += speed * delta
+		cloud.position.z += speed * 0.22 * delta
+		if cloud.position.x > 262.0:
+			cloud.position.x = -6.0
+		if cloud.position.z > 262.0:
+			cloud.position.z = -6.0
 
 
 func _place_camera() -> void:
@@ -621,7 +729,7 @@ func _make_zone(pos: Vector2i) -> Node3D:
 	var mesh := PlaneMesh.new()
 	mesh.size = Vector2(0.92, 0.92)
 	quad.mesh = mesh
-	quad.material_override = _flat(Color(0.45, 0.8, 0.4, 0.14), true)
+	quad.material_override = _flat(Color(0.45, 0.8, 0.4, 0.10), true)
 	quad.position = _center(pos) + Vector3(0, 0.01, 0)
 	return quad
 
@@ -1371,6 +1479,26 @@ func _update_capacity_markers() -> void:
 		label.position = _center(warning["pos"]) + Vector3(0, 1.15, 0)
 
 
+## Blackout speech bubbles (user direction): a dark house keeps its normal
+## colors — a bobbing sad bubble above it carries the message instead.
+var _blackout_bubbles := {}
+
+
+func _make_blackout_bubble() -> Node3D:
+	var bubble := Node3D.new()
+	var face := _make_marker(":(", Color(0.16, 0.19, 0.28), 200)
+	face.outline_size = 70
+	face.outline_modulate = Color(1, 1, 1, 0.95)
+	face.position = Vector3(0, 0.28, 0)
+	bubble.add_child(face)
+	var text := _make_marker("no power", Color(0.16, 0.19, 0.28), 90)
+	text.outline_size = 34
+	text.outline_modulate = Color(1, 1, 1, 0.95)
+	bubble.add_child(text)
+	bubble.position = Vector3(0, 1.35, 0)
+	return bubble
+
+
 func _update_house_power() -> void:
 	for pos: Vector2i in _houses:
 		var zone: String = City.topo.house_zone.get(pos, "")
@@ -1378,9 +1506,17 @@ func _update_house_power() -> void:
 		var heat_zone: String = City.heat_topo.house_zone.get(pos, "")
 		var cold: bool = heat_zone != "" \
 			and not City.heat_zone_supplied.get(heat_zone, true)
-		# no power dominates visually; else cold homes render icy blue
-		_set_state_material(_houses[pos],
-			"dark" if not lit else ("cold" if cold else ""))
+		# cold homes render icy blue; a BLACKOUT keeps the house colors and
+		# shows a sad bubble instead (user: no more houses turning black)
+		_set_state_material(_houses[pos], "cold" if cold else "")
+		if not lit and not _blackout_bubbles.has(pos):
+			var bubble := _make_blackout_bubble()
+			_houses[pos].add_child(bubble)
+			_blackout_bubbles[pos] = bubble
+		elif lit and _blackout_bubbles.has(pos):
+			if is_instance_valid(_blackout_bubbles[pos]):
+				_blackout_bubbles[pos].queue_free()
+			_blackout_bubbles.erase(pos)
 		# yellow "!": no substation covers this house at all
 		var orphan := zone == ""
 		if orphan and not _orphan_markers.has(pos):
@@ -1395,6 +1531,9 @@ func _update_house_power() -> void:
 	for pos: Vector2i in _orphan_markers.keys():
 		if not _houses.has(pos):
 			_orphan_markers.erase(pos)  # house gone; marker freed with it
+	for pos: Vector2i in _blackout_bubbles.keys():
+		if not _houses.has(pos):
+			_blackout_bubbles.erase(pos)  # house gone; bubble freed with it
 	_update_status_markers()
 
 
@@ -1501,6 +1640,13 @@ func _process(delta: float) -> void:
 		_place_camera()
 	_cursor.position = _center(mouse_tile()) + Vector3(0, 0.02, 0)
 	_update_ghost()
+	_update_daylight()
+	_drift_clouds(delta)
+	# gentle bob keeps the blackout bubbles alive
+	var bob := sin(Time.get_ticks_msec() / 400.0) * 0.06
+	for pos: Vector2i in _blackout_bubbles:
+		if is_instance_valid(_blackout_bubbles[pos]):
+			(_blackout_bubbles[pos] as Node3D).position.y = 1.35 + bob
 	# spin the wind rotors — the world should feel alive
 	for id: String in _buildings:
 		if City.model.buildings[id]["kind"] == "wind_farm":
@@ -1654,7 +1800,9 @@ func _make_range_disc(radius: int, color: Color) -> MeshInstance3D:
 	quad.size = Vector2(side, side)
 	disc.mesh = quad
 	disc.rotation_degrees.y = 45.0
-	disc.material_override = _flat(Color(color.r, color.g, color.b, 0.14), true, true)
+	# SHADED: an unshaded disc ignores the day/night cycle and glows as a
+	# solid slab at night (found while verifying the cycle)
+	disc.material_override = _flat(Color(color.r, color.g, color.b, 0.14), true)
 	return disc
 
 

@@ -77,6 +77,30 @@ func test_bulldozer_clears_props_and_it_survives_saves() -> void:
 	City.reset_for_scenario(42)
 
 
+func test_multiple_wells_all_feed_one_network() -> void:
+	# user question: with more than one well, how do consumers connect?
+	# ONE pipe network = one hydraulic system: the highest-priority source
+	# becomes the pressure head, every further well an injection — consumers
+	# draw from the mixed system through their water station's zone.
+	var model := WorldModel.new()
+	model.place_building("water_tower", Vector2i(0, 5))
+	for x in range(1, 14):
+		model.set_water_pipe(Vector2i(x, 5), 1)
+	model.place_building("water_station", Vector2i(14, 5))
+	model.place_building("well", Vector2i(3, 6))    # touches (3,5)
+	model.place_building("well", Vector2i(9, 6))    # touches (9,5)
+	var topo := WaterTopology.build(model, {})
+	var wells := 0
+	for device: Dictionary in topo.doc["devices"]:
+		if device["kind"] == "well":
+			wells += 1
+	assert_int(wells).is_equal(2)                   # both ship as devices
+	assert_str(str(topo.doc["devices"][0]["kind"])) \
+		.is_equal("water_tower")                    # head = priority source
+	assert_int((topo.doc["native"]["supply"]["supplies"] as Array).size()) \
+		.is_equal(1)                                # exactly one pressure head
+
+
 func test_well_near_river_yields_more() -> void:
 	var model := WorldModel.new()
 	# tower head + station + two wells: one at the river, one far away

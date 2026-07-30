@@ -197,6 +197,7 @@ func build_zone(pos: Vector2i) -> bool:
 ## (buried, pricier). Both live on one electrical graph.
 func build_cable(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
 	dirty_tiles[pos] = true
+	_clear_tripped_run(pos)  # laying new hardware repairs the dead run
 	var cost_key := "cable" if kind == BuildingDefs.LINE_UNDERGROUND else "overhead_line"
 	return model.can_set_cable(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
 		and model.set_cable(pos, kind) and _after_build(true)
@@ -204,6 +205,7 @@ func build_cable(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
 
 func build_heat_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
 	dirty_tiles[pos] = true
+	_clear_tripped_run(pos)
 	var cost_key := "heat_pipe_buried" \
 		if kind == BuildingDefs.LINE_UNDERGROUND else "heat_pipe"
 	return model.can_set_heat_pipe(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
@@ -212,6 +214,7 @@ func build_heat_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> b
 
 func build_water_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
 	dirty_tiles[pos] = true
+	_clear_tripped_run(pos)
 	var cost_key := "water_pipe_buried" \
 		if kind == BuildingDefs.LINE_UNDERGROUND else "water_pipe"
 	return model.can_set_water_pipe(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
@@ -348,8 +351,29 @@ func _path_can_set(build: String, pos: Vector2i) -> bool:
 	return false
 
 
+## Demolishing (or re-laying over) any tile of a TRIPPED segment scraps the
+## whole dead run's trip state — the remaining tiles are ordinary cable/pipe
+## again and reconnect once the gap is re-laid. Without this, rebuilding a
+## line after an overload trip did nothing: the neighboring tiles stayed in
+## tripped_tiles forever (user bug report — wind/solar farms trip lines).
+func _clear_tripped_run(pos: Vector2i) -> void:
+	if not tripped_tiles.has(pos):
+		return
+	var queue: Array[Vector2i] = [pos]
+	while not queue.is_empty():
+		var cur: Vector2i = queue.pop_back()
+		if not tripped_tiles.has(cur):
+			continue
+		tripped_tiles.erase(cur)
+		for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0),
+				Vector2i(0, 1), Vector2i(0, -1)]:
+			if tripped_tiles.has(cur + offset):
+				queue.append(cur + offset)
+
+
 func bulldoze(pos: Vector2i) -> bool:
 	dirty_tiles[pos] = true
+	_clear_tripped_run(pos)
 	if model.building_tiles.has(pos):
 		var id: String = model.building_tiles[pos]
 		var def := BuildingDefs.get_def(model.buildings[id]["kind"])
@@ -361,7 +385,6 @@ func bulldoze(pos: Vector2i) -> bool:
 		return _after_build(true)
 	if model.cables.has(pos):
 		model.remove_cable(pos)
-		tripped_tiles.erase(pos)
 		return _after_build(true)
 	if model.heat_pipes.has(pos):
 		model.remove_heat_pipe(pos)

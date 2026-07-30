@@ -20,6 +20,8 @@ func _ready() -> void:
 			smoke = arg.trim_prefix("--smoke=")
 		elif arg.begins_with("--seed="):
 			_playtest_seed = int(arg.trim_prefix("--seed="))
+		elif arg.begins_with("--hour="):
+			_screenshot_hour = float(arg.trim_prefix("--hour="))
 		elif arg.begins_with("--screenshot="):
 			_screenshot_path = arg.trim_prefix("--screenshot=")
 		elif arg.begins_with("--roadtest="):
@@ -269,6 +271,9 @@ func _take_screenshot() -> void:
 	var hud := Hud.new()  # status bar + build menu belong in the pre-alpha look
 	hud.view = view
 	add_child(hud)
+	# default 13:00 — the day/night cycle would render Day 0 00:00 as night;
+	# --hour=N picks another time (dusk/night verification shots)
+	GameClock.restore({"total_minutes": _screenshot_hour * 60.0, "speed": 0.0})
 	City.money = 100_000_000
 	# environment demo: seed-19 wilderness (hills, rivers, mini-forest props)
 	# around a forced flat DRY pad the fixed town layout builds on (height
@@ -343,6 +348,8 @@ func _take_screenshot() -> void:
 		hud._open_tile_inspector("cable", line_pos)
 	view.tool = CityView.Tool.SUBSTATION
 	view.redraw()
+	if not view._clouds.is_empty():  # drift one cloud over town for the shot
+		view._clouds[0].position = Vector3(126.0, 13.0, 128.0)
 	view.focus_tile(Vector2i(133, 125), 24.0)
 	await get_tree().create_timer(1.0).timeout
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
@@ -2034,6 +2041,7 @@ func _smoke_maintenance() -> void:
 
 
 var _playtest_seed := 20260730  # override with --seed=N for fuzz sweeps
+var _screenshot_hour := 13.0    # override with --hour=N (day/night shots)
 
 
 ## Monkey player (Phase 8 hardening, user request): plays like a human

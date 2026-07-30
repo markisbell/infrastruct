@@ -212,8 +212,16 @@ pandapower pins, keep separate), `.venv-water` (rtwaterflow).
 - **Screenshots need a real window** (headless GPU capture hangs); the batch
   Add-Content BOM corrupts JSON — use the Write tool for config files.
 - **Renderer is Forward+ since the graphics pass (2026-07-30)** — SSAO,
-  soft shadows, ACES, sky ambient, animated water shader. Exported builds
-  need a Vulkan-capable GPU (Win 11 era hardware is fine). CRITICAL
+  soft shadows, ACES, sky ambient, animated water shader. DAY/NIGHT cycle
+  follows the game clock (`_update_daylight`: sun arc/energy/color, sky +
+  fog colors, dusk glow; nights dim blue, never black); CLOUDS drift with
+  the wind (smooth alpha puffs + invisible SHADOWS_ONLY twins — alpha-hash
+  cast shadows but dithered; unshaded overlays glow at night, keep them
+  shaded). Blackout houses keep their colors and show a bobbing ":( no
+  power" bubble (user direction). Screenshots default to 13:00
+  (`--hour=N` overrides). Demolishing/re-laying over a TRIPPED line
+  clears the whole contiguous tripped run (user bug: rebuilt lines never
+  reconnected). CRITICAL
   Forward+ gotcha: vertex colors are LINEAR by default — vertex-colored
   meshes (terrain) need `vertex_color_is_srgb = true` or every authored
   color renders bleached pastel (cost one debugging loop). Headless smokes
