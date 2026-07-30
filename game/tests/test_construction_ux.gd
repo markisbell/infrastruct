@@ -78,6 +78,22 @@ func test_blocked_single_builds_no_longer_charge() -> void:
 	City.reset_for_scenario(42)
 
 
+func test_houses_never_grow_on_lines_or_roads() -> void:
+	# playtest-monkey findings: a cable dragged over a zoned row, and a road
+	# paved over zoning paint, both grew houses ON TOP of infrastructure
+	var model := WorldModel.new()
+	model.set_road(Vector2i(5, 5))
+	model.set_zone(Vector2i(5, 6))
+	model.set_cable(Vector2i(5, 6), 1)             # line crosses the lot
+	assert_bool(model.spawn_house(Vector2i(5, 6))).is_false()
+	assert_array(model.spawn_candidates(Vector2i(5, 6), 5)).is_empty()
+	model.set_zone(Vector2i(6, 6))
+	assert_bool(model.set_road(Vector2i(6, 6))).is_true()   # paving a zone
+	assert_bool(model.zoning.has(Vector2i(6, 6))).is_false()  # zone consumed
+	assert_bool(model.spawn_house(Vector2i(6, 6))).is_false()
+	assert_int(model.check_invariants().size()).is_equal(0)
+
+
 func test_building_flip_survives_the_save_roundtrip() -> void:
 	var model := WorldModel.new()
 	var id := model.place_building("substation", Vector2i(5, 5), 3, {}, true)

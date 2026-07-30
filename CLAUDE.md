@@ -155,6 +155,7 @@ start_game.bat
 # names: sidecars resilience saveload cosim cosim-kill windless-week overload
 #        stress coldsnap heatstorage pumpblackout drought towerheight hilltower
 #        yearcurves citylife economy events scenarios maintenance
+#        playtest (monkey player; optional --seed=N for fuzz sweeps)
 # GdUnit (import pass REQUIRED after adding class_name files!)
 .tools/godot/...console.exe --headless --path game --import
 .tools/godot/...console.exe --headless --path game -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://tests --ignoreHeadlessMode
@@ -229,13 +230,19 @@ pandapower pins, keep separate), `.venv-water` (rtwaterflow).
 - The user's memory preference: **lean solo work; state the scale and ask
   before any multi-agent fan-out** (they stopped costly workflows twice).
 
-## 7. Verified state (2026-07-29, post realism + environment passes)
+## 7. Verified state (2026-07-30, Phase 8 largely done)
 
-GdUnit 75/75 · all 19 smokes green incl. the kill-recovery + resilience
-harnesses (both parse SMOKE_READY ports now) · rtpowerflow gamebridge 15
-(signed zone demand pinned) · shared contract suite green for
-mock+power+heat+water · CI builds + runs the suites. Remaining roadmap:
-Phase 8 — save/load completeness (device SoC replay), performance,
-packaging; noted candidates: contract 1.2 (emitter leaks, CHP fuel field),
-river BRIDGES (mini-forest ships bridge.glb), dry-home visuals,
-terrain-aware coverage discs. GitHub release still ON HOLD (user's call).
+GdUnit 95/95 · all 20 smokes green (incl. the new PLAYTEST monkey — a
+seeded random player through the real City APIs with invariant checks;
+its first runs caught houses growing on cables and on paved-over zones,
+both fixed + pinned) · backend gamebridge suites 16/14/15 (optional `soc`
+device param — contract note in v1.md) · shared contract suite 4/4 ·
+releases v0.8.0 + v0.8.1 published on GitHub with verified installers.
+Phase 8 delivered: envelope v4 (trips, econ books, event-system state
+incl. RNG position, device SoC survive loads), SoC replay on every
+registration (topology rebuilds no longer recharge storages — heatstorage
+smoke pins 0.79→0.79), drag stalls halved (batched path commits +
+dirty-tile re-orientation), `WorldModel.check_invariants`. Remaining:
+contract 1.2 candidates (emitter leaks, CHP fuel field, multi-network
+heat), river BRIDGES (mini-forest ships bridge.glb), dry-home visuals,
+terrain-aware coverage discs.

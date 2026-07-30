@@ -141,6 +141,9 @@ func can_set_road(pos: Vector2i) -> bool:
 func set_road(pos: Vector2i) -> bool:
 	if not can_set_road(pos):
 		return false
+	# paving CONSUMES zoning paint (playtest-monkey finding: the zone
+	# survived under the asphalt and growth put a house on the road)
+	zoning.erase(pos)
 	roads[pos] = true
 	return true
 
@@ -170,7 +173,12 @@ func remove_zone(pos: Vector2i) -> void:
 
 
 func spawn_house(pos: Vector2i) -> bool:
-	if not zoning.has(pos) or houses.has(pos) or not _adjacent_to_road(pos):
+	# lines may legally cross ZONED land — but a house must never grow on
+	# top of one (playtest-monkey finding: drag a cable over a zoned row,
+	# growth put houses on the cable tiles)
+	if not zoning.has(pos) or houses.has(pos) or not _adjacent_to_road(pos) \
+			or roads.has(pos) or cables.has(pos) or heat_pipes.has(pos) \
+			or water_pipes.has(pos):
 		return false
 	houses[pos] = {"level": 1}
 	return true
@@ -235,14 +243,64 @@ func _adjacent_to_road(pos: Vector2i) -> bool:
 func spawn_candidates(center: Vector2i, radius: int) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	for pos: Vector2i in zoning:
-		if houses.has(pos):
-			continue
+		if houses.has(pos) or cables.has(pos) or heat_pipes.has(pos) \
+				or water_pipes.has(pos):
+			continue  # a line crossing zoned land blocks that lot
 		if absi(pos.x - center.x) + absi(pos.y - center.y) > radius:
 			continue
 		if _adjacent_to_road(pos):
 			out.append(pos)
 	out.sort()  # deterministic order for seeded growth
 	return out
+
+
+## Structural invariants — the playtest monkey (and any test) can call this
+## after arbitrary mutations; every returned string is a bug.
+func check_invariants() -> Array[String]:
+	var problems: Array[String] = []
+	# building_tiles is exactly the union of building footprints
+	var expected_tiles := {}
+	for id: String in buildings:
+		for tile: Vector2i in BuildingDefs.footprint(
+				buildings[id]["kind"], buildings[id]["anchor"]):
+			if expected_tiles.has(tile):
+				problems.append("footprint overlap at %s (%s vs %s)"
+					% [tile, expected_tiles[tile], id])
+			expected_tiles[tile] = id
+	for tile: Vector2i in expected_tiles:
+		if building_tiles.get(tile, "") != expected_tiles[tile]:
+			problems.append("building_tiles desync at %s" % tile)
+	for tile: Vector2i in building_tiles:
+		if not expected_tiles.has(tile):
+			problems.append("stale building_tiles entry at %s" % tile)
+	# nothing on water, nothing under houses/buildings, surface rules
+	for layer_pair: Array in [["cable", cables], ["heat", heat_pipes],
+			["water", water_pipes]]:
+		var layer: Dictionary = layer_pair[1]
+		for pos: Vector2i in layer:
+			if terrain.is_water(pos):
+				problems.append("%s on water at %s" % [layer_pair[0], pos])
+			if houses.has(pos) or building_tiles.has(pos):
+				problems.append("%s under a building/house at %s" % [layer_pair[0], pos])
+			if roads.has(pos) and int(layer[pos]) != BuildingDefs.LINE_UNDERGROUND:
+				problems.append("surface %s under a road at %s" % [layer_pair[0], pos])
+	for pos: Vector2i in roads:
+		if terrain.is_water(pos):
+			problems.append("road on water at %s" % pos)
+		if houses.has(pos) or building_tiles.has(pos):
+			problems.append("road under a building/house at %s" % pos)
+	for pos: Vector2i in houses:
+		if not zoning.has(pos):
+			problems.append("house without zoning at %s" % pos)
+	for pos: Vector2i in zoning:
+		if terrain.is_water(pos):
+			problems.append("zone on water at %s" % pos)
+	for id: String in buildings:
+		for tile: Vector2i in BuildingDefs.footprint(
+				buildings[id]["kind"], buildings[id]["anchor"]):
+			if terrain.is_water(tile):
+				problems.append("building %s on water at %s" % [id, tile])
+	return problems
 
 
 # ─── serialization ───
