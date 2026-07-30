@@ -69,12 +69,17 @@ func can_place_building(kind: String, anchor: Vector2i) -> bool:
 	return true
 
 
-# ─── mutations (all return success) ───
+# ─── mutations (all return success; can_* are the dry-run twins the
+# drag-and-draw ghost path uses to color tiles before anything is built) ───
+
+func can_set_cable(pos: Vector2i, kind: int) -> bool:
+	var buried := kind == BuildingDefs.LINE_UNDERGROUND
+	return not (_line_blocked(pos, buried)
+		or _other_lines_conflict(pos, buried, [heat_pipes, water_pipes]))
+
 
 func set_cable(pos: Vector2i, kind: int) -> bool:
-	var buried := kind == BuildingDefs.LINE_UNDERGROUND
-	if _line_blocked(pos, buried) \
-			or _other_lines_conflict(pos, buried, [heat_pipes, water_pipes]):
+	if not can_set_cable(pos, kind):
 		return false
 	cables[pos] = kind
 	return true
@@ -84,10 +89,14 @@ func remove_cable(pos: Vector2i) -> void:
 	cables.erase(pos)
 
 
-func set_heat_pipe(pos: Vector2i, kind: int) -> bool:
+func can_set_heat_pipe(pos: Vector2i, kind: int) -> bool:
 	var buried := kind == BuildingDefs.LINE_UNDERGROUND
-	if _line_blocked(pos, buried) \
-			or _other_lines_conflict(pos, buried, [cables, water_pipes]):
+	return not (_line_blocked(pos, buried)
+		or _other_lines_conflict(pos, buried, [cables, water_pipes]))
+
+
+func set_heat_pipe(pos: Vector2i, kind: int) -> bool:
+	if not can_set_heat_pipe(pos, kind):
 		return false
 	heat_pipes[pos] = kind
 	return true
@@ -97,10 +106,14 @@ func remove_heat_pipe(pos: Vector2i) -> void:
 	heat_pipes.erase(pos)
 
 
-func set_water_pipe(pos: Vector2i, kind: int) -> bool:
+func can_set_water_pipe(pos: Vector2i, kind: int) -> bool:
 	var buried := kind == BuildingDefs.LINE_UNDERGROUND
-	if _line_blocked(pos, buried) \
-			or _other_lines_conflict(pos, buried, [cables, heat_pipes]):
+	return not (_line_blocked(pos, buried)
+		or _other_lines_conflict(pos, buried, [cables, heat_pipes]))
+
+
+func set_water_pipe(pos: Vector2i, kind: int) -> bool:
+	if not can_set_water_pipe(pos, kind):
 		return false
 	water_pipes[pos] = kind
 	return true
@@ -114,7 +127,7 @@ func has_cable(pos: Vector2i) -> bool:
 	return cables.has(pos)
 
 
-func set_road(pos: Vector2i) -> bool:
+func can_set_road(pos: Vector2i) -> bool:
 	# paving OVER existing buried lines is fine; surface lines block
 	if roads.has(pos) or houses.has(pos) or building_tiles.has(pos) \
 			or terrain.is_water(pos):
@@ -122,6 +135,12 @@ func set_road(pos: Vector2i) -> bool:
 	for layer: Dictionary in [cables, heat_pipes, water_pipes]:
 		if _surface_entry(layer, pos):
 			return false
+	return true
+
+
+func set_road(pos: Vector2i) -> bool:
+	if not can_set_road(pos):
+		return false
 	roads[pos] = true
 	return true
 
@@ -130,13 +149,17 @@ func remove_road(pos: Vector2i) -> void:
 	roads.erase(pos)
 
 
-func set_zone(pos: Vector2i, kind: int = 1) -> bool:
+func can_set_zone(pos: Vector2i) -> bool:
 	# zoning is paint — allowed anywhere except on buildings/roads/lines
 	# (houses may NOT sit over any line, buried or not); it coexists with
 	# houses (that's what spawned them)
-	if roads.has(pos) or building_tiles.has(pos) or cables.has(pos) \
-			or heat_pipes.has(pos) or water_pipes.has(pos) \
-			or terrain.is_water(pos):
+	return not (roads.has(pos) or building_tiles.has(pos) or cables.has(pos)
+		or heat_pipes.has(pos) or water_pipes.has(pos)
+		or terrain.is_water(pos))
+
+
+func set_zone(pos: Vector2i, kind: int = 1) -> bool:
+	if not can_set_zone(pos):
 		return false
 	zoning[pos] = kind
 	return true
@@ -158,15 +181,16 @@ func remove_house(pos: Vector2i) -> void:
 
 
 func place_building(kind: String, anchor: Vector2i, rot: int = 0,
-		params_override: Dictionary = {}) -> String:
+		params_override: Dictionary = {}, flip: bool = false) -> String:
 	if not BuildingDefs.DEFS.has(kind) or not can_place_building(kind, anchor):
 		return ""
 	var id := "%s_%d" % [kind, next_building_id]
 	next_building_id += 1
-	# rot (0-3, quarter turns) is VISUAL only; params_override (v4) merges
+	# rot (0-3, quarter turns) and flip (mirror on the horizontal axis) are
+	# VISUAL only (all footprints are square); params_override (v4) merges
 	# over the catalog params in the topology builders (per-building sizing)
 	buildings[id] = {"kind": kind, "anchor": anchor, "rot": rot % 4,
-		"params": params_override}
+		"flip": flip, "params": params_override}
 	for tile: Vector2i in BuildingDefs.footprint(kind, anchor):
 		building_tiles[tile] = id
 	return id
@@ -262,6 +286,7 @@ static func from_json(text: String) -> WorldModel:
 		var anchor := _parse_key(str(raw.get("anchor", "0,0")))
 		model.buildings[id] = {"kind": str(raw["kind"]), "anchor": anchor,
 			"rot": int(raw.get("rot", 0)),
+			"flip": bool(raw.get("flip", false)),
 			"params": raw.get("params", {})}
 		for tile: Vector2i in BuildingDefs.footprint(str(raw["kind"]), anchor):
 			model.building_tiles[tile] = id
@@ -282,7 +307,8 @@ func _buildings_out() -> Dictionary:
 		var entry: Dictionary = buildings[id]
 		out[id] = {"kind": entry["kind"],
 			"anchor": "%d,%d" % [entry["anchor"].x, entry["anchor"].y],
-			"rot": entry.get("rot", 0), "params": entry.get("params", {})}
+			"rot": entry.get("rot", 0), "flip": entry.get("flip", false),
+			"params": entry.get("params", {})}
 	return out
 
 

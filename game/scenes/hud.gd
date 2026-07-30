@@ -148,7 +148,7 @@ func _ready() -> void:
 	_status = Label.new()
 	row.add_child(_status)
 	_tool_label = Label.new()
-	_tool_label.text = "Tool: none — TAB build menu · I happiness breakdown · right-drag orbit · Q/E snap 90° · R rotate ghost · SPACE pause · V overlays"
+	_tool_label.text = "Tool: none — TAB build menu · I happiness breakdown · right-drag orbit · Q/E snap 90° · R rotate / F flip ghost · SPACE pause · V overlays"
 	row.add_child(_tool_label)
 	for pair: Array in [["Save", "save"], ["Load", "load"]]:
 		var slot_button := Button.new()
@@ -870,7 +870,12 @@ func _pipe_sample(runs: Array, radius: float) -> Node3D:
 func _select_tool(tool: CityView.Tool) -> void:
 	view.tool = tool
 	var item: Dictionary = _items_by_tool.get(tool, {})
-	_tool_label.text = "Tool: %s" % item.get("label", "none")
+	var hint := ""
+	if CityView.TOOL_BUILDING.has(tool):
+		hint = " — R rotate · F flip"
+	elif CityView.PATH_TOOL_BUILD.has(tool):
+		hint = " — hold + drag to draw, release to build"
+	_tool_label.text = "Tool: %s%s" % [item.get("label", "none"), hint]
 	if _tool_buttons.has(tool):
 		(_tool_buttons[tool] as Button).set_pressed_no_signal(true)
 
@@ -937,6 +942,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		view.rotate_view(1)
 	elif key.keycode == KEY_R:
 		view.rotate_ghost()
+	elif key.keycode == KEY_F:
+		view.flip_ghost()
 
 
 static func _fmt_money(value: int) -> String:

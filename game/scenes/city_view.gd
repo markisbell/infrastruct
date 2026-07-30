@@ -38,7 +38,10 @@ const WATER_PIPE_COLOR := Color(0.2, 0.7, 0.35)
 const PIPE_HEIGHT := 0.16
 const HOUSE_VARIANTS := ["a", "b", "c", "d", "e", "f", "g", "h", "l", "m", "n", "q"]
 
-var tool: Tool = Tool.NONE
+var tool: Tool = Tool.NONE:
+	set(value):
+		tool = value
+		_cancel_drag()  # a half-drawn ghost path dies with its tool
 var overlays_visible := true:
 	set(value):
 		overlays_visible = value
@@ -54,7 +57,29 @@ var _cam_yaw_target := 0.0   # Q/E rotate in 90° steps, smoothed in _process
 var _ghost: Node3D
 var _ghost_kind := ""
 var _ghost_rot := 0
+var _ghost_flip := false
 var _ghost_disc: MeshInstance3D
+
+## drag-and-draw ghost path (lines/pipes/roads/zones): hold LMB to sketch,
+## release to build — red from the first blockage on (user-specified UX)
+const PATH_TOOL_BUILD := {
+	Tool.ROAD: "road", Tool.ZONE: "zone",
+	Tool.CABLE: "cable_overhead", Tool.UCABLE: "cable_buried",
+	Tool.PIPE: "heat", Tool.BURIED_PIPE: "heat_buried",
+	Tool.WATER_PIPE: "water", Tool.BURIED_WATER: "water_buried",
+}
+## ghost tint per path tool (the element's own color language, faded)
+const PATH_TOOL_COLOR := {
+	Tool.ROAD: Color(0.45, 0.45, 0.5), Tool.ZONE: Color(0.45, 0.8, 0.4),
+	Tool.CABLE: Color(0.45, 0.36, 0.28), Tool.UCABLE: Color(0.36, 0.33, 0.29),
+	Tool.PIPE: PIPE_SUPPLY_COLOR, Tool.BURIED_PIPE: Color(0.36, 0.33, 0.29),
+	Tool.WATER_PIPE: WATER_PIPE_COLOR, Tool.BURIED_WATER: Color(0.36, 0.33, 0.29),
+}
+const PATH_BLOCKED_COLOR := Color(0.95, 0.22, 0.18)
+var _drag_path: Array[Vector2i] = []
+var _drag_active := false
+var _path_ghost: Node3D
+var _path_quads: Array[MeshInstance3D] = []
 
 # build feedback (user direction): coverage diamonds while placing zone
 # stations, disconnection markers on network buildings, orphan markers on
@@ -872,6 +897,8 @@ func _make_building(id: String) -> Node3D:
 	node.position = Vector3(anchor.x + size.x / 2.0, _ground_y(anchor),
 		anchor.y + size.y / 2.0)
 	node.rotation_degrees.y = int(entry.get("rot", 0)) * 90.0
+	if bool(entry.get("flip", false)):
+		node.scale = Vector3(-1, 1, 1)  # mirror; Godot flips culling itself
 	return node
 
 
@@ -1367,10 +1394,73 @@ func _process(delta: float) -> void:
 					rotor.rotation_degrees.z += 90.0 * delta
 
 
+# ─── drag-and-draw ghost path ───
+
+## Append the tiles from the path's tail to `to` (grid-interpolated so a
+## fast mouse flick doesn't leave holes), then recolor the ghost.
+func _extend_drag(to: Vector2i) -> void:
+	var tail: Vector2i = _drag_path[_drag_path.size() - 1]
+	if to == tail:
+		return
+	var cur := tail
+	var guard := 0
+	while cur != to and guard < 512:
+		guard += 1
+		# axis-major step toward the target: L-shaped, never diagonal
+		# (diagonal tiles don't connect in the 4-neighbor network graphs)
+		if absi(to.x - cur.x) >= absi(to.y - cur.y):
+			cur.x += signi(to.x - cur.x)
+		else:
+			cur.y += signi(to.y - cur.y)
+		_drag_path.append(cur)
+	_refresh_path_ghost()
+
+
+func _refresh_path_ghost() -> void:
+	if _path_ghost == null:
+		_path_ghost = Node3D.new()
+		add_child(_path_ghost)
+	while _path_quads.size() < _drag_path.size():
+		var quad := MeshInstance3D.new()
+		var mesh := PlaneMesh.new()
+		mesh.size = Vector2(0.86, 0.86)
+		quad.mesh = mesh
+		_path_ghost.add_child(quad)
+		_path_quads.append(quad)
+	var plan := City.plan_path(PATH_TOOL_BUILD[tool], _drag_path)
+	var base: Color = PATH_TOOL_COLOR[tool]
+	for i in _path_quads.size():
+		var quad := _path_quads[i]
+		if i >= _drag_path.size():
+			quad.visible = false
+			continue
+		quad.visible = true
+		var pos := _drag_path[i]
+		quad.position = _center(pos) + Vector3(0, 0.04, 0)
+		var tint := PATH_BLOCKED_COLOR if plan[i] == "blocked" else base
+		# faded = the promise; blocked tiles glow harder so the cut reads
+		quad.material_override = _flat(
+			Color(tint.r, tint.g, tint.b, 0.62 if plan[i] == "blocked" else 0.45),
+			true, true)
+
+
+func _cancel_drag() -> void:
+	_drag_active = false
+	_drag_path.clear()
+	_painting = false
+	if _path_ghost:
+		for quad: MeshInstance3D in _path_quads:
+			quad.visible = false
+
+
 # ─── ghost placement preview ───
 
 func rotate_ghost() -> void:
 	_ghost_rot = (_ghost_rot + 1) % 4
+
+
+func flip_ghost() -> void:
+	_ghost_flip = not _ghost_flip
 
 
 func _update_ghost() -> void:
@@ -1397,6 +1487,7 @@ func _update_ghost() -> void:
 	_ghost.position = Vector3(anchor.x + size.x / 2.0, _ground_y(anchor) + 0.01,
 		anchor.y + size.y / 2.0)
 	_ghost.rotation_degrees.y = _ghost_rot * 90.0
+	_ghost.scale = Vector3(-1 if _ghost_flip else 1, 1, 1)
 	var affordable: bool = City.money >= int(BuildingDefs.DEFS[kind]["cost"])
 	var valid: bool = City.model.can_place_building(kind, anchor) and affordable
 	# amber: would place, but no line touches the footprint => disconnected
@@ -1468,9 +1559,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		var mb: InputEventMouseButton = event
 		match mb.button_index:
 			MOUSE_BUTTON_LEFT:
-				_painting = mb.pressed
-				if mb.pressed:
-					_apply_tool(mouse_tile())
+				if PATH_TOOL_BUILD.has(tool):
+					# drag-and-draw: sketch a ghost path, build on release
+					if mb.pressed:
+						_drag_active = true
+						_drag_path = [mouse_tile()] as Array[Vector2i]
+						_refresh_path_ghost()
+					elif _drag_active:
+						City.build_path(PATH_TOOL_BUILD[tool], _drag_path)
+						_cancel_drag()
+				else:
+					_painting = mb.pressed
+					if mb.pressed:
+						_apply_tool(mouse_tile())
 			MOUSE_BUTTON_RIGHT:
 				# right mouse is CAMERA ONLY (playtest feedback: the old
 				# click-bulldoze kept firing accidentally between orbits) —
@@ -1488,7 +1589,9 @@ func _unhandled_input(event: InputEvent) -> void:
 					_place_camera()
 	elif event is InputEventMouseMotion:
 		var mm: InputEventMouseMotion = event
-		if _painting:
+		if _drag_active:
+			_extend_drag(mouse_tile())
+		elif _painting:
 			_apply_tool(mouse_tile())
 		elif _orbiting:
 			# free orbit around the current focus; Q/E snap back to 90° views
@@ -1536,7 +1639,7 @@ func _apply_tool(pos: Vector2i) -> void:
 			City.bulldoze(pos)
 		_:
 			if TOOL_BUILDING.has(tool):
-				City.place_building(TOOL_BUILDING[tool], pos, _ghost_rot)
+				City.place_building(TOOL_BUILDING[tool], pos, _ghost_rot, {}, _ghost_flip)
 				_painting = false
 
 

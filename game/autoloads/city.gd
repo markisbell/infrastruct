@@ -173,48 +173,161 @@ func _process(delta: float) -> void:
 
 # ─── build API (UI tools call these; costs + occupancy enforced) ───
 
+# validate FIRST, then pay, then set: the old `_paid(...) and set_...`
+# order charged for blocked tiles and never refunded (silent money leak
+# while painting over obstacles)
+
 func build_road(pos: Vector2i) -> bool:
-	return _paid(BuildingDefs.COSTS["road"]) and model.set_road(pos) \
-		and _after_build(false)
+	return model.can_set_road(pos) and _paid(BuildingDefs.COSTS["road"]) \
+		and model.set_road(pos) and _after_build(false)
 
 
 func build_zone(pos: Vector2i) -> bool:
-	return _paid(BuildingDefs.COSTS["zone"]) and model.set_zone(pos) \
-		and _after_build(false)
+	return model.can_set_zone(pos) and _paid(BuildingDefs.COSTS["zone"]) \
+		and model.set_zone(pos) and _after_build(false)
 
 
 ## kind: LINE_OVERHEAD (default — poles and wires) or LINE_UNDERGROUND
 ## (buried, pricier). Both live on one electrical graph.
 func build_cable(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
 	var cost_key := "cable" if kind == BuildingDefs.LINE_UNDERGROUND else "overhead_line"
-	return _paid(BuildingDefs.COSTS[cost_key]) and model.set_cable(pos, kind) \
-		and _after_build(true)
+	return model.can_set_cable(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
+		and model.set_cable(pos, kind) and _after_build(true)
 
 
 func build_heat_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
 	var cost_key := "heat_pipe_buried" \
 		if kind == BuildingDefs.LINE_UNDERGROUND else "heat_pipe"
-	return _paid(BuildingDefs.COSTS[cost_key]) and model.set_heat_pipe(pos, kind) \
-		and _after_build(true)
+	return model.can_set_heat_pipe(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
+		and model.set_heat_pipe(pos, kind) and _after_build(true)
 
 
 func build_water_pipe(pos: Vector2i, kind: int = BuildingDefs.LINE_OVERHEAD) -> bool:
 	var cost_key := "water_pipe_buried" \
 		if kind == BuildingDefs.LINE_UNDERGROUND else "water_pipe"
-	return _paid(BuildingDefs.COSTS[cost_key]) and model.set_water_pipe(pos, kind) \
-		and _after_build(true)
+	return model.can_set_water_pipe(pos, kind) and _paid(BuildingDefs.COSTS[cost_key]) \
+		and model.set_water_pipe(pos, kind) and _after_build(true)
 
 
 func place_building(kind: String, anchor: Vector2i, rot: int = 0,
-		params_override: Dictionary = {}) -> bool:
+		params_override: Dictionary = {}, flip: bool = false) -> bool:
 	var def := BuildingDefs.get_def(kind)
 	if def.is_empty() or not model.can_place_building(kind, anchor):
 		return false
 	if not _paid(def["cost"]):
 		return false
-	model.place_building(kind, anchor, rot, params_override)
+	model.place_building(kind, anchor, rot, params_override, flip)
 	log_event("built", "info", "%s built" % kind)
 	return _after_build(true)
+
+
+# ─── drag-and-draw paths (ghost preview + commit on release) ───
+
+## Path build kinds the drag tools draw; maps to cost key + validator.
+const PATH_BUILDS := {
+	"road": {"cost": "road"},
+	"zone": {"cost": "zone"},
+	"cable_overhead": {"cost": "overhead_line", "kind": BuildingDefs.LINE_OVERHEAD},
+	"cable_buried": {"cost": "cable", "kind": BuildingDefs.LINE_UNDERGROUND},
+	"heat": {"cost": "heat_pipe", "kind": BuildingDefs.LINE_OVERHEAD},
+	"heat_buried": {"cost": "heat_pipe_buried", "kind": BuildingDefs.LINE_UNDERGROUND},
+	"water": {"cost": "water_pipe", "kind": BuildingDefs.LINE_OVERHEAD},
+	"water_buried": {"cost": "water_pipe_buried", "kind": BuildingDefs.LINE_UNDERGROUND},
+}
+
+
+## Dry-run a drawn path. Per tile: "ok" (will build + charge), "dup"
+## (already carries this element — free, stays part of the path) or
+## "blocked". Everything AFTER the first blockage is blocked too — the
+## remainder wouldn't be the path the player drew (user-specified UX:
+## the ghost turns red from the blockage on). Money is simulated tile by
+## tile, so running out mid-path reads as a blockage.
+func plan_path(build: String, tiles: Array[Vector2i]) -> Array[String]:
+	var spec: Dictionary = PATH_BUILDS[build]
+	var cost := int(BuildingDefs.COSTS[spec["cost"]])
+	var budget: float = INF if infinite_money else float(money)
+	var out: Array[String] = []
+	var seen := {}
+	var blocked := false
+	for pos: Vector2i in tiles:
+		if blocked:
+			out.append("blocked")
+			continue
+		var status := ""
+		if seen.has(pos) or _path_duplicate(build, pos):
+			status = "dup"
+		elif not _path_can_set(build, pos):
+			status = "blocked"
+		elif budget < cost:
+			status = "blocked"
+		else:
+			budget -= cost
+			status = "ok"
+		seen[pos] = true
+		blocked = status == "blocked"
+		out.append(status)
+	return out
+
+
+## Commit a drawn path: builds the plan's "ok" tiles (stops at the first
+## blockage, mirroring the red ghost). Returns the number of tiles built.
+func build_path(build: String, tiles: Array[Vector2i]) -> int:
+	var plan := plan_path(build, tiles)
+	var built := 0
+	var spec: Dictionary = PATH_BUILDS[build]
+	for i in tiles.size():
+		if plan[i] == "blocked":
+			break
+		if plan[i] != "ok":
+			continue
+		var ok := false
+		match build:
+			"road":
+				ok = build_road(tiles[i])
+			"zone":
+				ok = build_zone(tiles[i])
+			"cable_overhead", "cable_buried":
+				ok = build_cable(tiles[i], spec["kind"])
+			"heat", "heat_buried":
+				ok = build_heat_pipe(tiles[i], spec["kind"])
+			"water", "water_buried":
+				ok = build_water_pipe(tiles[i], spec["kind"])
+		if ok:
+			built += 1
+	return built
+
+
+## Already carrying exactly this element? Free to re-draw over.
+func _path_duplicate(build: String, pos: Vector2i) -> bool:
+	var spec: Dictionary = PATH_BUILDS[build]
+	match build:
+		"road":
+			return model.roads.has(pos)
+		"zone":
+			return model.zoning.has(pos)
+		"cable_overhead", "cable_buried":
+			return int(model.cables.get(pos, -1)) == int(spec["kind"])
+		"heat", "heat_buried":
+			return int(model.heat_pipes.get(pos, -1)) == int(spec["kind"])
+		"water", "water_buried":
+			return int(model.water_pipes.get(pos, -1)) == int(spec["kind"])
+	return false
+
+
+func _path_can_set(build: String, pos: Vector2i) -> bool:
+	var spec: Dictionary = PATH_BUILDS[build]
+	match build:
+		"road":
+			return model.can_set_road(pos)
+		"zone":
+			return model.can_set_zone(pos)
+		"cable_overhead", "cable_buried":
+			return model.can_set_cable(pos, spec["kind"])
+		"heat", "heat_buried":
+			return model.can_set_heat_pipe(pos, spec["kind"])
+		"water", "water_buried":
+			return model.can_set_water_pipe(pos, spec["kind"])
+	return false
 
 
 func bulldoze(pos: Vector2i) -> bool:
