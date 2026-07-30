@@ -242,6 +242,28 @@ func _build_environment() -> void:
 
 var _clouds: Array[Node3D] = []
 const CLOUD_COUNT := 26
+var _brightness := 1.0  # daylight brightness from _update_daylight
+
+
+## Window lights fade in as evening falls; every household keeps its own
+## hash-seeded bedtime and wake-up — and a BLACKOUT switches the street
+## dark for real (powered = no blackout bubble on the house).
+func _update_house_lights() -> void:
+	var night := clampf((0.4 - _brightness) / 0.3, 0.0, 1.0)
+	var hour := fmod(GameClock.total_minutes, 1440.0) / 60.0
+	var since_evening := fmod(hour - 18.0 + 24.0, 24.0)  # 0 at 18:00
+	for pos: Vector2i in _houses:
+		var light: OmniLight3D = _houses[pos].get_meta("light", null)
+		if light == null:
+			continue
+		var energy := 0.0
+		if night > 0.0 and not _blackout_bubbles.has(pos):
+			var h := _tile_hash(pos, 5)
+			var bedtime := 3.5 + float(h % 40) / 10.0   # 21:30..01:30
+			var wake := 11.0 + float(h % 20) / 10.0     # 05:00..06:54
+			if since_evening < bedtime or since_evening >= wake:
+				energy = night * 0.7 * (0.8 + float(h % 7) * 0.06)
+		light.light_energy = energy
 
 
 ## Sun elevation/azimuth, light energy/color, ambient and sky colors all
@@ -258,6 +280,7 @@ func _update_daylight() -> void:
 	# gamma-eased: evenings stay usable-bright well past 18:00 before the
 	# night floor (0.28 — dim blue, never black) takes over
 	var brightness := pow(daylight, 0.65)
+	_brightness = brightness  # house window lights key on it
 	_sun.light_energy = lerpf(0.28, 1.5, brightness)
 	var day_color := Color(1.0, 0.965, 0.89).lerp(Color(1.0, 0.62, 0.38), dusk)
 	_sun.light_color = Color(0.62, 0.7, 0.95).lerp(day_color, brightness)
@@ -1108,6 +1131,17 @@ func _make_house(pos: Vector2i) -> Node3D:
 		if City.model.roads.has(pos + directions[i]):
 			house.rotation_degrees.y = [0.0, 90.0, 180.0, 270.0][i]
 			break
+	# window light: warm shadowless omni, driven per frame by night x power
+	# (the whole point: a blackout at night really darkens the street)
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.82, 0.5)
+	light.omni_range = 1.45
+	light.light_energy = 0.0
+	light.shadow_enabled = false
+	light.position = Vector3(0, 0.4, 0)
+	light.set_meta("house_light", true)
+	house.add_child(light)
+	house.set_meta("light", light)
 	return house
 
 
@@ -1642,6 +1676,7 @@ func _process(delta: float) -> void:
 	_update_ghost()
 	_update_daylight()
 	_drift_clouds(delta)
+	_update_house_lights()
 	# gentle bob keeps the blackout bubbles alive
 	var bob := sin(Time.get_ticks_msec() / 400.0) * 0.06
 	for pos: Vector2i in _blackout_bubbles:
