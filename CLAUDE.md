@@ -167,6 +167,15 @@ start_game.bat
 powershell -File tools/installer/build_installer.ps1
 #   -> .tools/dist-build/infrastruct-setup-<v>.exe (~330 MB; payload = exported
 #   game exe + 3 PyInstaller-frozen backends + their data + dist sidecars.json)
+# Linux tarball (IN PROGRESS 2026-07-30, user switching to Linux Claude Code):
+#   export preset "Linux" + orchestration/sidecars_dist_linux.json +
+#   tools/installer/build_linux.ps1 exist; the game export WORKS (template
+#   .tools/linux_release.x86_64, extracted from the tpz). Remaining: freeze
+#   the 3 backends for Linux (the ps1 uses python:3.12-slim containers —
+#   on a NATIVE Linux session just freeze per-venv with the same pyinstaller
+#   args as build_installer.ps1 step 2, entry files in .tools/dist-build/),
+#   stage like the Windows script, tar with exec bits, verify with
+#   ./infrastruct.x86_64 --headless -- --smoke=sidecars.
 # visual modes (need a window, NOT --headless)
 ...win64.exe --path game --resolution 1600x900 -- --screenshot=out.png   # demo town
 ...                                              -- --roadtest=out.png   # road pieces + crossing

@@ -1,0 +1,37 @@
+{
+  "sidecars": [
+    {
+      "id": "power",
+      "exe": "backends/power/netzsim-frozen",
+      "cwd": "backends/power",
+      "port": 8010,
+      "env": {
+        "NETZSIM_EXTERNAL_CLOCK": "true",
+        "NETZSIM_PORT": "8010",
+        "NETZSIM_HOST": "127.0.0.1"
+      }
+    },
+    {
+      "id": "heat",
+      "exe": "backends/heat/rtheatflow-frozen",
+      "cwd": "backends/heat",
+      "port": 8011,
+      "env": {
+        "RTHEATFLOW_EXTERNAL_CLOCK": "true",
+        "RTHEATFLOW_PORT": "8011",
+        "RTHEATFLOW_HOST": "127.0.0.1"
+      }
+    },
+    {
+      "id": "water",
+      "exe": "backends/water/rtwaterflow-frozen",
+      "cwd": "backends/water",
+      "port": 8012,
+      "env": {
+        "RTWATERFLOW_EXTERNAL_CLOCK": "true",
+        "RTWATERFLOW_PORT": "8012",
+        "RTWATERFLOW_HOST": "127.0.0.1"
+      }
+    }
+  ]
+}
