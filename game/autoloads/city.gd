@@ -131,6 +131,10 @@ var _line_streak := {}
 var _slack_streak := 0
 var _peak_ema := 0.0              # battery peak-shave threshold (net-load EMA)
 var _peak_ema_t := -1
+## Last known SoC per storage device (battery/heat storage/water tower,
+## 0..1) — replayed into the docs at registration so topology resets and
+## save/load never silently recharge the fleet (Phase 8).
+var device_soc := {}
 var _topo_dirty := true
 var _topo_timer := 0.0
 var _last_doc_json := ""
@@ -400,6 +404,10 @@ func _sync_topology() -> void:
 	topo = PowerTopology.build(model, tripped_tiles)
 	heat_topo = HeatTopology.build(model, tripped_tiles)
 	water_topo = WaterTopology.build(model, tripped_tiles)
+	# storage continuity: a reset re-creates the backend devices — carry the
+	# last known SoC/level so building a road doesn't recharge the city
+	for doc: Dictionary in [topo.doc, heat_topo.doc, water_topo.doc]:
+		_inject_soc(doc)
 	# surface builder warnings (island networks etc.) — they were silent,
 	# which made "why is my second network dead?" undebuggable in play
 	var warned: Dictionary = get_meta("topo_warned", {})
@@ -410,6 +418,20 @@ func _sync_topology() -> void:
 	set_meta("topo_warned", warned)
 	_syncing = true
 	_register_async()
+
+
+func _inject_soc(doc: Dictionary) -> void:
+	for device: Dictionary in doc.get("devices", []):
+		if device_soc.has(device["id"]):
+			device["params"] = (device["params"] as Dictionary).duplicate()
+			device["params"]["soc"] = snappedf(float(device_soc[device["id"]]), 0.0001)
+
+
+func _track_soc(result: Dictionary) -> void:
+	for device_id: String in result.get("devices", {}):
+		var soc: Variant = result["devices"][device_id].get("soc")
+		if soc != null:
+			device_soc[device_id] = float(soc)
 
 
 func _register_async() -> void:
@@ -756,6 +778,7 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 	if network != "power":
 		return
 	last_result = result
+	_track_soc(result)
 	_apply_repairs(t)
 	var grid_tripped := grid_trip_until > t
 	var failed: bool = result.get("status", "failed") == "failed"
@@ -849,6 +872,7 @@ var _heat_degraded_streak := 0
 
 func _on_heat_step(t: int, result: Dictionary) -> void:
 	last_heat_result = result
+	_track_soc(result)
 	var status: String = result.get("status", "failed")
 	if status == "degraded":
 		_heat_degraded_streak += 1
@@ -956,6 +980,7 @@ func total_heat_outage_minutes() -> int:
 ## harshest of the three outages: hygiene, cooking, everything stops.
 func _on_water_step(t: int, result: Dictionary) -> void:
 	last_water_result = result
+	_track_soc(result)
 	var failed: bool = result.get("status", "failed") == "failed"
 	var dry_weight := 0.0     # house-weighted shortfall across zones
 	var total := 0
@@ -1387,6 +1412,7 @@ func reset_for_scenario(weather_seed: int) -> void:
 	_slack_streak = 0
 	_peak_ema = 0.0
 	_peak_ema_t = -1
+	device_soc.clear()
 	_heat_degraded_streak = 0
 	zone_supplied.clear()
 	heat_zone_supplied.clear()
@@ -1402,6 +1428,9 @@ func reset_for_scenario(weather_seed: int) -> void:
 # ─── persistence ───
 
 func serialize() -> Dictionary:
+	var tiles_out := {}
+	for pos: Vector2i in tripped_tiles:
+		tiles_out["%d,%d" % [pos.x, pos.y]] = tripped_tiles[pos]
 	return {
 		"money": money, "happiness": happiness,
 		"loans": loans,
@@ -1417,6 +1446,17 @@ func serialize() -> Dictionary:
 		"events_enabled": events_enabled,
 		"growth_enabled": growth_enabled,
 		"grid_capacity_override": grid_capacity_override,
+		# envelope v4 (Phase 8 completeness): a load can no longer cheese
+		# away trips/failures, lose the books, or recharge the storages
+		"tripped_tiles": tiles_out,
+		"tripped_substations": tripped_substations.duplicate(),
+		"grid_trip_until": grid_trip_until,
+		"econ_today": econ_today.duplicate(),
+		"econ_yesterday": econ_yesterday.duplicate(),
+		"econ_total": econ_total.duplicate(),
+		"econ_day": _econ_day,
+		"event_system": event_system.serialize(),
+		"device_soc": device_soc.duplicate(),
 	}
 
 
@@ -1438,9 +1478,24 @@ func restore(data: Dictionary) -> void:
 	events_enabled = bool(data.get("events_enabled", false))
 	growth_enabled = bool(data.get("growth_enabled", true))
 	grid_capacity_override = float(data.get("grid_capacity_override", -1.0))
-	event_system = EventSystem.new(int(data.get("weather_seed", 42)))
+	event_system = EventSystem.deserialize(
+		data.get("event_system", {}), int(data.get("weather_seed", 42)))
 	tripped_tiles.clear()
+	for key: String in data.get("tripped_tiles", {}):
+		var parts := key.split(",")
+		if parts.size() == 2:
+			tripped_tiles[Vector2i(int(parts[0]), int(parts[1]))] = \
+				int(data["tripped_tiles"][key])
 	tripped_substations.clear()
+	var subs: Dictionary = data.get("tripped_substations", {})
+	for id: String in subs:
+		tripped_substations[id] = int(subs[id])
+	grid_trip_until = int(data.get("grid_trip_until", -1))
+	econ_today = data.get("econ_today", {})
+	econ_yesterday = data.get("econ_yesterday", {})
+	econ_total = data.get("econ_total", {})
+	_econ_day = int(data.get("econ_day", -1))
+	device_soc = data.get("device_soc", {})
 	capacity_warnings.clear()
 	telemetry.clear()   # rings belong to the previous city
 	zone_supplied.clear()
@@ -1449,7 +1504,6 @@ func restore(data: Dictionary) -> void:
 	last_result = {}
 	last_heat_result = {}
 	last_water_result = {}
-	grid_trip_until = -1
 	_topo_dirty = true
 	state_changed.emit()
 	world_changed.emit()

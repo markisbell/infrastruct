@@ -4,8 +4,9 @@ extends Node
 ## state is NOT saved: networks rebuild from the model via /gb/net/reset on
 ## load (device SoC replay is Phase 8 hardening).
 
-const ENVELOPE_VERSION := 3  # v3: city payload carries the game context
-                             # (scenario state, difficulty, sandbox flags)
+const ENVELOPE_VERSION := 4  # v4 (Phase 8): trips, econ books, event-system
+                             # state and device SoC survive the roundtrip
+                             # (v3: game context — scenario/difficulty/flags)
 const DEFAULT_PATH := "user://save.json"
 
 

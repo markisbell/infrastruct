@@ -39,6 +39,26 @@ func _init(seed_arg: int = 42) -> void:
 	rng.seed = seed_arg
 
 
+## Persistence (envelope v4): active outages/draws + the RNG position, so a
+## save/load can neither cheese away a failure nor reroll the day's events.
+## RNG values ride as STRINGS — int64 doesn't survive JSON's float64.
+func serialize() -> Dictionary:
+	return {"rng_seed": str(rng.seed), "rng_state": str(rng.state),
+		"frequency_scale": frequency_scale,
+		"down_until": down_until.duplicate(),
+		"water_draws": water_draws.duplicate(true)}
+
+
+static func deserialize(data: Dictionary, fallback_seed: int) -> EventSystem:
+	var out := EventSystem.new(int(str(data.get("rng_seed", fallback_seed)).to_int()))
+	if data.has("rng_state"):
+		out.rng.state = str(data["rng_state"]).to_int()
+	out.frequency_scale = float(data.get("frequency_scale", 1.0))
+	out.down_until = data.get("down_until", {})
+	out.water_draws = data.get("water_draws", {})
+	return out
+
+
 ## Roll the day's events. Weather overrides are applied to `weather`
 ## directly; equipment/water effects are stored here for the boundary
 ## provider. Returns the day's event list for the caller's event feed.
