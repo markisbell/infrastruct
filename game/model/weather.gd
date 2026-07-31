@@ -55,6 +55,23 @@ func wind_ms(t: int) -> float:
 	return 14.0 * pow(synoptic, 1.6) * diurnal
 
 
+## Sky clearness 0 (overcast) .. 1 (clear) — the cloud field that attenuates
+## ghi_wm2. ~1.5-day noise timescale, so whole overcast days genuinely occur.
+## Also drives the visual cloud density and (as a daylight average) which
+## MEASURED pv day shape DemandModel picks — sky, solve and dispatch agree.
+func clearness(t: int) -> float:
+	return clampf(_cloud_noise.get_noise_1d(t / (STEPS_PER_DAY * 1.5) * 100.0) * 0.5 + 0.5, 0.0, 1.0)
+
+
+## Daylight-window average clearness of a game day (08:00–16:00 samples):
+## one committed value per day for the pv measured-day pick.
+func clearness_day(day: int) -> float:
+	var total := 0.0
+	for i in 8:
+		total += clearness(day * STEPS_PER_DAY + 32 + i * 4)
+	return total / 8.0
+
+
 func ghi_wm2(t: int) -> float:
 	var day_frac := float(t % STEPS_PER_DAY) / STEPS_PER_DAY
 	var season := _season_factor(t)  # 0 winter .. 1 summer
@@ -63,8 +80,7 @@ func ghi_wm2(t: int) -> float:
 	if elevation <= 0.0:
 		return 0.0
 	var clear_sky := lerpf(280.0, 880.0, season) * pow(elevation, 1.3)
-	var cloud := clampf(_cloud_noise.get_noise_1d(t / (STEPS_PER_DAY * 1.5) * 100.0) * 0.5 + 0.5, 0.0, 1.0)
-	return clear_sky * lerpf(0.22, 1.0, cloud)
+	return clear_sky * lerpf(0.22, 1.0, clearness(t))
 
 
 ## Scripted temperature overrides (cold-snap scenarios), same semantics as

@@ -346,7 +346,15 @@ func _spawn_clouds() -> void:
 func _drift_clouds(delta: float) -> void:
 	var wind := float(City.weather.sample(City.current_t).get("wind_ms", 5.0))
 	var speed := 0.35 + wind * 0.05
-	for cloud: Node3D in _clouds:
+	# cloud COVER follows the weather's clearness field — the same field that
+	# attenuates ghi and picks the measured pv day, so an overcast sky and a
+	# dim solar dispatch always agree. The field drifts over ~1.5 days, so
+	# the visible prefix grows/shrinks one cloud at a time, no popping.
+	var cover := 1.0 - City.weather.clearness(City.current_t)
+	var visible_n := roundi(lerpf(4.0, float(_clouds.size()), cover))
+	for i in _clouds.size():
+		var cloud: Node3D = _clouds[i]
+		cloud.visible = i < visible_n
 		cloud.position.x += speed * delta
 		cloud.position.z += speed * 0.22 * delta
 		if cloud.position.x > 262.0:

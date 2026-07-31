@@ -93,12 +93,40 @@ static func ev_factor(t: int) -> float:
 
 ## PV yield as a fraction of kWp — REAL measured day shapes from
 ## rtpowerflow's rooftop plant (real_pv_days.json via the profile pack),
-## picked deterministically per game day and scaled by season (the
-## measurement campaign covers late spring/summer). Drives rooftop PV in
-## the zone composition AND the solar parks' dispatch.
+## scaled by season (the measurement campaign covers late spring/summer).
+## Drives rooftop PV in the zone composition AND the solar parks' dispatch.
+## WHICH measured day a game day gets follows the WEATHER's cloud field
+## (energy-sorted shapes, dim day <-> dim shape — the sky, the visual cloud
+## cover and the dispatch agree); without an injected weather (unit tests,
+## fixtures) the legacy per-day hash pick applies.
 ## Winter shortens BOTH the amplitude and the DAYLIGHT WINDOW: the summer
 ## shapes are time-compressed toward noon (a 4-pm winter sunset), otherwise
 ## a January evening would still show phantom summer sun.
+
+## Injected by City (and re-injected on scenario start + save-load, where
+## the WeatherSystem is recreated with the scenario's seed).
+static var weather: WeatherSystem = null
+static var _pv_order: Array[int] = []  # pack day indices, dimmest first
+
+
+static func _pv_day_index(days: Array, day: int) -> int:
+	if weather == null:
+		return (day * 2654435761) % days.size()
+	if _pv_order.size() != days.size():
+		var ranked: Array = []
+		for i in days.size():
+			var total := 0.0
+			for v: Variant in days[i]:
+				total += float(v)
+			ranked.append([total, i])
+		ranked.sort()
+		_pv_order.clear()
+		for pair: Array in ranked:
+			_pv_order.append(pair[1])
+	var rank := roundi(weather.clearness_day(day) * float(_pv_order.size() - 1))
+	return _pv_order[clampi(rank, 0, _pv_order.size() - 1)]
+
+
 static func pv_availability(t: int) -> float:
 	var pack := _get_pack()
 	var doy := (t / STEPS_PER_DAY) % DAYS_PER_YEAR
@@ -111,7 +139,7 @@ static func pv_availability(t: int) -> float:
 	if pack.has("pv_days"):
 		var days: Array = pack["pv_days"]
 		var day := t / STEPS_PER_DAY
-		var shape: Array = days[(day * 2654435761) % days.size()]
+		var shape: Array = days[_pv_day_index(days, day)]
 		return float(shape[int(stretched)]) * seasonal
 	# fallback: clear-sky bell
 	var frac := stretched / STEPS_PER_DAY

@@ -145,6 +145,7 @@ var registered := false
 func _ready() -> void:
 	# City IS the boundary provider for the real game (fixture-driven smokes
 	# overwrite this after boot)
+	DemandModel.weather = weather  # cloud field picks the measured pv day
 	Orchestrator.boundary_provider = self
 	Orchestrator.step_completed.connect(_on_step_completed)
 	# surface orchestrator failures in the event feed — a silent reset
@@ -1428,6 +1429,7 @@ func reset_for_scenario(weather_seed: int) -> void:
 	model = WorldModel.new()
 	money = 100_000_000
 	weather = WeatherSystem.new(weather_seed)
+	DemandModel.weather = weather
 	outage_minutes = {}
 	heat_outage_minutes = {}
 	water_outage_minutes = {}
@@ -1520,6 +1522,7 @@ func restore(data: Dictionary) -> void:
 	heat_outage_minutes = data.get("heat_outage_minutes", {})
 	water_outage_minutes = data.get("water_outage_minutes", {})
 	weather = WeatherSystem.new(int(data.get("weather_seed", 42)))
+	DemandModel.weather = weather
 	scenario_state = data.get("scenario_state", {})
 	difficulty = data.get("difficulty",
 		{"growth_scale": 1.0, "event_scale": 1.0, "money_scale": 1.0})

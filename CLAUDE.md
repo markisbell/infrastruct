@@ -93,8 +93,15 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   + EV home charging (35 % × 11 kW, gaussian-arrival shapes, workday peak
   ~19:00) − rooftop PV (40 % × 7 kWp on REAL measured rtpowerflow day
   shapes, seasonal-scaled). Negative at sunny noon = export. Solar parks
-  dispatch from the same `DemandModel.pv_availability` (not weather ghi);
-  billing books only positive net import.
+  dispatch from the same `DemandModel.pv_availability`; billing books only
+  positive net import. **WEATHER-COUPLED PV (2026-07-31)**: WHICH measured
+  day a game day gets follows `WeatherSystem.clearness_day` (the seeded
+  cloud field behind ghi_wm2; shapes energy-sorted, dim day <-> dim shape —
+  still real shapes, never raw ghi, no double-counting of embedded clouds),
+  and the VISIBLE cloud cover uses the same instantaneous field
+  (`city_view._drift_clouds` visible-prefix), so sky and dispatch agree.
+  City injects `DemandModel.weather` at _ready/scenario-reset/save-load
+  (static — uninjected unit tests keep the legacy hash day pick).
 - **Battery = peak shaving ALWAYS** (user direction): discharge net load
   above its one-day EMA (`City._peak_ema`, alpha 1/96), recharge below;
   gas covers the residual AFTER the battery pass.
