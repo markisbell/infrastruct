@@ -5,7 +5,7 @@
 ; Per-user install: no admin, no UAC, nothing outside {localappdata}.
 
 #define MyAppName "infrastruct"
-#define MyAppVersion "0.8.1"
+#define MyAppVersion "0.8.2"
 #define MyAppPublisher "infrastruct project"
 #define MyAppExeName "infrastruct.exe"
 ; the build script passes /DStageDir=... /DOutDir=... pointing at a subst'd

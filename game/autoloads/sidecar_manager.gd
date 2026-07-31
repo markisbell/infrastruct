@@ -2,9 +2,10 @@ extends Node
 ## SidecarManager — spawns and supervises the Python solver backends
 ## (ROADMAP Phase 1 task 2). Config: orchestration/sidecars.json.
 ##
-## Windows-first (matches the dev machine): processes launch through a cmd.exe
-## wrapper (env vars + log redirect — OS.create_process has no env parameter)
-## and are terminated as a tree via taskkill. Health = GET /health every
+## Processes launch through a shell wrapper (env vars + log redirect —
+## OS.create_process has no env parameter): cmd.exe + taskkill tree-kill on
+## Windows, sh -c with exec + kill elsewhere (exec makes the returned pid the
+## backend itself, so no tree is needed). Health = GET /health every
 ## POLL_INTERVAL_S; a healthy sidecar that stops answering goes DOWN and is
 ## restarted with capped backoff. Nothing starts automatically — main.gd calls
 ## start_all() so bench/test runs stay sidecar-free.
@@ -103,29 +104,46 @@ func _start(id: String) -> void:
 	var cfg: Dictionary = s["cfg"]
 	var log_dir := repo_root.path_join("orchestration/logs")
 	DirAccess.make_dir_recursive_absolute(log_dir)
-	var parts: Array[String] = ['cd /d "%s"' % repo_root.path_join(cfg["cwd"])]
-	for key: String in cfg.get("env", {}):
-		parts.append('set "%s=%s"' % [key, cfg["env"][key]])
+	# port in the log name: parallel instances (live game + stress run) must
+	# never interleave in one file
+	var log_path := log_dir.path_join("%s_%d.log" % [id, port_of(id)])
 	# dev: venv python -m module; installed build: a PyInstaller-frozen exe
 	var run := '"%s"' % repo_root.path_join(cfg["exe"]) if cfg.has("exe") \
-		else '"%s" -m %s' % [repo_root.path_join(cfg["python"]), cfg["module"]]
-	parts.append('%s >> "%s" 2>&1' % [
-		run,
-		# port in the name: parallel instances (live game + stress run) must
-		# never interleave in one file
-		log_dir.path_join("%s_%d.log" % [id, port_of(id)]),
-	])
-	var pid := OS.create_process("cmd.exe", ["/c", " && ".join(parts)])
+		else '"%s" -m %s' % [_python_path(cfg["python"]), cfg["module"]]
+	var pid: int
+	if OS.get_name() == "Windows":
+		var parts: Array[String] = ['cd /d "%s"' % repo_root.path_join(cfg["cwd"])]
+		for key: String in cfg.get("env", {}):
+			parts.append('set "%s=%s"' % [key, cfg["env"][key]])
+		parts.append('%s >> "%s" 2>&1' % [run, log_path])
+		pid = OS.create_process("cmd.exe", ["/c", " && ".join(parts)])
+	else:
+		var parts: Array[String] = ['cd "%s"' % repo_root.path_join(cfg["cwd"])]
+		for key: String in cfg.get("env", {}):
+			parts.append('export %s="%s"' % [key, cfg["env"][key]])
+		# exec: the shell is replaced by the backend, so pid == backend pid
+		parts.append('exec %s >> "%s" 2>&1' % [run, log_path])
+		pid = OS.create_process("sh", ["-c", " && ".join(parts)])
 	s["pid"] = pid
 	s["started_at"] = Time.get_ticks_msec() / 1000.0
 	_set_state(id, State.STARTING if pid > 0 else State.DOWN)
 
 
+func _python_path(rel: String) -> String:
+	# sidecars.json carries the Windows venv layout; translate on POSIX
+	if OS.get_name() != "Windows" and rel.contains("/Scripts/"):
+		rel = rel.replace("/Scripts/", "/bin/").trim_suffix(".exe")
+	return repo_root.path_join(rel)
+
+
 func _kill(id: String) -> void:
 	var pid: int = _sidecars[id]["pid"]
 	if pid > 0:
-		# /T takes the whole cmd->python tree down; idempotent if already gone
-		OS.execute("taskkill", ["/PID", str(pid), "/T", "/F"])
+		if OS.get_name() == "Windows":
+			# /T takes the whole cmd->python tree down; idempotent if already gone
+			OS.execute("taskkill", ["/PID", str(pid), "/T", "/F"])
+		else:
+			OS.execute("kill", ["-9", str(pid)])
 	_sidecars[id]["pid"] = -1
 
 

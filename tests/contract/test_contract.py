@@ -48,13 +48,22 @@ WS_TIMEOUT_S = 60.0
 
 # ------------------------------------------------------------------ registry
 
+def _python_path(rel: str) -> Path:
+    # backends.json carries the Windows venv layout; translate on POSIX.
+    # abspath, NOT resolve(): a uv venv's bin/python is a symlink to the base
+    # interpreter, and following it would spawn OUTSIDE the venv (no deps).
+    if os.name != "nt" and "/Scripts/" in rel:
+        rel = rel.replace("/Scripts/", "/bin/").removesuffix(".exe")
+    return Path(os.path.abspath(HERE / rel))
+
+
 def _load_params() -> "list[Any]":
     registry = json.loads((HERE / "backends.json").read_text(encoding="utf-8"))
     params = []
     for entry in registry["backends"]:
         cwd = (HERE / entry["cwd"]).resolve()
         fixture = (HERE / entry["fixture"]).resolve()
-        python = (HERE / entry["python"]).resolve()
+        python = _python_path(entry["python"])
         reason = None
         if not fixture.is_file():
             reason = f"fixture not found: {fixture}"
@@ -216,7 +225,7 @@ def _resolve_dotted(obj: Any, dotted: str) -> Any:
 @pytest.mark.parametrize("entry", _load_params())
 def test_contract(entry: dict, tmp_path: Path) -> None:
     cwd = (HERE / entry["cwd"]).resolve()
-    python = (HERE / entry["python"]).resolve()
+    python = _python_path(entry["python"])
     fixture = json.loads((HERE / entry["fixture"]).resolve().read_text(encoding="utf-8"))
     port = entry["port"]
     base = f"http://127.0.0.1:{port}"

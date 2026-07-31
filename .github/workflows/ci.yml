@@ -12,6 +12,7 @@ env:
 jobs:
   game-tests:
     strategy:
+      fail-fast: false   # one OS failing must not cancel the other's signal
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -40,20 +41,24 @@ jobs:
           mkdir -p .tools/godot
           curl -sL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_win64.exe.zip"
           unzip -q godot.zip -d .tools/godot
-          mv ".tools/godot/Godot_v${GODOT_VERSION}-stable_win64_console.exe" .tools/godot/godot.exe
+          # the console exe is a thin WRAPPER that launches its companion by
+          # name convention (NAME.exe <-> NAME_console.exe) — rename BOTH as a
+          # matching pair or the wrapper exits 127 (cost four red runs)
+          mv ".tools/godot/Godot_v${GODOT_VERSION}-stable_win64.exe" .tools/godot/godot.exe
+          mv ".tools/godot/Godot_v${GODOT_VERSION}-stable_win64_console.exe" .tools/godot/godot_console.exe
 
       - name: Import project
         shell: bash
         run: |
           GODOT=.tools/godot/godot
-          [ "${{ runner.os }}" = "Windows" ] && GODOT=.tools/godot/godot.exe
+          [ "${{ runner.os }}" = "Windows" ] && GODOT=.tools/godot/godot_console.exe
           $GODOT --headless --import --path game
 
       - name: GdUnit4 tests (headless)
         shell: bash
         run: |
           GODOT=.tools/godot/godot
-          [ "${{ runner.os }}" = "Windows" ] && GODOT=.tools/godot/godot.exe
+          [ "${{ runner.os }}" = "Windows" ] && GODOT=.tools/godot/godot_console.exe
           $GODOT --headless --path game -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://tests --ignoreHeadlessMode
 
   backend-tests:
@@ -61,8 +66,9 @@ jobs:
     # (pandapipes 0.14.0 -> pandapower 3.3.3), mirroring the per-backend
     # venvs used locally and in production sidecars.
     strategy:
+      fail-fast: false
       matrix:
-        backend: [rtpowerflow, rtheatflow]
+        backend: [rtpowerflow, rtheatflow, rtwaterflow]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

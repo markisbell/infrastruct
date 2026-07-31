@@ -147,45 +147,58 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
 
 ## 5. How to run & verify
 
+The dev machine is LINUX since 2026-07-31 (Ubuntu 22.04; the sections below
+use the Linux paths — on Windows substitute `Godot_v4.7.1-stable_win64_console.exe`,
+`.venv/Scripts/python.exe`, `start_game.bat`, and the `tests/e2e/*.ps1` wrappers).
+
 ```bash
 # game (desktop, visible)
-start_game.bat
+./start_game.sh
 # headless smokes (all print one JSON line, exit 0/1)
-.tools/godot/Godot_v4.7.1-stable_win64_console.exe --headless --path game -- --smoke=<name>
-# names: sidecars resilience saveload cosim cosim-kill windless-week overload
-#        stress coldsnap heatstorage pumpblackout drought towerheight hilltower
-#        yearcurves citylife economy events scenarios maintenance
+.tools/godot/Godot_v4.7.1-stable_linux.x86_64 --headless --path game -- --smoke=<name>
+# names: sidecars saveload cosim windless-week overload stress coldsnap
+#        heatstorage pumpblackout drought towerheight hilltower yearcurves
+#        citylife economy events scenarios maintenance
 #        playtest (monkey player; optional --seed=N for fuzz sweeps)
-# GdUnit (import pass REQUIRED after adding class_name files!)
-.tools/godot/...console.exe --headless --path game --import
-.tools/godot/...console.exe --headless --path game -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://tests --ignoreHeadlessMode
+# resilience + cosim-kill are NOT standalone — an external wrapper must kill
+# the backend (bare runs report saw_down/down_event false and fail):
+tests/e2e/resilience_smoke.sh && tests/e2e/cosim_kill_recovery.sh
+# GdUnit (import pass REQUIRED after adding class_name files AND on fresh checkouts!)
+.tools/godot/Godot_v4.7.1-stable_linux.x86_64 --headless --path game --import
+.tools/godot/Godot_v4.7.1-stable_linux.x86_64 --headless --path game -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://tests --ignoreHeadlessMode
 # shared contract suite (all four backends, spawns them itself)
-.venv/Scripts/python.exe -m pytest tests/contract -q
+.venv/bin/python -m pytest tests/contract -q
 # Windows installer (clean-PC install, per-user, no admin/Python/Godot):
 #   prerequisites once: .tools/windows_release_x86_64.exe (from the official
 #   4.7.1 export-templates tpz) + Inno Setup 6 (ISCC, per-user install ok)
 powershell -File tools/installer/build_installer.ps1
 #   -> .tools/dist-build/infrastruct-setup-<v>.exe (~330 MB; payload = exported
 #   game exe + 3 PyInstaller-frozen backends + their data + dist sidecars.json)
-# Linux tarball (IN PROGRESS 2026-07-30, user switching to Linux Claude Code):
-#   export preset "Linux" + orchestration/sidecars_dist_linux.json +
-#   tools/installer/build_linux.ps1 exist; the game export WORKS (template
-#   .tools/linux_release.x86_64, extracted from the tpz). Remaining: freeze
-#   the 3 backends for Linux (the ps1 uses python:3.12-slim containers —
-#   on a NATIVE Linux session just freeze per-venv with the same pyinstaller
-#   args as build_installer.ps1 step 2, entry files in .tools/dist-build/),
-#   stage like the Windows script, tar with exec bits, verify with
-#   ./infrastruct.x86_64 --headless -- --smoke=sidecars.
+# Linux tarball (DONE 2026-07-31, built + verified natively): mkdir the
+#   export dir first (Godot won't), export preset "Linux", freeze the 3
+#   backends per-venv (same pyinstaller args as build_installer.ps1 step 2;
+#   entry files entry_{power,heat,water}.py in .tools/dist-build/ are 2-liners:
+#   `from <pkg>.main import main` + `main()`), stage like the ps1 step 3 with
+#   orchestration/sidecars_dist_linux.json as stage/orchestration/sidecars.json,
+#   scrub stage orchestration/logs/ BEFORE tar (a staged verify run leaves
+#   logs that end up shipped), tar -C stage --transform 's|^\./|infrastruct/|',
+#   verify from a FRESH extraction: ./infrastruct.x86_64 --headless -- --smoke=sidecars
+#   -> .tools/dist-build/infrastruct-<v>-linux-x86_64.tar.gz (~380 MB)
 # visual modes (need a window, NOT --headless)
-...win64.exe --path game --resolution 1600x900 -- --screenshot=out.png   # demo town
-...                                              -- --roadtest=out.png   # road pieces + crossing
-...                                              -- --gallery=out.png    # art picker
+.tools/godot/Godot_v4.7.1-stable_linux.x86_64 --path game --resolution 1600x900 -- --screenshot=out.png   # demo town
+...                                                                              -- --roadtest=out.png    # road pieces + crossing
+...                                                                              -- --gallery=out.png     # art picker
 ```
 
 **Ports**: 8000/8001/8002 = the user's own dev instances — NEVER touch.
 8010/11/12 game sidecars · 8014/15/16 smokes · 8020-8029 contract tests.
 **Venvs**: `.venv` (rtpowerflow), `.venv-heat` (rtheatflow — conflicting
-pandapower pins, keep separate), `.venv-water` (rtwaterflow).
+pandapower pins, keep separate), `.venv-water` (rtwaterflow). All three are
+uv-managed Python 3.12 (`uv venv --python 3.12`, then
+`uv pip install -e "backends/<b>[dev]" pyinstaller`; root .venv additionally
+needs websocket-client + jsonschema for the contract suite; heat gets
+`[dev,profiles]` and MUST have the obsolete `pathlib` backport uninstalled
+afterwards — it blocks PyInstaller and the profiles extras pull it in).
 
 ## 6. Conventions & gotchas (each cost a debugging session)
 
@@ -242,24 +255,43 @@ pandapower pins, keep separate), `.venv-water` (rtwaterflow).
   drive letter. The obsolete `pathlib` backport in `.venv-heat` blocks
   PyInstaller (uninstall it). Verify installs by running the STAGED exe with
   `--headless -- --smoke=sidecars` (never test-install blind).
+- **Linux port lessons (2026-07-31)**: SidecarManager branches per OS
+  (cmd.exe/taskkill vs `sh -c` with `exec` — exec makes the spawned pid the
+  backend itself, plain `kill` suffices); the JSON configs keep the Windows
+  `.venv/Scripts/python.exe` layout and BOTH consumers translate it on POSIX
+  (`_python_path` in sidecar_manager.gd and tests/contract/test_contract.py).
+  NEVER `Path.resolve()` a venv interpreter on Linux — uv venv pythons are
+  symlinks to the base interpreter and resolve() escapes the venv (spawns
+  with NO deps; cost a debugging loop). Platform numerics differ from
+  Windows BLAS: pandapipes' broken bidirectional-`automatic` branch dies as
+  PipeflowNotConverged instead of the broadcast ValueError (the rtheatflow
+  pin accepts both), and `--smoke=economy` regenerates economy_windows.csv
+  with sub-1 % heat-side drift — commit the regenerated CSV, the Linux
+  numbers are canonical now.
 - Commits end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`;
   push to origin main + backend gamebridge branches at milestone completion.
 - The user's memory preference: **lean solo work; state the scale and ask
   before any multi-agent fan-out** (they stopped costly workflows twice).
 
-## 7. Verified state (2026-07-30, Phase 8 largely done)
+## 7. Verified state (2026-07-31, Linux port complete)
 
-GdUnit 95/95 · all 20 smokes green (incl. the new PLAYTEST monkey — a
-seeded random player through the real City APIs with invariant checks;
-its first runs caught houses growing on cables and on paved-over zones,
-both fixed + pinned) · backend gamebridge suites 16/14/15 (optional `soc`
-device param — contract note in v1.md) · shared contract suite 4/4 ·
-releases v0.8.0 + v0.8.1 published on GitHub with verified installers.
-Phase 8 delivered: envelope v4 (trips, econ books, event-system state
-incl. RNG position, device SoC survive loads), SoC replay on every
-registration (topology rebuilds no longer recharge storages — heatstorage
-smoke pins 0.79→0.79), drag stalls halved (batched path commits +
-dirty-tile re-orientation), `WorldModel.check_invariants`. Remaining:
-contract 1.2 candidates (emitter leaks, CHP fuel field, multi-network
-heat), river BRIDGES (mini-forest ships bridge.glb), dry-home visuals,
-terrain-aware coverage discs.
+Everything re-verified NATIVELY ON LINUX after the machine switch:
+GdUnit 98/98 · all 21 smokes green (19 standalone + resilience/cosim-kill
+via the new tests/e2e/*.sh wrappers; the PLAYTEST monkey — a seeded random
+player through the real City APIs with invariant checks — caught houses
+growing on cables and on paved-over zones on day one, both fixed + pinned)
+· shared contract suite 4/4 · full backend suites green (power 192, heat
+213, water 283 — the water EPANET cross-validation errors spuriously if
+game smokes run CONCURRENTLY: its session leak guard counts live
+rtwaterflow.main processes and sees the smoke's sidecars; rerun alone) ·
+releases v0.8.0 + v0.8.1 published on GitHub with verified Windows
+installers · Linux tarball infrastruct-0.8.2-linux-x86_64.tar.gz built +
+verified from a fresh extraction (version bumped to 0.8.2 for the Linux
+SidecarManager port; the 0.8.2 Windows installer still needs a Windows
+machine to build). Phase 8 delivered: envelope v4 (trips, econ books,
+event-system state incl. RNG position, device SoC survive loads), SoC
+replay on every registration (heatstorage smoke pins 0.79→0.79), drag
+stalls halved, `WorldModel.check_invariants`, Windows installer, Linux
+port + tarball. Remaining: contract 1.2 candidates (emitter leaks, CHP
+fuel field, multi-network heat), river BRIDGES (mini-forest ships
+bridge.glb), dry-home visuals, terrain-aware coverage discs.
