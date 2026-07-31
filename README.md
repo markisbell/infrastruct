@@ -117,9 +117,9 @@ conflict — keep them separate):
 
 ```bash
 git submodule update --init
-uv venv --python 3.12 .venv        && uv pip install --python .venv/bin/python        -e "backends/rtpowerflow[dev]"
-uv venv --python 3.12 .venv-heat   && uv pip install --python .venv-heat/bin/python   -e "backends/rtheatflow[dev]"
-uv venv --python 3.12 .venv-water  && uv pip install --python .venv-water/bin/python  -e "backends/rtwaterflow[dev]"
+uv venv --python 3.12 .venv        && uv pip install --python .venv/bin/python        -e "backends/rtpowerflow[dev]"  numba
+uv venv --python 3.12 .venv-heat   && uv pip install --python .venv-heat/bin/python   -e "backends/rtheatflow[dev]"   numba
+uv venv --python 3.12 .venv-water  && uv pip install --python .venv-water/bin/python  -e "backends/rtwaterflow[dev]"  numba
 ./start_game.sh                    # Windows: start_game.bat
 ```
 

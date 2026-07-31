@@ -909,10 +909,11 @@ func _on_event(event: Dictionary) -> void:
 	_events_box.add_child(label)
 	if _events_box.get_child_count() > 6:
 		_events_box.get_child(0).queue_free()
-	get_tree().create_timer(12.0).timeout.connect(
-		func() -> void:
-			if is_instance_valid(label):
-				label.queue_free())
+	# method callable, NOT a lambda: the feed frees labels early when >6
+	# queue up, and a lambda capture on a freed label makes every timer
+	# fire log "Lambda capture at index 0 was freed" — a bound method's
+	# connection dies with its object instead
+	get_tree().create_timer(12.0).timeout.connect(label.queue_free)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

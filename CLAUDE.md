@@ -196,10 +196,18 @@ powershell -File tools/installer/build_installer.ps1
 **Venvs**: `.venv` (rtpowerflow), `.venv-heat` (rtheatflow — conflicting
 pandapower pins, keep separate), `.venv-water` (rtwaterflow). All three are
 uv-managed Python 3.12 (`uv venv --python 3.12`, then
-`uv pip install -e "backends/<b>[dev]" pyinstaller`; root .venv additionally
-needs websocket-client + jsonschema for the contract suite; heat gets
-`[dev,profiles]` and MUST have the obsolete `pathlib` backport uninstalled
-afterwards — it blocks PyInstaller and the profiles extras pull it in).
+`uv pip install -e "backends/<b>[dev]" pyinstaller numba`; root .venv
+additionally needs websocket-client + jsonschema for the contract suite;
+heat gets `[dev,profiles]` and MUST have the obsolete `pathlib` backport
+uninstalled afterwards — it blocks PyInstaller and the profiles extras pull
+it in). **numba must be installed EXPLICITLY** (accelerator, not a declared
+dep — Windows/CI always did): without it every solve runs pandapower's
+slow path and warns per step, and PyInstaller's `--collect-all numba` only
+WARNS on a missing numba, so a freeze silently ships without it (the
+v0.8.2 tarball did — harmless at game scale, playtest worst frame 7 ms,
+but check the freeze log for "skipping data collection" before shipping).
+Installing numba pins numpy down to its ceiling (2.5.1 → 2.4.6; suites
+re-verified green).
 
 ## 6. Conventions & gotchas (each cost a debugging session)
 
