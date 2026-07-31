@@ -322,25 +322,41 @@ re-verified green).
 - The user's memory preference: **lean solo work; state the scale and ask
   before any multi-agent fan-out** (they stopped costly workflows twice).
 
-## 7. Verified state (2026-07-31, Linux port complete)
+## 7. Verified state (2026-07-31 evening, Linux port + visual/systems day)
 
-Everything re-verified NATIVELY ON LINUX after the machine switch:
-GdUnit 98/98 · all 21 smokes green (19 standalone + resilience/cosim-kill
-via the new tests/e2e/*.sh wrappers; the PLAYTEST monkey — a seeded random
-player through the real City APIs with invariant checks — caught houses
-growing on cables and on paved-over zones on day one, both fixed + pinned)
-· shared contract suite 4/4 · full backend suites green (power 192, heat
-213, water 283 — the water EPANET cross-validation errors spuriously if
-game smokes run CONCURRENTLY: its session leak guard counts live
-rtwaterflow.main processes and sees the smoke's sidecars; rerun alone) ·
-releases on GitHub: v0.8.0 + v0.8.1 (verified Windows installers) and
-v0.8.2 (the Linux tarball, built + verified from a fresh extraction;
-a 0.8.2 Windows installer still needs a Windows machine). Repo front
-door done 2026-07-31: README + screenshots (--screenshot mode, day +
-night) + MIT LICENSE + repo description. Phase 8 delivered: envelope v4 (trips, econ books,
-event-system state incl. RNG position, device SoC survive loads), SoC
-replay on every registration (heatstorage smoke pins 0.79→0.79), drag
-stalls halved, `WorldModel.check_invariants`, Windows installer, Linux
-port + tarball. Remaining: contract 1.2 candidates (emitter leaks, CHP
-fuel field, multi-network heat), river BRIDGES (mini-forest ships
-bridge.glb), dry-home visuals, terrain-aware coverage discs.
+MORNING — the machine switch: everything re-verified NATIVELY ON LINUX,
+GdUnit green, all 21 smokes (19 standalone + resilience/cosim-kill via the
+new tests/e2e/*.sh wrappers), shared contract suite 4/4, full backend
+suites green (power 192, heat 213, water 283 — the water EPANET
+cross-validation errors spuriously if game smokes run CONCURRENTLY: its
+session leak guard counts live rtwaterflow.main processes and sees the
+smoke's sidecars; rerun alone). CI repaired the same day: the backend
+docker workflows were broken by `docs` in .dockerignore vs `COPY docs/`
+(both backends serve /manual from docs/ — fixed + verified green on CI),
+and infrastruct's own ci had the win64 console-wrapper rename bug (exit
+127; pair-rename fixed, fail-fast off, rtwaterflow added to the matrix —
+one manual dispatch run verified all six jobs green). numba installed
+explicitly in all three venvs (see §5/§6).
+
+AFTERNOON/EVENING — the user-driven feature + visual day, each landed
+green (GdUnit 98/98 + targeted smokes, full battery after the wind
+split): weather-coupled PV (clearness picks the measured day), wind
+direction + camera-relative grey arrows + eased veering, INDIVIDUAL 3-MW
+wind turbines on round pads (was the 2x2 9-MW farm), poop-emoji misery
+bubbles ('no power'/'freezing'), per-house inspector profiles
+(net/consumption/pv from DemandModel), and the full MODEL PASS: every
+plant/utility building rebuilt after Sketchfab references (see §4).
+README + screenshots renewed after the model pass.
+
+Releases on GitHub: v0.8.0 + v0.8.1 (verified Windows installers) and
+v0.8.2 (the Linux tarball, built + verified from a fresh extraction; a
+0.8.2 Windows installer still needs a Windows machine; everything after
+v0.8.2 is unreleased on main — a v0.8.3 bundling the visual/systems day
+is the natural next release). Phase 8 delivered: envelope v4 (trips,
+econ books, event-system state incl. RNG position, device SoC survive
+loads), SoC replay on every registration (heatstorage smoke pins
+0.79→0.79), drag stalls halved, `WorldModel.check_invariants`, Windows
+installer, Linux port + tarball. Remaining: contract 1.2 candidates
+(emitter leaks, CHP fuel field, multi-network heat), river BRIDGES
+(mini-forest ships bridge.glb), dry-home visuals, terrain-aware coverage
+discs.

@@ -28,10 +28,11 @@ solvers, never out of a script.
 
 The design premise: **if the physics says it, the city shows it.** A tripped
 20-kV branch de-energizes its substation's zone and the affected houses raise
-":( no power" bubbles; a dead-end heat pipe is rejected by the hydraulics; an
+💩 "no power" bubbles; a dead-end heat pipe is rejected by the hydraulics; an
 empty water tower collapses the boundary head and the frames come back
-`degraded`. The inspector opens a daily profile graph on any building, line or
-pipe — solved loading against its rating, today opaque, yesterday faded.
+`degraded`. The inspector opens a daily profile graph on any building, house,
+line or pipe — solved loading against its rating (for homes: their expected
+consumption and rooftop-PV infeed), today opaque, yesterday faded.
 
 A German printable user manual ships with each backend
 (`docs/Benutzerhandbuch.pdf` in the backend repos, served at `GET /manual`).
@@ -68,11 +69,13 @@ pump's power draw) from one solver into the next step of the other.
   under houses. Kind transitions become real junction buses in the solved grid.
 - **Real ratings, real consequences.** 110/20-kV grid connection (20 MVA),
   20/0.4-kV Ortsnetzstationen (630 kVA) as real transformer elements, catalog
-  line types with actual MVA limits. MW-scale generation — a 9-MW wind farm, a
-  1.2-MWp solar park — is what overloads MV lines; household districts alone
-  barely register.
-- **A demand model with a shape.** Zone load = BDEW H0 base + EV home charging
-  (gaussian arrival, workday peak ~19:00) − rooftop PV on measured day shapes.
+  line types with actual MVA limits. MW-scale generation — 3-MW wind turbines
+  placed one by one, a 1.2-MWp solar park — is what overloads MV lines;
+  household districts alone barely register.
+- **A demand model with a shape — and weather.** Zone load = BDEW H0 base +
+  EV home charging (gaussian arrival, workday peak ~19:00) − rooftop PV on
+  measured day shapes, where the seeded cloud field decides HOW sunny each
+  day's shape is: overcast skies visibly dim rooftop and park dispatch alike.
   Sunny noon exports; the battery peak-shaves against its own moving average;
   gas covers the residual.
 - **Signals, trips and repair crews.** Capacity warnings float over lines ≥80 %,
@@ -89,8 +92,11 @@ pump's power draw) from one solver into the next step of the other.
 - **Scenarios.** Sandbox, a 9-step tutorial, greenfield, an inherited relic
   grid that loses by misery if left untouched, and an energy-transition path.
 - **A living map.** Procedural terrain with rivers (wells near water yield
-  more), groves and stone fields, drifting clouds with real shadows, a full
-  day/night cycle where window lights follow the power state of the house.
+  more), groves and stone fields, clouds that drift with a slowly veering
+  wind (small grey arrows show its direction, turbines yaw to face it and
+  spin with its strength), real cloud shadows, a full day/night cycle where
+  window lights follow the power state of the house — and households that
+  raise a 💩 bubble when the power or the heating lets them down.
 
 ---
 
