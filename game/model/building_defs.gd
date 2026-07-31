@@ -53,8 +53,10 @@ const DEFS := {
 		"params": {"p_max_kw": 2_000.0}, "color": Color(0.55, 0.42, 0.3),
 	},
 	"wind_farm": {
-		"size": Vector2i(2, 2), "cost": 70_000, "device": "wind", "network": "power",
-		"params": {"p_rated_kw": 9_000.0}, "color": Color(0.92, 0.93, 0.95),
+		# ONE 3 MW turbine per placement (user direction 2026-07-31: build
+		# farms turbine by turbine); was a 2x2 9-MW three-turbine block
+		"size": Vector2i(1, 1), "cost": 24_000, "device": "wind", "network": "power",
+		"params": {"p_rated_kw": 3_000.0}, "color": Color(0.92, 0.93, 0.95),
 	},
 	"solar_park": {
 		"size": Vector2i(2, 2), "cost": 50_000, "device": "pv", "network": "power",
@@ -109,7 +111,7 @@ const UPKEEP_DAY := {
 	"substation": 5.0, "heat_exchanger": 6.0, "water_station": 5.0,
 	"boiler_plant": 30.0, "chp_plant": 50.0, "heat_pump_plant": 25.0,
 	"heat_storage": 8.0, "grid_connection": 20.0, "gas_plant": 40.0,
-	"wind_farm": 35.0, "solar_park": 15.0, "battery": 12.0,
+	"wind_farm": 12.0, "solar_park": 15.0, "battery": 12.0,
 	"well": 8.0, "pumping_station": 15.0, "water_tower": 10.0,
 }
 

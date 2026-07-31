@@ -1270,7 +1270,7 @@ func _build_building_visual(kind: String) -> Node3D:
 			chp.add_child(stack2)
 			return chp
 		"heat_pump_plant":
-			return _instance_glb("factory-kit/Models/GLB format/machine-window.glb", 1.7)
+			return _make_heat_pump_plant()
 		"heat_storage":
 			return _instance_glb("city-kit-industrial/Models/GLB format/detail-tank.glb", 0.85)
 		"heat_exchanger":
@@ -1481,17 +1481,27 @@ func _make_substation() -> Node3D:
 	return node
 
 
-## Modern HAWT in the classic white-with-red-tip-bands look (user reference:
-## a slim tapered tube tower, compact nacelle, round spinner nose, slender
-## tapered blades). Turbines YAW into the wind and the spin follows wind
-## availability (see the rotor update in _process).
+## ONE modern HAWT per placement (user direction: build farms turbine by
+## turbine) in the classic white-with-red-tip-bands look (user reference: a
+## slim tapered tube tower, compact nacelle, round spinner nose, slender
+## tapered blades) on a ROUND concrete foundation pad. Turbines YAW into the
+## wind and the spin follows wind availability (rotor update in _process).
 func _make_wind_farm() -> Node3D:
 	var node := Node3D.new()
-	node.add_child(_box(Vector3(1.9, 0.05, 1.9), Color(0.5, 0.62, 0.42), Vector3(0, 0.02, 0)))
+	var pad := MeshInstance3D.new()
+	var pad_mesh := CylinderMesh.new()
+	pad_mesh.top_radius = 0.42
+	pad_mesh.bottom_radius = 0.46
+	pad_mesh.height = 0.05
+	pad_mesh.radial_segments = 24
+	pad.mesh = pad_mesh
+	pad.position.y = 0.025
+	pad.material_override = _flat(Color(0.66, 0.66, 0.63))
+	node.add_child(pad)
 	var white := _flat(Color(0.95, 0.96, 0.97))
 	var grey := _flat(Color(0.86, 0.87, 0.89))
 	var red := _flat(Color(0.83, 0.22, 0.22))
-	for spot: Vector3 in [Vector3(-0.55, 0, -0.55), Vector3(0.55, 0, 0.0), Vector3(-0.35, 0, 0.6)]:
+	for spot: Vector3 in [Vector3.ZERO]:
 		var turbine := Node3D.new()
 		turbine.position = spot
 		turbine.set_meta("turbine", true)  # yawed into the wind per frame
@@ -1599,21 +1609,89 @@ func _make_battery() -> Node3D:
 	return node
 
 
+## Bank of outdoor inverter units after the user's reference: white body,
+## dark front fan grille with horizontal louvres and a visible fan disc,
+## side vent slats, little feet.
+func _make_heat_pump_plant() -> Node3D:
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(1.9, 0.05, 1.9), Color(0.62, 0.62, 0.6), Vector3(0, 0.02, 0)))
+	var body_white := Color(0.93, 0.93, 0.9)
+	var grille_dark := Color(0.25, 0.26, 0.28)
+	var louvre := Color(0.55, 0.56, 0.58)
+	for i in 4:
+		var unit := Node3D.new()
+		var face := 1.0 if i % 2 == 0 else -1.0  # rows face outward
+		unit.position = Vector3(-0.45 + (i / 2) * 0.95, 0.05, -0.4 * face)
+		unit.rotation.y = 0.0 if face > 0.0 else PI
+		unit.add_child(_box(Vector3(0.78, 0.62, 0.34), body_white, Vector3(0, 0.35, 0)))
+		# front fan grille: dark square, fan disc, louvre strips, hub
+		unit.add_child(_box(Vector3(0.5, 0.5, 0.012), grille_dark, Vector3(-0.09, 0.36, -0.175)))
+		var fan := MeshInstance3D.new()
+		var fan_mesh := CylinderMesh.new()
+		fan_mesh.top_radius = 0.2
+		fan_mesh.bottom_radius = 0.2
+		fan_mesh.height = 0.012
+		fan.mesh = fan_mesh
+		fan.rotation.x = PI / 2
+		fan.position = Vector3(-0.09, 0.36, -0.181)
+		fan.material_override = _flat(Color(0.36, 0.37, 0.4))
+		unit.add_child(fan)
+		unit.add_child(_box(Vector3(0.05, 0.05, 0.014), louvre, Vector3(-0.09, 0.36, -0.184)))
+		for l in 4:
+			unit.add_child(_box(Vector3(0.5, 0.014, 0.006), louvre,
+				Vector3(-0.09, 0.16 + l * 0.13, -0.185)))
+		# side vent slats + feet
+		unit.add_child(_box(Vector3(0.012, 0.44, 0.22), grille_dark, Vector3(0.39, 0.38, 0)))
+		unit.add_child(_box(Vector3(0.1, 0.05, 0.3), grille_dark, Vector3(-0.28, 0.02, 0)))
+		unit.add_child(_box(Vector3(0.1, 0.05, 0.3), grille_dark, Vector3(0.28, 0.02, 0)))
+		node.add_child(unit)
+	return node
+
+
+## Lattice pylon after the user's reference: dark-green tapering corner
+## legs with ring braces, two crossarm levels, hanging insulator strings
+## with the reference's little red accents at the wire points.
 func _make_grid_connection() -> Node3D:
 	var node := Node3D.new()
 	node.add_child(_box(Vector3(1.9, 0.06, 1.9), Color(0.58, 0.58, 0.6), Vector3(0, 0.03, 0)))
-	# simplified lattice pylon: tapered mast + two crossarms
-	var mast := MeshInstance3D.new()
-	var mast_mesh := CylinderMesh.new()
-	mast_mesh.top_radius = 0.05
-	mast_mesh.bottom_radius = 0.16
-	mast_mesh.height = 2.2
-	mast.mesh = mast_mesh
-	mast.position.y = 1.1
-	mast.material_override = _flat(Color(0.62, 0.64, 0.68))
-	node.add_child(mast)
-	node.add_child(_box(Vector3(1.3, 0.06, 0.06), Color(0.62, 0.64, 0.68), Vector3(0, 1.95, 0)))
-	node.add_child(_box(Vector3(0.9, 0.06, 0.06), Color(0.62, 0.64, 0.68), Vector3(0, 1.6, 0)))
+	var steel := Color(0.28, 0.37, 0.29)
+	var lean := 0.084  # rad: legs converge (0.22 -> 0.06 half-width over 1.9)
+	for sx: float in [-1.0, 1.0]:
+		for sz: float in [-1.0, 1.0]:
+			var leg := _box(Vector3(0.035, 1.95, 0.035), steel, Vector3.ZERO)
+			leg.position = Vector3(0.14 * sx, 0.95, 0.14 * sz)
+			leg.rotation = Vector3(-lean * sz, 0.0, lean * sx)
+			node.add_child(leg)
+	for ring_y: float in [0.45, 1.0, 1.5]:
+		var half := lerpf(0.205, 0.075, ring_y / 1.9)
+		node.add_child(_box(Vector3(half * 2, 0.025, 0.025), steel, Vector3(0, ring_y, half)))
+		node.add_child(_box(Vector3(half * 2, 0.025, 0.025), steel, Vector3(0, ring_y, -half)))
+		node.add_child(_box(Vector3(0.025, 0.025, half * 2), steel, Vector3(half, ring_y, 0)))
+		node.add_child(_box(Vector3(0.025, 0.025, half * 2), steel, Vector3(-half, ring_y, 0)))
+	# two crossarm levels with hanging insulators + red wire-point accents
+	var porcelain := _flat(Color(0.32, 0.24, 0.2))
+	for arm: Array in [[1.62, 0.5], [1.88, 0.34]]:
+		node.add_child(_box(Vector3(arm[1] * 2.0 + 0.16, 0.04, 0.04), steel,
+			Vector3(0, arm[0], 0)))
+		for sx: float in [-1.0, 1.0]:
+			var insulator := MeshInstance3D.new()
+			var ins_mesh := CylinderMesh.new()
+			ins_mesh.top_radius = 0.016
+			ins_mesh.bottom_radius = 0.016
+			ins_mesh.height = 0.1
+			ins_mesh.radial_segments = 8
+			insulator.mesh = ins_mesh
+			insulator.position = Vector3(arm[1] * sx, arm[0] - 0.07, 0)
+			insulator.material_override = porcelain
+			node.add_child(insulator)
+			var dot := MeshInstance3D.new()
+			var dot_mesh := SphereMesh.new()
+			dot_mesh.radius = 0.02
+			dot_mesh.height = 0.04
+			dot.mesh = dot_mesh
+			dot.position = Vector3(arm[1] * sx, arm[0] - 0.13, 0)
+			dot.material_override = _flat(Color(0.85, 0.2, 0.18))
+			node.add_child(dot)
 	node.add_child(_box(Vector3(0.5, 0.35, 0.5), Color(0.75, 0.3, 0.28), Vector3(0.55, 0.18, 0.55)))
 	return node
 

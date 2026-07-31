@@ -47,7 +47,7 @@ func test_junction_splits_lines() -> void:
 	# branch off tile (6,0) down to a wind farm
 	for y in range(1, 5):
 		model.set_cable(Vector2i(6, y), 1)
-	model.place_building("wind_farm", Vector2i(5, 5))  # touches (6,4)
+	model.place_building("wind_farm", Vector2i(6, 5))  # 1x1 turbine touches (6,4)
 	var topo := PowerTopology.build(model, {})
 	# junction at (6,0) -> 3 lines, 5 buses (slack, sub, wind, junction + LV)
 	assert_int(topo.doc["native"]["lines"]["lines"].size()).is_equal(3)

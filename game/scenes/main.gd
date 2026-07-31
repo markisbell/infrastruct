@@ -292,8 +292,12 @@ func _take_screenshot() -> void:
 		City.build_cable(Vector2i(x, 121), BuildingDefs.LINE_UNDERGROUND
 			if x < 128 else BuildingDefs.LINE_OVERHEAD)
 	City.place_building("substation", Vector2i(134, 122))
-	City.place_building("wind_farm", Vector2i(124, 116))
-	for y in range(117, 121):  # reaches (126,117), adjacent to the farm —
+	# three single turbines lined along the cable column (each 1x1 turbine
+	# needs its OWN adjacency since the 2x2 farm split)
+	City.place_building("wind_farm", Vector2i(125, 117))
+	City.place_building("wind_farm", Vector2i(125, 118))
+	City.place_building("wind_farm", Vector2i(125, 119))
+	for y in range(117, 121):  # reaches (126,117), adjacent to the turbines —
 		City.build_cable(Vector2i(126, y))  # the new "!" marker caught this gap
 	City.place_building("solar_park", Vector2i(139, 117))
 	for y in range(119, 121):
@@ -324,7 +328,7 @@ func _take_screenshot() -> void:
 	City.spawn_houses_bulk(subs[0], 22)
 	# demo the build feedback: a disconnected plant (red !), orphan houses
 	# beyond any coverage (yellow !), and coverage diamonds (substation tool)
-	City.place_building("wind_farm", Vector2i(149, 118))
+	City.place_building("wind_farm", Vector2i(149, 118))  # one lone turbine, disconnected on purpose
 	for x in range(147, 153):
 		City.build_road(Vector2i(x, 126))
 	for x in range(147, 153):
@@ -774,7 +778,8 @@ func _smoke_stress() -> void:
 		for sub_id: String in City.model.buildings_of_kind("substation"):
 			City.spawn_houses_bulk(sub_id, 30))
 	# plants one by one, waiting between them like a human would
-	for plant: Array in [["wind_farm", Vector2i(14, 6)], ["solar_park", Vector2i(24, 6)],
+	for plant: Array in [["wind_farm", Vector2i(14, 6)], ["wind_farm", Vector2i(15, 6)],
+			["wind_farm", Vector2i(14, 7)], ["solar_park", Vector2i(24, 6)],
 			["gas_plant", Vector2i(34, 6)], ["battery", Vector2i(17, 8)]]:
 		await _stress_phase("plant_" + plant[0], func() -> void:
 			City.place_building(plant[0], plant[1])
@@ -1588,7 +1593,9 @@ func _smoke_citylife() -> void:
 	City.place_building("grid_connection", Vector2i(6, 4))
 	for x in range(8, 42):
 		City.build_cable(Vector2i(x, 5))
-	City.place_building("wind_farm", Vector2i(10, 3))
+	City.place_building("wind_farm", Vector2i(10, 4))
+	City.place_building("wind_farm", Vector2i(11, 4))
+	City.place_building("wind_farm", Vector2i(12, 4))
 	City.place_building("substation", Vector2i(30, 6))
 	for x in range(24, 41):
 		City.build_road(Vector2i(x, 8))
@@ -1733,7 +1740,9 @@ func _smoke_events() -> void:
 	City.reset_for_scenario(42)
 	City.growth_enabled = false
 	_build_reference_city(24)
-	City.place_building("wind_farm", Vector2i(27, 3))  # storm test subject
+	City.place_building("wind_farm", Vector2i(27, 4))  # storm test subjects:
+	City.place_building("wind_farm", Vector2i(28, 4))  # three 3-MW turbines
+	City.place_building("wind_farm", Vector2i(29, 4))  # on the y=5 cable row
 	City._topo_dirty = true
 	if not await _wait_three_registered(240.0):
 		_fail("SMOKE_EVENTS", "register timeout")
@@ -2212,7 +2221,9 @@ func _run_windless_phase(weather_seed: int, with_battery: bool) -> Dictionary:
 	for x in range(12, 31):
 		City.build_cable(Vector2i(x, 10))
 	City.place_building("substation", Vector2i(31, 10))
-	City.place_building("wind_farm", Vector2i(24, 8))  # touches cable at (24,10)? no: (24,9),(25,9) adjacent
+	City.place_building("wind_farm", Vector2i(24, 9))  # each single turbine
+	City.place_building("wind_farm", Vector2i(25, 9))  # adjacent to the
+	City.place_building("wind_farm", Vector2i(26, 9))  # y=10 cable run
 	for x in range(26, 38):
 		City.build_road(Vector2i(x, 12))
 	for x in range(26, 38):
@@ -2310,8 +2321,12 @@ func _smoke_overload() -> void:
 		City.build_cable(Vector2i(x, 15))
 	City.place_building("substation", Vector2i(20, 16))  # touches (20,15)
 	City.place_building("substation", Vector2i(30, 16))  # touches (30,15)
-	City.place_building("wind_farm", Vector2i(32, 13))   # touches (32,15)
-	City.place_building("wind_farm", Vector2i(33, 16))   # touches (33,15)
+	City.place_building("wind_farm", Vector2i(31, 14))   # north trio on y=14,
+	City.place_building("wind_farm", Vector2i(32, 14))   # each adjacent to the
+	City.place_building("wind_farm", Vector2i(33, 14))   # y=15 cable row
+	City.place_building("wind_farm", Vector2i(32, 16))   # south trio on y=16,
+	City.place_building("wind_farm", Vector2i(33, 16))   # same cable row from
+	City.place_building("wind_farm", Vector2i(34, 16))   # the other side
 	for x in range(12, 34):
 		City.build_road(Vector2i(x, 19))
 		City.build_road(Vector2i(x, 22))

@@ -71,7 +71,7 @@ func _build_items() -> Array:
 			{"tool": CityView.Tool.GAS, "label": "Gas plant", "mono": "Ga", "key": "5",
 				"kind": "gas_plant",
 				"desc": "2 MW dispatchable generation — runs when wind and sun don't."},
-			{"tool": CityView.Tool.WIND, "label": "Wind farm", "mono": "Wi", "key": "6",
+			{"tool": CityView.Tool.WIND, "label": "Wind turbine", "mono": "Wi", "key": "6",
 				"kind": "wind_farm",
 				"desc": "9 MW rated (3 × 3 MW turbines). Output follows the weather — calm spells produce nothing."},
 			{"tool": CityView.Tool.SOLAR, "label": "Solar park", "mono": "So", "key": "7",

@@ -86,7 +86,10 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   become junction buses (one per joint).
 - **Ratings semantics** (user corrections): grid connection = 110/20 kV,
   20 MVA; substation = 20/0.4 kV Ortsnetzstation, 630 kVA (150-house zones);
-  wind farm 9 MW (3×3 MW), solar park 1.2 MWp (300 kW/tile), gas 2 MW,
+  wind turbine 3 MW each, 1x1, ROUND pad (user direction 2026-07-31: farms
+  are built turbine by turbine now — was one 2x2 9-MW block; every 1x1
+  turbine needs its OWN cable adjacency, which is why the smokes line
+  their trios along the cable rows), solar park 1.2 MWp (300 kW/tile), gas 2 MW,
   battery 1 MWh/400 kW. MW-scale generation is what overloads MV lines —
   household districts alone barely register (the overload smoke premise).
 - **Demand composition**: zone net load = BDEW H0 base (1.05 kW/house mean)
