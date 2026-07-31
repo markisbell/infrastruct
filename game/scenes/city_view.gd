@@ -231,6 +231,7 @@ func _build_environment() -> void:
 	add_child(world_env)
 	_env = env
 	_spawn_clouds()
+	_spawn_wind_arrows()
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	add_child(camera)
@@ -343,9 +344,69 @@ func _spawn_clouds() -> void:
 		_clouds.append(cloud)
 
 
+const WIND_ARROW_COUNT := 18  # 6x3 jittered pattern across the view box
+var _wind_arrows: Array[Node3D] = []
+var _wind_arrow_units: Array[Vector2] = []  # base offsets in the unit square
+var _wind_drift := Vector2.ZERO             # accumulated wind travel (world m)
+var _wind_vis_dir := NAN                    # eased display direction (rad)
+var _wind_vis_speed := 0.0                  # eased display speed
+
+
+## A handful of light-grey arrows between roof and cloud height: they point
+## along the wind and drift with it, so direction AND speed read at a
+## glance. CAMERA-RELATIVE placement (a world-fixed field misses the ~30-unit
+## viewport entirely at map scale): the arrows wrap inside a box around the
+## camera focus, so a few are always in sight at any zoom or pan. Shaded
+## material on purpose (unshaded overlays glow at night).
+func _spawn_wind_arrows() -> void:
+	var arng := RandomNumberGenerator.new()
+	arng.seed = 778
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(0.86, 0.88, 0.9, 0.3)
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.roughness = 1.0
+	for i in WIND_ARROW_COUNT:
+		var arrow := Node3D.new()
+		var shaft := MeshInstance3D.new()
+		var shaft_mesh := BoxMesh.new()
+		shaft_mesh.size = Vector3(1.1, 0.04, 0.09)
+		shaft.mesh = shaft_mesh
+		shaft.material_override = material
+		shaft.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		arrow.add_child(shaft)
+		var head := MeshInstance3D.new()
+		var head_mesh := CylinderMesh.new()  # top_radius 0 = cone tip
+		head_mesh.top_radius = 0.0
+		head_mesh.bottom_radius = 0.16
+		head_mesh.height = 0.4
+		head_mesh.radial_segments = 10
+		head.mesh = head_mesh
+		head.material_override = material
+		head.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		head.rotation.z = -PI / 2  # cone apex +y -> local +x
+		head.position = Vector3(0.65, 0.0, 0.0)
+		arrow.add_child(head)
+		_wind_arrow_units.append(Vector2(
+			float(i % 6) / 6.0 + arng.randf_range(0.01, 0.14),
+			float(i / 6) / 3.0 + arng.randf_range(0.03, 0.28)))
+		add_child(arrow)
+		_wind_arrows.append(arrow)
+
+
 func _drift_clouds(delta: float) -> void:
 	var wind := float(City.weather.sample(City.current_t).get("wind_ms", 5.0))
-	var speed := 0.35 + wind * 0.05
+	# CONTINUOUS clock for the direction (integer sim steps would snap the
+	# whole field once per step), plus per-frame easing on top — direction
+	# veers, never jumps, even across seeks and scenario restores.
+	var target_dir := City.weather.wind_dir_rad(GameClock.total_minutes / 15.0)
+	if is_nan(_wind_vis_dir):
+		_wind_vis_dir = target_dir
+	var ease_w := minf(1.0, delta * 0.4)  # ~2.5 s time constant
+	_wind_vis_dir = lerp_angle(_wind_vis_dir, target_dir, ease_w)
+	_wind_vis_speed = lerpf(_wind_vis_speed if _wind_vis_speed > 0.0 \
+		else 0.35 + wind * 0.05, 0.35 + wind * 0.05, ease_w)
+	var dir := _wind_vis_dir
+	var vel := Vector3(cos(dir), 0.0, sin(dir)) * _wind_vis_speed
 	# cloud COVER follows the weather's clearness field — the same field that
 	# attenuates ghi and picks the measured pv day, so an overcast sky and a
 	# dim solar dispatch always agree. The field drifts over ~1.5 days, so
@@ -355,12 +416,22 @@ func _drift_clouds(delta: float) -> void:
 	for i in _clouds.size():
 		var cloud: Node3D = _clouds[i]
 		cloud.visible = i < visible_n
-		cloud.position.x += speed * delta
-		cloud.position.z += speed * 0.22 * delta
-		if cloud.position.x > 262.0:
-			cloud.position.x = -6.0
-		if cloud.position.z > 262.0:
-			cloud.position.z = -6.0
+		cloud.position += vel * delta
+		cloud.position.x = wrapf(cloud.position.x, -6.0, 262.0)
+		cloud.position.z = wrapf(cloud.position.z, -6.0, 262.0)
+	_wind_drift += Vector2(vel.x, vel.z) * 2.2 * delta  # brisker than clouds
+	var extent := _zoom * 1.9  # covers the ortho view box at any zoom
+	var origin := Vector2(_cam_focus.x, _cam_focus.z) - Vector2(extent, extent) * 0.5
+	var arrow_scale := clampf(_zoom / 22.0, 0.7, 2.4)  # readable at any zoom
+	for i in _wind_arrows.size():
+		var arrow: Node3D = _wind_arrows[i]
+		# +yaw rotates local +x to (cos a, 0, -sin a); wind dir wants +sin
+		arrow.rotation.y = -dir
+		arrow.scale = Vector3.ONE * arrow_scale
+		var base: Vector2 = _wind_arrow_units[i] * extent
+		arrow.position = Vector3(
+			origin.x + fposmod(base.x + _wind_drift.x, extent), 9.5,
+			origin.y + fposmod(base.y + _wind_drift.y, extent))
 
 
 func _place_camera() -> void:

@@ -255,7 +255,18 @@ re-verified green).
   fog colors, dusk glow; nights dim blue, never black); CLOUDS drift with
   the wind (smooth alpha puffs + invisible SHADOWS_ONLY twins — alpha-hash
   cast shadows but dithered; unshaded overlays glow at night, keep them
-  shaded). Blackout houses keep their colors and show a bobbing ":( no
+  shaded). WIND DIRECTION (2026-07-31): `WeatherSystem.wind_dir_rad` (slow
+  synoptic veer, seeded noise offset +500 to decorrelate from speed; visual
+  only — turbines use speed). Clouds drift along it and 18 SMALL faint
+  grey ARROWS (alpha 0.3) point/drift with it. The arrows are
+  CAMERA-RELATIVE (wrap in a box around `_cam_focus`, scale with `_zoom`)
+  — a world-fixed arrow field misses the ~30-unit viewport entirely at map
+  scale (cost a debugging loop; a giant y=20 debug fleet was invisible in
+  4 screenshots straight). SMOOTHNESS (user correction): sample the
+  direction from the CONTINUOUS clock (`GameClock.total_minutes / 15.0`,
+  float param — integer sim steps snap the field once per step) and ease
+  displayed dir/speed per frame (`lerp_angle`, ~2.5 s constant) so veers
+  never jump, even across seeks/restores. Blackout houses keep their colors and show a bobbing ":( no
   power" bubble (user direction). Screenshots default to 13:00
   (`--hour=N` overrides). Demolishing/re-laying over a TRIPPED line
   clears the whole contiguous tripped run (user bug: rebuilt lines never

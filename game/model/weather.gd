@@ -55,6 +55,17 @@ func wind_ms(t: int) -> float:
 	return 14.0 * pow(synoptic, 1.6) * diurnal
 
 
+## Wind direction in radians on the world XZ plane (0 = +x, positive toward
+## +z). Slow synoptic veer: seeded noise on a ~3-day timescale, offset far
+## from the speed samples so direction and speed stay decorrelated. Purely
+## visual/ambient for now — turbine output depends on speed only.
+## Takes a FLOAT step so visuals can sample the continuous clock
+## (GameClock.total_minutes / 15.0) — integer sim steps would snap the
+## whole arrow field once per step.
+func wind_dir_rad(t: float) -> float:
+	return _wind_noise.get_noise_1d(t / (STEPS_PER_DAY * 3.0) * 100.0 + 500.0) * TAU
+
+
 ## Sky clearness 0 (overcast) .. 1 (clear) — the cloud field that attenuates
 ## ghi_wm2. ~1.5-day noise timescale, so whole overcast days genuinely occur.
 ## Also drives the visual cloud density and (as a daylight average) which
