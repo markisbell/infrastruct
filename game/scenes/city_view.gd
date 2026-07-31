@@ -1553,17 +1553,40 @@ func _make_wind_farm() -> Node3D:
 	return node
 
 
+## Pole-mounted framed arrays after the user's reference: silver frame, 3x2
+## blue modules with visible gridlines, one pole per array on a concrete
+## footing block.
 func _make_solar_park() -> Node3D:
 	var node := Node3D.new()
 	node.add_child(_box(Vector3(1.9, 0.05, 1.9), Color(0.55, 0.55, 0.5), Vector3(0, 0.02, 0)))
+	var silver := Color(0.78, 0.8, 0.83)
+	var cell_blue := Color(0.2, 0.3, 0.62)
+	var concrete := Color(0.68, 0.67, 0.64)
 	for row in 4:
 		for col in 3:
-			var panel := _box(Vector3(0.5, 0.02, 0.3), Color(0.15, 0.22, 0.45),
-				Vector3(0, 0.16, 0))
-			panel.rotation_degrees.x = -30
 			var mount := Node3D.new()
 			mount.position = Vector3(-0.6 + col * 0.6, 0.05, -0.65 + row * 0.42)
-			mount.add_child(panel)
+			mount.add_child(_box(Vector3(0.07, 0.06, 0.07), concrete, Vector3(0, 0.03, 0)))
+			var pole := MeshInstance3D.new()
+			var pole_mesh := CylinderMesh.new()
+			pole_mesh.top_radius = 0.014
+			pole_mesh.bottom_radius = 0.014
+			pole_mesh.height = 0.2
+			pole_mesh.radial_segments = 8
+			pole.mesh = pole_mesh
+			pole.position.y = 0.14
+			pole.material_override = _flat(silver)
+			mount.add_child(pole)
+			var assembly := Node3D.new()
+			assembly.position.y = 0.26
+			assembly.rotation_degrees.x = -30
+			# silver frame slab, blue modules on top with gridline gaps
+			assembly.add_child(_box(Vector3(0.52, 0.014, 0.36), silver, Vector3.ZERO))
+			for mx in 3:
+				for mz in 2:
+					assembly.add_child(_box(Vector3(0.155, 0.008, 0.155), cell_blue,
+						Vector3(-0.17 + mx * 0.17, 0.01, -0.088 + mz * 0.176)))
+			mount.add_child(assembly)
 			node.add_child(mount)
 	return node
 
@@ -1690,18 +1713,23 @@ func _update_capacity_markers() -> void:
 var _blackout_bubbles := {}
 
 
-func _make_blackout_bubble() -> Node3D:
+## Upset-household bubble: a REAL poop emoji (user request — the reaction
+## style of online video tools; Noto Emoji PNG, Apache-2.0, see
+## assets/emoji/LICENSE.txt) over a small caption naming the cause.
+func _make_upset_bubble(caption: String) -> Node3D:
 	var bubble := Node3D.new()
-	var face := _make_marker(":(", Color(0.16, 0.19, 0.28), 200)
-	face.outline_size = 70
-	face.outline_modulate = Color(1, 1, 1, 0.95)
-	face.position = Vector3(0, 0.28, 0)
-	bubble.add_child(face)
-	var text := _make_marker("no power", Color(0.16, 0.19, 0.28), 90)
+	var emoji := Sprite3D.new()
+	emoji.texture = load("res://assets/emoji/emoji_u1f4a9.png")
+	emoji.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	emoji.pixel_size = 0.0042  # 128 px -> ~0.54 world units
+	emoji.position = Vector3(0, 0.36, 0)
+	bubble.add_child(emoji)
+	var text := _make_marker(caption, Color(0.16, 0.19, 0.28), 90)
 	text.outline_size = 34
 	text.outline_modulate = Color(1, 1, 1, 0.95)
 	bubble.add_child(text)
 	bubble.position = Vector3(0, 1.35, 0)
+	bubble.set_meta("kind", caption)
 	return bubble
 
 
@@ -1712,17 +1740,23 @@ func _update_house_power() -> void:
 		var heat_zone: String = City.heat_topo.house_zone.get(pos, "")
 		var cold: bool = heat_zone != "" \
 			and not City.heat_zone_supplied.get(heat_zone, true)
-		# cold homes render icy blue; a BLACKOUT keeps the house colors and
-		# shows a sad bubble instead (user: no more houses turning black)
+		# cold homes render icy blue; a BLACKOUT keeps the house colors (user:
+		# no more houses turning black). Both miseries raise a poop-emoji
+		# bubble with the cause as caption — blackout wins when both apply.
 		_set_state_material(_houses[pos], "cold" if cold else "")
-		if not lit and not _blackout_bubbles.has(pos):
-			var bubble := _make_blackout_bubble()
-			_houses[pos].add_child(bubble)
-			_blackout_bubbles[pos] = bubble
-		elif lit and _blackout_bubbles.has(pos):
-			if is_instance_valid(_blackout_bubbles[pos]):
-				_blackout_bubbles[pos].queue_free()
-			_blackout_bubbles.erase(pos)
+		var want := "no power" if not lit else ("freezing" if cold else "")
+		var have: String = ""
+		if _blackout_bubbles.has(pos) and is_instance_valid(_blackout_bubbles[pos]):
+			have = _blackout_bubbles[pos].get_meta("kind", "")
+		if want != have:
+			if _blackout_bubbles.has(pos):
+				if is_instance_valid(_blackout_bubbles[pos]):
+					_blackout_bubbles[pos].queue_free()
+				_blackout_bubbles.erase(pos)
+			if want != "":
+				var bubble := _make_upset_bubble(want)
+				_houses[pos].add_child(bubble)
+				_blackout_bubbles[pos] = bubble
 		# yellow "!": no substation covers this house at all
 		var orphan := zone == ""
 		if orphan and not _orphan_markers.has(pos):

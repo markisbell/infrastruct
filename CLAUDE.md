@@ -266,8 +266,12 @@ re-verified green).
   direction from the CONTINUOUS clock (`GameClock.total_minutes / 15.0`,
   float param — integer sim steps snap the field once per step) and ease
   displayed dir/speed per frame (`lerp_angle`, ~2.5 s constant) so veers
-  never jump, even across seeks/restores. Blackout houses keep their colors and show a bobbing ":( no
-  power" bubble (user direction). Screenshots default to 13:00
+  never jump, even across seeks/restores. Blackout houses keep their
+  colors and show a bobbing POOP-EMOJI bubble (user direction 2026-07-31,
+  "like online video tools"; Noto Emoji PNG, Apache-2.0 note in
+  assets/emoji/) captioned "no power"; unheated homes get the same bubble
+  captioned "freezing" on top of their icy-blue tint — blackout wins when
+  both apply. Screenshots default to 13:00
   (`--hour=N` overrides). Demolishing/re-laying over a TRIPPED line
   clears the whole contiguous tripped run (user bug: rebuilt lines never
   reconnected). CRITICAL
