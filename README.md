@@ -1,5 +1,6 @@
 # infrastruct — a city-builder that runs on real physics
 
+![license](https://img.shields.io/badge/license-MIT-blue)
 ![engine](https://img.shields.io/badge/engine-Godot%204.7-478cbf)
 ![AI-generated](https://img.shields.io/badge/source-AI--generated-8A2BE2)
 ![physics](https://img.shields.io/badge/physics-pandapower%20%7C%20pandapipes-brightgreen)
@@ -179,10 +180,13 @@ save/load, feeder trips at the amperage the size test winds up to.
 
 ---
 
-## Credits
+## License
 
-3-D props and road pieces from [Kenney](https://kenney.nl) asset packs (CC0).
-Solvers: [pandapower](https://github.com/e2nIEE/pandapower) and
-[pandapipes](https://github.com/e2nIEE/pandapipes) (BSD), orchestrated via
-FastAPI/uvicorn services — see each backend repo for its full dependency and
-license notes.
+The game source, tests and documentation are licensed under the
+[MIT License](LICENSE); the three backends are MIT-licensed in their own
+repos. All runtime dependencies are permissively licensed — the solvers
+[pandapower](https://github.com/e2nIEE/pandapower) and
+[pandapipes](https://github.com/e2nIEE/pandapipes) (BSD) are *operated* as
+separate sidecar processes via FastAPI/uvicorn services (MIT/BSD); see each
+backend repo for its full dependency notes. 3-D props and road pieces are
+from [Kenney](https://kenney.nl) asset packs (CC0).
