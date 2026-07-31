@@ -285,11 +285,11 @@ growing on cables and on paved-over zones on day one, both fixed + pinned)
 213, water 283 — the water EPANET cross-validation errors spuriously if
 game smokes run CONCURRENTLY: its session leak guard counts live
 rtwaterflow.main processes and sees the smoke's sidecars; rerun alone) ·
-releases v0.8.0 + v0.8.1 published on GitHub with verified Windows
-installers · Linux tarball infrastruct-0.8.2-linux-x86_64.tar.gz built +
-verified from a fresh extraction (version bumped to 0.8.2 for the Linux
-SidecarManager port; the 0.8.2 Windows installer still needs a Windows
-machine to build). Phase 8 delivered: envelope v4 (trips, econ books,
+releases on GitHub: v0.8.0 + v0.8.1 (verified Windows installers) and
+v0.8.2 (the Linux tarball, built + verified from a fresh extraction;
+a 0.8.2 Windows installer still needs a Windows machine). Repo front
+door done 2026-07-31: README + screenshots (--screenshot mode, day +
+night) + MIT LICENSE + repo description. Phase 8 delivered: envelope v4 (trips, econ books,
 event-system state incl. RNG position, device SoC survive loads), SoC
 replay on every registration (heatstorage smoke pins 0.79→0.79), drag
 stalls halved, `WorldModel.check_invariants`, Windows installer, Linux
