@@ -1416,44 +1416,137 @@ func _make_water_tower() -> Node3D:
 	return node
 
 
+## HV power transformer in the real-substation look (user reference): grey
+## main tank, ribbed radiator banks beside it, a cylindrical conservator
+## drum on a bracket above one end, and a row of dark ribbed bushing
+## insulators on top. Line-attachment posts kept from the old model.
 func _make_substation() -> Node3D:
 	var node := Node3D.new()
-	var pad := _box(Vector3(0.9, 0.06, 0.9), Color(0.6, 0.6, 0.62), Vector3(0, 0.03, 0))
-	node.add_child(pad)
-	var tank := _instance_glb("city-kit-industrial/Models/GLB format/detail-tank.glb", 0.5)
-	tank.position = Vector3(-0.18, 0.06, 0.0)
-	node.add_child(tank)
-	node.add_child(_box(Vector3(0.3, 0.4, 0.3), Color(0.3, 0.65, 0.75), Vector3(0.22, 0.26, 0.1)))
+	node.add_child(_box(Vector3(0.9, 0.06, 0.9), Color(0.6, 0.6, 0.62), Vector3(0, 0.03, 0)))
+	var tank_grey := Color(0.62, 0.63, 0.65)
+	var fin_grey := Color(0.7, 0.71, 0.73)
+	# main tank + lid rim + warning sign
+	node.add_child(_box(Vector3(0.44, 0.34, 0.28), tank_grey, Vector3(0, 0.23, 0)))
+	node.add_child(_box(Vector3(0.48, 0.03, 0.32), fin_grey, Vector3(0, 0.41, 0)))
+	node.add_child(_box(Vector3(0.005, 0.06, 0.05), Color(0.95, 0.8, 0.15),
+		Vector3(-0.223, 0.26, 0.05)))
+	# radiator bank: parallel ribbed plates along the +x side
+	for i in 7:
+		node.add_child(_box(Vector3(0.012, 0.28, 0.2), fin_grey,
+			Vector3(0.25 + i * 0.026, 0.22, 0)))
+	# conservator drum on a bracket above the -x end
+	var drum := MeshInstance3D.new()
+	var drum_mesh := CylinderMesh.new()
+	drum_mesh.top_radius = 0.055
+	drum_mesh.bottom_radius = 0.055
+	drum_mesh.height = 0.2
+	drum.mesh = drum_mesh
+	drum.rotation.z = PI / 2  # lie along x
+	drum.position = Vector3(-0.27, 0.52, 0)
+	drum.material_override = _flat(tank_grey)
+	node.add_child(drum)
+	node.add_child(_box(Vector3(0.03, 0.12, 0.03), fin_grey, Vector3(-0.27, 0.42, 0)))
+	# three dark ribbed bushings on top (core + fin discs + cap)
+	var porcelain := _flat(Color(0.26, 0.2, 0.17))
+	for b in 3:
+		var bx := 0.02 + b * 0.03  # slight diagonal like the reference
+		var bz := -0.09 + b * 0.09
+		var core := MeshInstance3D.new()
+		var core_mesh := CylinderMesh.new()
+		core_mesh.top_radius = 0.014
+		core_mesh.bottom_radius = 0.018
+		core_mesh.height = 0.24
+		core_mesh.radial_segments = 8
+		core.mesh = core_mesh
+		core.position = Vector3(bx, 0.53, bz)
+		core.material_override = porcelain
+		node.add_child(core)
+		for d in 4:
+			var disc := MeshInstance3D.new()
+			var disc_mesh := CylinderMesh.new()
+			disc_mesh.top_radius = 0.034
+			disc_mesh.bottom_radius = 0.034
+			disc_mesh.height = 0.012
+			disc_mesh.radial_segments = 10
+			disc.mesh = disc_mesh
+			disc.position = Vector3(bx, 0.46 + d * 0.05, bz)
+			disc.material_override = porcelain
+			node.add_child(disc)
+		node.add_child(_box(Vector3(0.03, 0.025, 0.03), Color(0.8, 0.81, 0.83),
+			Vector3(bx, 0.66, bz)))
+	# line-attachment posts (power cables visually terminate here)
 	for offset: float in [-0.3, 0.3]:
 		node.add_child(_box(Vector3(0.04, 0.55, 0.04), Color(0.75, 0.75, 0.78),
 			Vector3(offset, 0.33, -0.3)))
 	return node
 
 
+## Modern HAWT in the classic white-with-red-tip-bands look (user reference:
+## a slim tapered tube tower, compact nacelle, round spinner nose, slender
+## tapered blades). Turbines YAW into the wind and the spin follows wind
+## availability (see the rotor update in _process).
 func _make_wind_farm() -> Node3D:
 	var node := Node3D.new()
 	node.add_child(_box(Vector3(1.9, 0.05, 1.9), Color(0.5, 0.62, 0.42), Vector3(0, 0.02, 0)))
+	var white := _flat(Color(0.95, 0.96, 0.97))
+	var grey := _flat(Color(0.86, 0.87, 0.89))
+	var red := _flat(Color(0.83, 0.22, 0.22))
 	for spot: Vector3 in [Vector3(-0.55, 0, -0.55), Vector3(0.55, 0, 0.0), Vector3(-0.35, 0, 0.6)]:
 		var turbine := Node3D.new()
 		turbine.position = spot
+		turbine.set_meta("turbine", true)  # yawed into the wind per frame
 		var mast := MeshInstance3D.new()
 		var mast_mesh := CylinderMesh.new()
-		mast_mesh.top_radius = 0.03
-		mast_mesh.bottom_radius = 0.06
-		mast_mesh.height = 1.6
+		mast_mesh.top_radius = 0.025
+		mast_mesh.bottom_radius = 0.055
+		mast_mesh.height = 1.7
 		mast.mesh = mast_mesh
-		mast.position.y = 0.8
-		mast.material_override = _flat(Color(0.92, 0.93, 0.95))
+		mast.position.y = 0.85
+		mast.material_override = white
 		turbine.add_child(mast)
+		var nacelle := MeshInstance3D.new()
+		var nacelle_mesh := BoxMesh.new()
+		nacelle_mesh.size = Vector3(0.075, 0.08, 0.2)
+		nacelle.mesh = nacelle_mesh
+		nacelle.position = Vector3(0, 1.7, -0.02)
+		nacelle.material_override = grey
+		turbine.add_child(nacelle)
 		var rotor := Node3D.new()
-		rotor.position = Vector3(0, 1.58, 0.07)
+		rotor.position = Vector3(0, 1.7, 0.1)
 		rotor.set_meta("rotor", true)
+		var spinner := MeshInstance3D.new()
+		var spinner_mesh := SphereMesh.new()
+		spinner_mesh.radius = 0.04
+		spinner_mesh.height = 0.08
+		spinner.mesh = spinner_mesh
+		spinner.scale = Vector3(1, 1, 1.4)  # rounded nose cone
+		spinner.material_override = white
+		rotor.add_child(spinner)
 		for blade_i in 3:
-			var blade := _box(Vector3(0.05, 0.55, 0.02), Color(0.95, 0.96, 0.97),
-				Vector3(0, 0.27, 0))
 			var arm := Node3D.new()
 			arm.rotation_degrees.z = blade_i * 120.0
+			var blade := MeshInstance3D.new()
+			var blade_mesh := CylinderMesh.new()  # tapered: wide root, slim tip
+			blade_mesh.top_radius = 0.01
+			blade_mesh.bottom_radius = 0.034
+			blade_mesh.height = 0.62
+			blade_mesh.radial_segments = 8
+			blade.mesh = blade_mesh
+			blade.scale = Vector3(1, 1, 0.3)  # flatten into an airfoil-ish slab
+			blade.position.y = 0.34
+			blade.material_override = white
 			arm.add_child(blade)
+			var band := MeshInstance3D.new()  # red tip marking
+			var band_mesh := CylinderMesh.new()
+			band_mesh.top_radius = 0.014
+			band_mesh.bottom_radius = 0.018
+			band_mesh.height = 0.07
+			band_mesh.radial_segments = 8
+			band.mesh = band_mesh
+			band.scale = Vector3(1, 1, 0.3)
+			band.position.y = 0.56
+			band.material_override = red
+			arm.add_child(band)
 			rotor.add_child(arm)
 		turbine.add_child(rotor)
 		node.add_child(turbine)
@@ -1761,12 +1854,23 @@ func _process(delta: float) -> void:
 	for pos: Vector2i in _blackout_bubbles:
 		if is_instance_valid(_blackout_bubbles[pos]):
 			(_blackout_bubbles[pos] as Node3D).position.y = 1.35 + bob
-	# spin the wind rotors — the world should feel alive
+	# spin the wind rotors — speed follows wind availability (a calm week
+	# visibly idles the farm), and each turbine YAWS to face the eased wind
+	# direction (same field the clouds and arrows follow)
+	var wind_avail := WeatherSystem.wind_availability(
+		float(City.weather.sample(City.current_t).get("wind_ms", 5.0)))
+	var spin_deg := (12.0 + 150.0 * wind_avail) * delta
+	var have_dir := not is_nan(_wind_vis_dir)
+	# rotation.y = a maps local +z to (sin a, 0, cos a); the nose must point
+	# UPWIND, i.e. against the drift vector (cos dir, 0, sin dir)
+	var yaw := atan2(-cos(_wind_vis_dir), -sin(_wind_vis_dir)) if have_dir else 0.0
 	for id: String in _buildings:
 		if City.model.buildings[id]["kind"] == "wind_farm":
-			for rotor: Node3D in _buildings[id].find_children("*", "Node3D", true, false):
-				if rotor.has_meta("rotor"):
-					rotor.rotation_degrees.z += 90.0 * delta
+			for part: Node3D in _buildings[id].find_children("*", "Node3D", true, false):
+				if part.has_meta("rotor"):
+					part.rotation_degrees.z += spin_deg
+				elif have_dir and part.has_meta("turbine"):
+					part.rotation.y = yaw
 
 
 # ─── drag-and-draw ghost path ───
