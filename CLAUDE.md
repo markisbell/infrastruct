@@ -140,6 +140,17 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   redraw so building clears props. The BULLDOZER on empty land clears a
   tile's props explicitly (`WorldModel.deco_cleared`, saved additively —
   derived scatter needs remembered removals).
+- **MODEL PASS (2026-07-31, user-driven)**: every plant/utility building is
+  a procedural rebuild after a Sketchfab reference the user picked or a
+  reference found via the public search API (api.sketchfab.com/v3/search;
+  thumbnails reviewable without auth) — turbine, substation, solar park,
+  heat pump, pylon, BESS-container battery, arched gas hall + banded stack,
+  brick boiler house + red/white stack, biogas-dome CHP, banded
+  Waermespeicher, brick waterworks house, stone well (+ pump cabinet),
+  pump house with external volute, X-braced water tower, plate-pack detail
+  on the transfer hut. Nothing downloaded — rebuilds by eye, so licenses
+  (some refs are CC-NC/Standard) never attach; Kenney GLBs remain only for
+  houses/roads/deco.
 - **Construction UX** (2026-07-30): line tools (road/zone/cable/pipes)
   drag-and-draw — hold LMB sketches a faded ghost path (grid-interpolated),
   release builds; blocked tiles (obstacle/water/money) turn RED from the
@@ -150,7 +161,11 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   blocked tiles).
 - **Inspector**: left-click with no tool → daily profile graph in rtpowerflow's
   ProfileGraph conventions (0–24 h, 2 h ticks, unit y-axis, staircase, dashed
-  limits, now marker, yesterday faded, hover readout). Buildings show their
+  limits, now marker, yesterday faded, hover readout). HOUSES are clickable
+  too (user request 2026-07-31): net import / consumption / pv infeed as the
+  DIVERSIFIED per-house expectation straight from DemandModel (no solved
+  per-house telemetry exists — ProfileGraph series accept direct
+  `values`/`values_prev` arrays besides telemetry `key`s for exactly this). Buildings show their
   quantity (trafo %, import kW, SoC %, °C, bar, m³/h); power lines show
   per-segment loading (contract edges, telemetry keyed by the segment's MIDDLE
   tile — L-indices renumber on rebuild); heat/water pipes show network totals

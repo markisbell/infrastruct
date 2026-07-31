@@ -58,12 +58,19 @@ func _notification(what: int) -> void:
 		queue_redraw()
 
 
-func _today(key: String) -> Array:
-	return City.telemetry.get(key, {}).get("today", [])
+## A series either references a telemetry ring ("key") or carries its data
+## directly ("values"/"values_prev" — model-derived curves, e.g. the
+## per-house expectation, which has no solved telemetry).
+func _today(entry: Dictionary) -> Array:
+	if entry.has("values"):
+		return entry["values"]
+	return City.telemetry.get(entry.get("key", ""), {}).get("today", [])
 
 
-func _yesterday(key: String) -> Array:
-	return City.telemetry.get(key, {}).get("yesterday", [])
+func _yesterday(entry: Dictionary) -> Array:
+	if entry.has("values_prev"):
+		return entry["values_prev"]
+	return City.telemetry.get(entry.get("key", ""), {}).get("yesterday", [])
 
 
 static func _last_value(samples: Array) -> float:
@@ -94,7 +101,7 @@ func _draw() -> void:
 	# all-positive data, but negatives are never clipped away)
 	var values: Array[float] = []
 	for entry: Dictionary in series:
-		for samples: Array in [_today(entry["key"]), _yesterday(entry["key"])]:
+		for samples: Array in [_today(entry), _yesterday(entry)]:
 			for v: Variant in samples:
 				if not is_nan(float(v)):
 					values.append(float(v))
@@ -162,9 +169,9 @@ func _draw() -> void:
 	var now_frac := float(City.current_t % 96) / 95.0
 	for entry: Dictionary in series:
 		var color: Color = entry["color"]
-		_draw_staircase(_yesterday(entry["key"]), px, py,
+		_draw_staircase(_yesterday(entry), px, py,
 			Color(color.r, color.g, color.b, 0.28), 1.0)
-		_draw_staircase(_today(entry["key"]), px, py, color, 1.6)
+		_draw_staircase(_today(entry), px, py, color, 1.6)
 	# "now" marker
 	var now_x: float = px.call(now_frac)
 	draw_line(Vector2(now_x, plot_top), Vector2(now_x, plot_bottom),
@@ -178,9 +185,9 @@ func _draw() -> void:
 		var minute := int(_hover_frac * 1439.0)
 		var readout := "%02d:%02d" % [minute / 60, minute % 60]
 		for entry: Dictionary in series:
-			var v := _value_at(_today(entry["key"]), _hover_frac)
+			var v := _value_at(_today(entry), _hover_frac)
 			if is_nan(v):
-				v = _value_at(_yesterday(entry["key"]), _hover_frac)
+				v = _value_at(_yesterday(entry), _hover_frac)
 			if not is_nan(v):
 				draw_circle(Vector2(hx, py.call(v)), 3.0, entry["color"])
 				readout += "  %s %.*f %s" % [entry["label"], decimals, v, unit]
@@ -191,7 +198,7 @@ func _draw() -> void:
 	var legend_x := plot_left
 	for entry: Dictionary in series:
 		draw_rect(Rect2(legend_x, h - MARGIN_B + 24, 9, 9), entry["color"])
-		var latest := _last_value(_today(entry["key"]))
+		var latest := _last_value(_today(entry))
 		var label: String = entry["label"] + ("" if is_nan(latest)
 			else "  %.*f %s" % [decimals, latest, unit])
 		draw_string(font, Vector2(legend_x + 13, h - MARGIN_B + 24 + FONT_SIZE - 2),

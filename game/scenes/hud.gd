@@ -432,6 +432,42 @@ func _inspector_config(kind: String, id: String) -> Dictionary:
 ## the network-total graph — honest about what the solver reports.
 func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 	match category:
+		"house":
+			# per-house expectation from the demand model (user request):
+			# net import, base consumption and rooftop-PV infeed — the
+			# DIVERSIFIED per-house curves behind the zone composition
+			# (real telemetry only exists per zone). Yesterday differs via
+			# day kind and the weather's measured-pv-day pick.
+			var day := City.current_t / 96
+			var net: Array[float] = []
+			var net_prev: Array[float] = []
+			var consumption: Array[float] = []
+			var pv: Array[float] = []
+			for i in 96:
+				var t0 := day * 96 + i
+				var t1 := maxi(day - 1, 0) * 96 + i
+				var base0 := DemandModel.HOUSE_MEAN_KW * DemandModel.house_factor(t0) \
+					+ DemandModel.EV_SHARE * DemandModel.EV_CHARGER_KW * DemandModel.ev_factor(t0)
+				var pv0 := DemandModel.PV_SHARE * DemandModel.PV_KWP \
+					* DemandModel.pv_availability(t0)
+				consumption.append(base0)
+				pv.append(pv0)
+				net.append(base0 - pv0)
+				net_prev.append(DemandModel.HOUSE_MEAN_KW * DemandModel.house_factor(t1)
+					+ DemandModel.EV_SHARE * DemandModel.EV_CHARGER_KW * DemandModel.ev_factor(t1)
+					- DemandModel.PV_SHARE * DemandModel.PV_KWP * DemandModel.pv_availability(t1))
+			var zone: String = City.topo.house_zone.get(pos, "")
+			_show_config({"title": "House (%d, %d)" % [pos.x, pos.y],
+				"unit": "kW", "dec": 2, "base_zero": false,
+				"y": "Diversified per-house [kW]", "limits": [],
+				"series": [
+					{"label": "Net import", "color": Color(0.95, 0.68, 0.21),
+						"values": net, "values_prev": net_prev},
+					{"label": "Consumption", "color": Color(0.55, 0.65, 0.9),
+						"values": consumption},
+					{"label": "PV infeed", "color": Color(0.4, 0.8, 0.45),
+						"values": pv},
+				]}, zone if zone != "" else "no substation coverage")
 		"cable":
 			var edge := City.topo.line_id_at(pos)
 			if edge == "":

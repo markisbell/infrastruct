@@ -1242,11 +1242,7 @@ func _make_building(id: String) -> Node3D:
 func _build_building_visual(kind: String) -> Node3D:
 	match kind:
 		"gas_plant":
-			var node := _instance_glb("city-kit-industrial/Models/GLB format/building-d.glb", 1.9)
-			var chimney := _instance_glb("city-kit-industrial/Models/GLB format/chimney-large.glb", 1.0)
-			chimney.position = Vector3(0.55, 0, 0.55)
-			node.add_child(chimney)
-			return node
+			return _make_gas_plant()
 		"substation":
 			return _make_substation()
 		"wind_farm":
@@ -1258,21 +1254,13 @@ func _build_building_visual(kind: String) -> Node3D:
 		"grid_connection":
 			return _make_grid_connection()
 		"boiler_plant":
-			var boiler := _instance_glb("factory-kit/Models/GLB format/machine.glb", 1.6)
-			var stack := _instance_glb("city-kit-industrial/Models/GLB format/chimney-medium.glb", 0.7)
-			stack.position = Vector3(0.6, 0, 0.6)
-			boiler.add_child(stack)
-			return boiler
+			return _make_boiler_plant()
 		"chp_plant":
-			var chp := _instance_glb("factory-kit/Models/GLB format/machine-fortified.glb", 1.7)
-			var stack2 := _instance_glb("city-kit-industrial/Models/GLB format/chimney-small.glb", 0.6)
-			stack2.position = Vector3(0.55, 0, -0.55)
-			chp.add_child(stack2)
-			return chp
+			return _make_chp_plant()
 		"heat_pump_plant":
 			return _make_heat_pump_plant()
 		"heat_storage":
-			return _instance_glb("city-kit-industrial/Models/GLB format/detail-tank.glb", 0.85)
+			return _make_heat_storage()
 		"heat_exchanger":
 			return _make_transfer_station()
 		"water_station":
@@ -1298,6 +1286,13 @@ func _make_transfer_station() -> Node3D:
 		Vector3(0, 0.25, 0)))
 	node.add_child(_box(Vector3(0.57, 0.08, 0.47), Color(0.85, 0.45, 0.2),
 		Vector3(0, 0.54, 0)))
+	# the actual plate heat exchanger (Sketchfab reference: blue bolted
+	# plate pack) visible beside the hut
+	node.add_child(_box(Vector3(0.15, 0.22, 0.13), Color(0.18, 0.32, 0.6),
+		Vector3(0.36, 0.11, 0.1)))
+	for i in 3:
+		node.add_child(_box(Vector3(0.16, 0.015, 0.14), Color(0.75, 0.77, 0.8),
+			Vector3(0.36, 0.05 + i * 0.07, 0.1)))
 	node.add_child(_box(Vector3(0.12, 0.2, 0.12), Color(0.5, 0.52, 0.56),
 		Vector3(0.15, 0.68, 0.1)))
 	for pair: Array in [[PIPE_SUPPLY_COLOR, 0.13], [PIPE_RETURN_COLOR, -0.13]]:
@@ -1316,12 +1311,23 @@ func _make_transfer_station() -> Node3D:
 
 ## District water station: sibling of the transfer station — grey hut with a
 ## teal band and one green stub that plugs into the water main.
+## Small brick waterworks house after the chlorination-station reference:
+## sand-brick walls, steep dark pitched roof, brick chimney, blue door.
 func _make_water_station() -> Node3D:
 	var node := Node3D.new()
-	node.add_child(_box(Vector3(0.55, 0.5, 0.45), Color(0.72, 0.74, 0.78),
-		Vector3(0, 0.25, 0)))
-	node.add_child(_box(Vector3(0.57, 0.08, 0.47), Color(0.2, 0.55, 0.8),
-		Vector3(0, 0.54, 0)))
+	node.add_child(_box(Vector3(0.55, 0.42, 0.45), Color(0.78, 0.68, 0.52),
+		Vector3(0, 0.21, 0)))
+	var roof := MeshInstance3D.new()
+	var roof_mesh := PrismMesh.new()
+	roof_mesh.size = Vector3(0.62, 0.24, 0.52)
+	roof.mesh = roof_mesh
+	roof.position = Vector3(0, 0.54, 0)
+	roof.material_override = _flat(Color(0.32, 0.33, 0.36))
+	node.add_child(roof)
+	node.add_child(_box(Vector3(0.08, 0.3, 0.08), Color(0.65, 0.5, 0.38),
+		Vector3(0.18, 0.62, -0.1)))
+	node.add_child(_box(Vector3(0.14, 0.24, 0.015), Color(0.2, 0.45, 0.7),
+		Vector3(-0.1, 0.13, 0.226)))
 	var stub := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
 	cyl.top_radius = 0.07
@@ -1335,43 +1341,102 @@ func _make_water_station() -> Node3D:
 	return node
 
 
-## Well field: gravel pad, wellhead cap, hand-pump style arm — reads as
-## "water comes out of the ground here" at map zoom.
+## Classic stone well after the Sketchfab reference: round stone ring, two
+## wooden posts carrying a pitched shingle roof, windlass bar and bucket.
+## Rustic on purpose — reads as "water from the ground" instantly, and the
+## river-bonus wells sit in exactly this kind of spot.
 func _make_well() -> Node3D:
 	var node := Node3D.new()
 	node.add_child(_box(Vector3(0.85, 0.05, 0.85), Color(0.62, 0.6, 0.55),
 		Vector3(0, 0.025, 0)))
-	var head := MeshInstance3D.new()
-	var head_mesh := CylinderMesh.new()
-	head_mesh.top_radius = 0.16
-	head_mesh.bottom_radius = 0.18
-	head_mesh.height = 0.35
-	head.mesh = head_mesh
-	head.position.y = 0.22
-	head.material_override = _flat(Color(0.35, 0.5, 0.45))
-	node.add_child(head)
-	node.add_child(_box(Vector3(0.08, 0.08, 0.34), WATER_PIPE_COLOR,
-		Vector3(0, 0.42, 0.12)))
-	node.add_child(_box(Vector3(0.3, 0.3, 0.25), Color(0.72, 0.74, 0.78),
-		Vector3(0.25, 0.15, -0.22)))
+	var ring := MeshInstance3D.new()
+	var ring_mesh := CylinderMesh.new()
+	ring_mesh.top_radius = 0.2
+	ring_mesh.bottom_radius = 0.22
+	ring_mesh.height = 0.22
+	ring_mesh.radial_segments = 12
+	ring.mesh = ring_mesh
+	ring.position.y = 0.14
+	ring.material_override = _flat(Color(0.6, 0.62, 0.6))
+	node.add_child(ring)
+	var hole := MeshInstance3D.new()
+	var hole_mesh := CylinderMesh.new()
+	hole_mesh.top_radius = 0.13
+	hole_mesh.bottom_radius = 0.13
+	hole_mesh.height = 0.02
+	hole.mesh = hole_mesh
+	hole.position.y = 0.255
+	hole.material_override = _flat(Color(0.1, 0.12, 0.14))
+	node.add_child(hole)
+	var wood := Color(0.45, 0.32, 0.2)
+	node.add_child(_box(Vector3(0.05, 0.5, 0.05), wood, Vector3(-0.22, 0.4, 0)))
+	node.add_child(_box(Vector3(0.05, 0.5, 0.05), wood, Vector3(0.22, 0.4, 0)))
+	node.add_child(_box(Vector3(0.5, 0.04, 0.04), Color(0.35, 0.25, 0.16),
+		Vector3(0, 0.52, 0)))  # windlass bar
+	var roof := MeshInstance3D.new()
+	var roof_mesh := PrismMesh.new()
+	roof_mesh.size = Vector3(0.6, 0.2, 0.5)
+	roof.mesh = roof_mesh
+	roof.position = Vector3(0, 0.75, 0)
+	roof.material_override = _flat(Color(0.5, 0.3, 0.22))
+	node.add_child(roof)
+	node.add_child(_box(Vector3(0.09, 0.09, 0.09), Color(0.7, 0.55, 0.35),
+		Vector3(0.05, 0.34, 0)))  # bucket
+	node.add_child(_box(Vector3(0.3, 0.28, 0.24), Color(0.72, 0.74, 0.78),
+		Vector3(0.28, 0.14, -0.26)))  # pump cabinet (the actual utility)
 	return node
 
 
-## Pumping station: factory hall + intake tank + green discharge stub. The
-## building that ties water to power — place it next to a cable AND the main.
+## Pump house: compact utility hall with a roll door, an EXTERNAL pump set
+## (volute + motor) on a plinth, and big suction/discharge piping — the
+## building that ties water to power; place it next to a cable AND the main.
 func _make_pumping_station() -> Node3D:
-	var node := _instance_glb("factory-kit/Models/GLB format/machine.glb", 1.5)
-	var tank := _instance_glb("city-kit-industrial/Models/GLB format/detail-tank.glb", 0.6)
-	tank.position = Vector3(-0.6, 0, 0.55)
-	node.add_child(tank)
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(1.9, 0.05, 1.9), Color(0.62, 0.62, 0.6), Vector3(0, 0.02, 0)))
+	node.add_child(_box(Vector3(0.95, 0.5, 0.8), Color(0.8, 0.81, 0.83), Vector3(-0.3, 0.3, 0)))
+	node.add_child(_box(Vector3(0.99, 0.06, 0.84), Color(0.45, 0.47, 0.5), Vector3(-0.3, 0.58, 0)))
+	node.add_child(_box(Vector3(0.4, 0.34, 0.02), Color(0.4, 0.42, 0.46), Vector3(-0.3, 0.22, 0.401)))
+	# external pump set: volute snail + motor on a plinth
+	node.add_child(_box(Vector3(0.5, 0.08, 0.4), Color(0.5, 0.5, 0.52), Vector3(0.55, 0.09, 0.3)))
+	var volute := MeshInstance3D.new()
+	var vol_mesh := CylinderMesh.new()
+	vol_mesh.top_radius = 0.13
+	vol_mesh.bottom_radius = 0.13
+	vol_mesh.height = 0.12
+	volute.mesh = vol_mesh
+	volute.rotation.x = PI / 2
+	volute.position = Vector3(0.42, 0.24, 0.3)
+	volute.material_override = _flat(Color(0.2, 0.42, 0.62))
+	node.add_child(volute)
+	var motor := MeshInstance3D.new()
+	var motor_mesh := CylinderMesh.new()
+	motor_mesh.top_radius = 0.09
+	motor_mesh.bottom_radius = 0.09
+	motor_mesh.height = 0.26
+	motor.mesh = motor_mesh
+	motor.rotation.z = PI / 2
+	motor.position = Vector3(0.62, 0.24, 0.3)
+	motor.material_override = _flat(Color(0.65, 0.67, 0.7))
+	node.add_child(motor)
+	# suction from the hall into the volute + discharge stub to the main
+	var suction := MeshInstance3D.new()
+	var suc_mesh := CylinderMesh.new()
+	suc_mesh.top_radius = 0.06
+	suc_mesh.bottom_radius = 0.06
+	suc_mesh.height = 0.5
+	suction.mesh = suc_mesh
+	suction.rotation.z = PI / 2
+	suction.position = Vector3(0.1, 0.24, 0.3)
+	suction.material_override = _flat(WATER_PIPE_COLOR)
+	node.add_child(suction)
 	var stub := MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.07
-	cyl.bottom_radius = 0.07
-	cyl.height = 0.7
-	stub.mesh = cyl
+	var stub_mesh := CylinderMesh.new()
+	stub_mesh.top_radius = 0.07
+	stub_mesh.bottom_radius = 0.07
+	stub_mesh.height = 0.7
+	stub.mesh = stub_mesh
 	stub.rotation_degrees.x = 90
-	stub.position = Vector3(0.55, PIPE_HEIGHT, 0.75)
+	stub.position = Vector3(0.42, PIPE_HEIGHT, 0.62)
 	stub.material_override = _flat(WATER_PIPE_COLOR)
 	node.add_child(stub)
 	return node
@@ -1385,6 +1450,16 @@ func _make_water_tower() -> Node3D:
 			Vector2(-0.2, 0.2), Vector2(0.2, 0.2)]:
 		node.add_child(_box(Vector3(0.06, 1.1, 0.06), Color(0.55, 0.57, 0.6),
 			Vector3(legs.x, 0.55, legs.y)))
+	# X-bracing between the legs (Sketchfab lattice-tower reference): two
+	# crossed diagonals per face, at two heights
+	for brace_y: float in [0.35, 0.8]:
+		for side: Array in [[Vector3(0, brace_y, 0.2), 0.0], [Vector3(0, brace_y, -0.2), 0.0],
+				[Vector3(0.2, brace_y, 0), PI / 2], [Vector3(-0.2, brace_y, 0), PI / 2]]:
+			for tilt: float in [0.55, -0.55]:
+				var brace := _box(Vector3(0.5, 0.025, 0.025), Color(0.5, 0.52, 0.55), Vector3.ZERO)
+				brace.position = side[0]
+				brace.rotation = Vector3(0, side[1], tilt)
+				node.add_child(brace)
 	var tank := MeshInstance3D.new()
 	var tank_mesh := CylinderMesh.new()
 	tank_mesh.top_radius = 0.34
@@ -1601,11 +1676,148 @@ func _make_solar_park() -> Node3D:
 	return node
 
 
+## BESS shipping container after the Sketchfab reference: blue corrugated
+## box, door seams, a small HVAC unit on the side and a hazard mark.
 func _make_battery() -> Node3D:
 	var node := Node3D.new()
-	node.add_child(_box(Vector3(0.8, 0.5, 0.55), Color(0.9, 0.9, 0.92), Vector3(0, 0.25, 0)))
-	node.add_child(_box(Vector3(0.82, 0.1, 0.57), Color(0.35, 0.75, 0.4), Vector3(0, 0.42, 0)))
-	node.add_child(_box(Vector3(0.2, 0.3, 0.4), Color(0.55, 0.57, 0.6), Vector3(0.42, 0.15, 0)))
+	var blue := Color(0.16, 0.32, 0.58)
+	var dark_blue := Color(0.12, 0.25, 0.47)
+	node.add_child(_box(Vector3(0.86, 0.48, 0.5), blue, Vector3(0, 0.26, 0)))
+	for i in 7:  # corrugation grooves
+		node.add_child(_box(Vector3(0.015, 0.44, 0.505), dark_blue,
+			Vector3(-0.36 + i * 0.12, 0.26, 0)))
+	node.add_child(_box(Vector3(0.87, 0.03, 0.51), Color(0.1, 0.12, 0.16), Vector3(0, 0.515, 0)))
+	# door seams (white) on one end + HVAC box + hazard mark
+	node.add_child(_box(Vector3(0.008, 0.4, 0.44), Color(0.88, 0.9, 0.92), Vector3(0.432, 0.26, 0)))
+	node.add_child(_box(Vector3(0.12, 0.26, 0.3), Color(0.82, 0.84, 0.86), Vector3(-0.48, 0.2, 0)))
+	node.add_child(_box(Vector3(0.09, 0.09, 0.008), Color(0.95, 0.8, 0.15), Vector3(0.2, 0.3, -0.255)))
+	return node
+
+
+## Compact gas peaker after the power-station reference: light machine hall
+## with arched vault roof, one banded exhaust stack, orange gas-intake skid.
+func _make_gas_plant() -> Node3D:
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(1.9, 0.05, 1.9), Color(0.6, 0.6, 0.58), Vector3(0, 0.02, 0)))
+	node.add_child(_box(Vector3(1.15, 0.52, 0.95), Color(0.82, 0.83, 0.85), Vector3(-0.2, 0.31, 0)))
+	for i in 3:  # vault roof: half-sunk cylinders along the hall
+		var vault := MeshInstance3D.new()
+		var vault_mesh := CylinderMesh.new()
+		vault_mesh.top_radius = 0.16
+		vault_mesh.bottom_radius = 0.16
+		vault_mesh.height = 1.12
+		vault.mesh = vault_mesh
+		vault.rotation.z = PI / 2
+		vault.position = Vector3(-0.2, 0.57, -0.3 + i * 0.3)
+		vault.material_override = _flat(Color(0.74, 0.75, 0.78))
+		node.add_child(vault)
+	for s in 4:  # banded stack
+		var seg := MeshInstance3D.new()
+		var seg_mesh := CylinderMesh.new()
+		seg_mesh.top_radius = 0.075 - s * 0.006
+		seg_mesh.bottom_radius = 0.08 - s * 0.006
+		seg_mesh.height = 0.36
+		seg.mesh = seg_mesh
+		seg.position = Vector3(0.62, 0.18 + s * 0.36, 0.55)
+		seg.material_override = _flat(Color(0.9, 0.91, 0.93) if s % 2 == 0
+			else Color(0.32, 0.33, 0.36))
+		node.add_child(seg)
+	node.add_child(_box(Vector3(0.38, 0.26, 0.3), Color(0.85, 0.6, 0.2), Vector3(0.55, 0.14, -0.5)))
+	return node
+
+
+## Boiler house after the thermal-plant reference: brick-red hall with a
+## ridged roof line and the iconic red/white banded stack, plus a fuel bay.
+func _make_boiler_plant() -> Node3D:
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(1.9, 0.05, 1.9), Color(0.6, 0.59, 0.56), Vector3(0, 0.02, 0)))
+	node.add_child(_box(Vector3(1.05, 0.58, 0.9), Color(0.62, 0.3, 0.24), Vector3(-0.22, 0.34, 0)))
+	node.add_child(_box(Vector3(1.09, 0.07, 0.94), Color(0.45, 0.22, 0.18), Vector3(-0.22, 0.66, 0)))
+	node.add_child(_box(Vector3(0.3, 0.34, 0.02), Color(0.3, 0.31, 0.34), Vector3(-0.22, 0.22, 0.451)))
+	for s in 5:  # red/white banded stack
+		var seg := MeshInstance3D.new()
+		var seg_mesh := CylinderMesh.new()
+		seg_mesh.top_radius = 0.07 - s * 0.004
+		seg_mesh.bottom_radius = 0.075 - s * 0.004
+		seg_mesh.height = 0.34
+		seg.mesh = seg_mesh
+		seg.position = Vector3(0.6, 0.17 + s * 0.34, 0.5)
+		seg.material_override = _flat(Color(0.92, 0.93, 0.94) if s % 2 == 0
+			else Color(0.78, 0.22, 0.2))
+		node.add_child(seg)
+	node.add_child(_box(Vector3(0.45, 0.3, 0.4), Color(0.5, 0.51, 0.54), Vector3(0.55, 0.16, -0.45)))
+	return node
+
+
+## CHP as a biogas-style site after the reference: green digester cylinder
+## with a domed cap, an engine shed with exhaust, and a gas flare pipe.
+func _make_chp_plant() -> Node3D:
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(1.9, 0.05, 1.9), Color(0.58, 0.6, 0.56), Vector3(0, 0.02, 0)))
+	var digester := MeshInstance3D.new()
+	var dig_mesh := CylinderMesh.new()
+	dig_mesh.top_radius = 0.42
+	dig_mesh.bottom_radius = 0.42
+	dig_mesh.height = 0.45
+	digester.mesh = dig_mesh
+	digester.position = Vector3(-0.35, 0.27, 0.05)
+	digester.material_override = _flat(Color(0.32, 0.45, 0.3))
+	node.add_child(digester)
+	var dome := MeshInstance3D.new()
+	var dome_mesh := SphereMesh.new()
+	dome_mesh.radius = 0.42
+	dome_mesh.height = 0.5   # squashed hemisphere
+	dome.mesh = dome_mesh
+	dome.position = Vector3(-0.35, 0.5, 0.05)
+	dome.material_override = _flat(Color(0.78, 0.79, 0.75))
+	node.add_child(dome)
+	# engine shed + exhaust + flare pipe
+	node.add_child(_box(Vector3(0.6, 0.4, 0.5), Color(0.72, 0.74, 0.76), Vector3(0.55, 0.25, -0.35)))
+	node.add_child(_box(Vector3(0.05, 0.55, 0.05), Color(0.35, 0.36, 0.4), Vector3(0.75, 0.65, -0.45)))
+	var flare := MeshInstance3D.new()
+	var flare_mesh := CylinderMesh.new()
+	flare_mesh.top_radius = 0.035
+	flare_mesh.bottom_radius = 0.02
+	flare_mesh.height = 0.5
+	flare.mesh = flare_mesh
+	flare.position = Vector3(0.6, 0.3, 0.55)
+	flare.material_override = _flat(Color(0.8, 0.55, 0.2))
+	node.add_child(flare)
+	return node
+
+
+## District-heat storage: the tall white insulated Waermespeicher cylinder
+## with silver trim bands and a domed cap.
+func _make_heat_storage() -> Node3D:
+	var node := Node3D.new()
+	node.add_child(_box(Vector3(0.85, 0.05, 0.85), Color(0.62, 0.62, 0.6), Vector3(0, 0.025, 0)))
+	var tank := MeshInstance3D.new()
+	var tank_mesh := CylinderMesh.new()
+	tank_mesh.top_radius = 0.3
+	tank_mesh.bottom_radius = 0.3
+	tank_mesh.height = 1.0
+	tank.mesh = tank_mesh
+	tank.position.y = 0.55
+	tank.material_override = _flat(Color(0.92, 0.93, 0.94))
+	node.add_child(tank)
+	for band_y: float in [0.3, 0.65, 1.0]:
+		var band := MeshInstance3D.new()
+		var band_mesh := CylinderMesh.new()
+		band_mesh.top_radius = 0.31
+		band_mesh.bottom_radius = 0.31
+		band_mesh.height = 0.03
+		band.mesh = band_mesh
+		band.position.y = band_y
+		band.material_override = _flat(Color(0.72, 0.74, 0.77))
+		node.add_child(band)
+	var cap := MeshInstance3D.new()
+	var cap_mesh := SphereMesh.new()
+	cap_mesh.radius = 0.3
+	cap_mesh.height = 0.3
+	cap.mesh = cap_mesh
+	cap.position.y = 1.05
+	cap.material_override = _flat(Color(0.85, 0.86, 0.88))
+	node.add_child(cap)
 	return node
 
 
@@ -2202,6 +2414,8 @@ func _apply_tool(pos: Vector2i) -> void:
 			var id: String = City.model.building_tiles.get(pos, "")
 			if id != "":
 				building_clicked.emit(id)
+			elif City.model.houses.has(pos):
+				tile_infra_clicked.emit("house", pos)
 			elif City.model.cables.has(pos):
 				tile_infra_clicked.emit("cable", pos)
 			elif City.model.heat_pipes.has(pos):
