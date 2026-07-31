@@ -2,7 +2,8 @@
 
 > Handoff/context document for future development sessions: what exists, how it
 > fits together, what is verified, and the hard-won gotchas — so work resumes
-> without re-deriving the design. The master plan is [ROADMAP.md](ROADMAP.md);
+> without re-deriving the design. User-facing docs live in [README.md](README.md).
+> The master plan is [ROADMAP.md](ROADMAP.md);
 > the wire contract is [docs/contract/v1.md](docs/contract/v1.md) (authoritative);
 > decisions live in [docs/adr/](docs/adr/); economy constants + rationale in
 > [tools/balancing/economy.md](tools/balancing/economy.md).
