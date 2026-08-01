@@ -3,13 +3,18 @@
 Two subcommands because the sources live in different venvs — each merges
 its section into game/data/profiles/residential_pack.json:
 
-  .venv-heat/Scripts/python  tools/profiles/gen_profiles.py elec
-  .venv-water/Scripts/python tools/profiles/gen_profiles.py water
+  .venv/bin/python       tools/profiles/gen_profiles.py elec
+  .venv-water/bin/python tools/profiles/gen_profiles.py water
 
-elec  — demandlib BDEW H0 (dynamized) for a full year at 15 min, collapsed
-        to 9 characteristic day shapes (winter/summer/transition x
-        workday/saturday/sunday), 96 quarter-hour factors each, normalized
-        so the composed yearly mean is 1.0.
+elec  — rtpowerflow's cached LPG household library (data/lpg_library/,
+        LoadProfileGenerator 1-min day profiles: 8 archetypes x 18 sampled
+        days across the year), equal-weight household mix downsampled to
+        96 quarter-hour ticks and collapsed to 9 characteristic day shapes
+        (winter/summer/transition x workday/saturday/sunday), normalized
+        so the composed yearly mean is 1.0. Weekday classification is
+        data-derived: doy%7==5/6 separate as Sat/Sun at >10 sigma on the
+        midday-presence of the at-work archetypes (the library does not
+        record its simulation year). Formerly demandlib BDEW H0.
 water — rtwaterflow's own demand engine archetype ("residential", the
         DVGW W 410-normalized shapes): 24 h workday/saturday/sunday shapes
         resampled to 96 ticks + weekend volume factors + seasonal amplitude
@@ -56,36 +61,77 @@ def _bdew_season(month: int, day: int) -> str:
     return "transition"
 
 
+def _doy_season(doy: int) -> str:
+    """BDEW season windows on a day-of-year (non-leap calendar)."""
+    import datetime
+    d = datetime.date(2023, 1, 1) + datetime.timedelta(days=doy - 1)
+    return _bdew_season(d.month, d.day)
+
+
 def gen_elec() -> None:
-    import pandas as pd
-    from demandlib import bdew
+    import numpy as np
 
-    # dynamized H0 for a reference year; the absolute scale is irrelevant —
-    # only the SHAPE survives the normalization below
-    year = 2023
-    slp = bdew.ElecSlp(year)
-    series = slp.get_scaled_power_profiles({"h0": 1000.0})["h0"]
-    frame = pd.DataFrame({"v": series})
-    frame["season"] = [
-        _bdew_season(ts.month, ts.day) for ts in frame.index]
-    frame["kind"] = [
-        "sunday" if ts.dayofweek == 6 else
-        "saturday" if ts.dayofweek == 5 else "workday"
-        for ts in frame.index]
-    frame["quarter"] = frame.index.hour * 4 + frame.index.minute // 15
+    lib = ROOT / "backends" / "rtpowerflow" / "data" / "lpg_library"
+    index = json.loads((lib / "index.json").read_text(encoding="utf-8"))
 
-    mean = frame["v"].mean()
-    shapes: dict[str, list[float]] = {}
+    # equal-weight household mix: average the ABSOLUTE kW curves so real
+    # between-day levels (winter > summer evenings) survive into the cells
+    cells: dict[str, list[np.ndarray]] = {}
+    for arch in index["archetypes"]:
+        doc = json.loads((lib / arch["file"]).read_text(encoding="utf-8"))
+        for doy, curve in zip(doc["variant_day_of_year"], doc["variants_kw"]):
+            kind = ("saturday" if doy % 7 == 5 else
+                    "sunday" if doy % 7 == 6 else "workday")
+            ticks = np.asarray(curve, dtype=float).reshape(96, 15).mean(axis=1)
+            cells.setdefault(f"{_doy_season(doy)}_{kind}", []).append(ticks)
+
+    mean_curves = {key: np.mean(curves, axis=0) for key, curves in cells.items()}
+    # the 18-day grid samples no winter weekend and no transition saturday:
+    # fall back to the kind's cross-season mean curve, level-scaled by the
+    # season's workday level (weekend/workday level ratio assumed stable)
+    kind_year = {
+        kind: np.mean([c for key, curves in cells.items() if key.endswith(kind)
+                       for c in curves], axis=0)
+        for kind in DAY_KINDS}
+    filled = []
     for season in GAME_SEASONS:
         for kind in DAY_KINDS:
-            group = frame[(frame["season"] == season) & (frame["kind"] == kind)]
-            shape = group.groupby("quarter")["v"].mean() / mean
-            assert len(shape) == 96, f"{season}_{kind}: {len(shape)} quarters"
-            shapes[f"{season}_{kind}"] = [round(float(x), 4) for x in shape]
+            key = f"{season}_{kind}"
+            if key not in mean_curves:
+                level = (mean_curves[f"{season}_workday"].mean()
+                         / kind_year["workday"].mean())
+                mean_curves[key] = kind_year[kind] * level
+                filled.append(key)
+
+    # diversity smear: the library carries 8 fixed schedule templates, so
+    # their synchronized dinners stack into a ~3.5x evening spike; a zone
+    # aggregates ~150 INDEPENDENT households whose schedules scatter.
+    # Circular gaussian over the day (sigma 30 min) models that offset —
+    # the game's zone expectation is a neighborhood mean, not one template.
+    ticks96 = np.arange(96)
+    lag = np.minimum(ticks96, 96 - ticks96)
+    kernel = np.exp(-0.5 * (lag / 2.0) ** 2)  # sigma = 2 ticks = 30 min
+    kernel /= kernel.sum()
+    for key, curve in mean_curves.items():
+        mean_curves[key] = np.real(np.fft.ifft(
+            np.fft.fft(curve) * np.fft.fft(kernel)))
+
+    # composed yearly mean -> 1.0 under the game calendar (season lengths
+    # 90/180/90 of 360, day kinds 5/1/1 of 7)
+    season_w = {"winter": 0.25, "summer": 0.25, "transition": 0.5}
+    kind_w = {"workday": 5 / 7, "saturday": 1 / 7, "sunday": 1 / 7}
+    year_mean = sum(season_w[s] * kind_w[k] * mean_curves[f"{s}_{k}"].mean()
+                    for s in GAME_SEASONS for k in DAY_KINDS)
+    shapes = {key: [round(float(x), 4) for x in curve / year_mean]
+              for key, curve in mean_curves.items()}
 
     pack = _load_pack()
     pack["elec"] = shapes
-    pack["meta"]["elec_source"] = f"demandlib BDEW H0 (dynamized), year {year}"
+    pack["meta"]["elec_source"] = (
+        "rtpowerflow lpg_library (%s, %d archetypes, equal-weight mix; "
+        "Sat/Sun = doy%%7 5/6, data-derived; filled cells: %s)" % (
+            index.get("source", "LPG"), len(index["archetypes"]),
+            ", ".join(filled) or "none"))
     _save_pack(pack)
 
 

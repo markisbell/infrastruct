@@ -1,8 +1,9 @@
 class_name DemandModel
 extends RefCounted
 ## Household demand v2 (ROADMAP Phase 6 task 1): electricity and water come
-## from the bundled residential profile pack (data/profiles/ — BDEW H0 day
-## types via demandlib; rtwaterflow's W 410 archetype shapes), composed by
+## from the bundled residential profile pack (data/profiles/ — electricity
+## derived from rtpowerflow's LPG household library, diversity-smeared;
+## rtwaterflow's W 410 archetype shapes), composed by
 ## season x day kind at native 15-min resolution. Space heating stays the
 ## live physics formula (weather-driven — that IS its seasonality); DHW
 ## keeps its VDI-style day shape (the heat acceptance scenarios are
@@ -12,9 +13,12 @@ const STEPS_PER_DAY := 96
 const DAYS_PER_YEAR := 360          # GameClock's year
 const PACK_PATH := "res://data/profiles/residential_pack.json"
 
-## Diversified mean electric load per house, kW (pack factors are mean 1.0;
-## the composed evening winter peak lands near v1's 1.8 kW).
-const HOUSE_MEAN_KW := 1.05
+## Diversified mean electric load per house, kW (pack factors are mean 1.0).
+## Peak-calibrated: the LPG shapes reach ~3.1x mean on winter workday
+## evenings, so 0.58 keeps the composed evening peak near the ~1.8 kW/house
+## the station/feeder sizing was designed around (1.05 belonged to the much
+## flatter BDEW H0 shape — same peak, unrealistically high yearly energy).
+const HOUSE_MEAN_KW := 0.58
 
 static var _pack := {}
 static var _pack_state := 0  # 0 = unloaded, 1 = loaded, -1 = missing
@@ -67,8 +71,12 @@ static func house_factor(t: int) -> float:
 ## include local rooftop solar and electric vehicles, like rtpowerflow's
 ## households). Shares are diversified expectations, not per-house state.
 const PV_SHARE := 0.4        # fraction of houses with a rooftop plant
-const PV_KWP := 7.0          # typical single-family rooftop
-const EV_SHARE := 0.35       # fraction of houses with a home charger
+## Rooftop plants span 5-15 kWp across the fleet (user spec 2026-08-01);
+## the diversified composition uses the fleet mean.
+const PV_KWP_MIN := 5.0
+const PV_KWP_MAX := 15.0
+const PV_KWP_MEAN := (PV_KWP_MIN + PV_KWP_MAX) / 2.0
+const EV_SHARE := 0.5        # fraction of houses with a home charger
 const EV_CHARGER_KW := 11.0
 
 ## NET zone load at the transformer: households + EV charging − rooftop PV.
@@ -77,7 +85,7 @@ const EV_CHARGER_KW := 11.0
 static func zone_demand_kw(n_houses: int, t: int) -> float:
 	var base := n_houses * HOUSE_MEAN_KW * house_factor(t)
 	var ev := n_houses * EV_SHARE * EV_CHARGER_KW * ev_factor(t)
-	var pv := n_houses * PV_SHARE * PV_KWP * pv_availability(t)
+	var pv := n_houses * PV_SHARE * PV_KWP_MEAN * pv_availability(t)
 	return base + ev - pv
 
 

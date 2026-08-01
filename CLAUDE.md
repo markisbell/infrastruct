@@ -93,10 +93,19 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   their trios along the cable rows), solar park 1.2 MWp (300 kW/tile), gas 2 MW,
   battery 1 MWh/400 kW. MW-scale generation is what overloads MV lines —
   household districts alone barely register (the overload smoke premise).
-- **Demand composition**: zone net load = BDEW H0 base (1.05 kW/house mean)
-  + EV home charging (35 % × 11 kW, gaussian-arrival shapes, workday peak
-  ~19:00) − rooftop PV (40 % × 7 kWp on REAL measured rtpowerflow day
-  shapes, seasonal-scaled). Negative at sunny noon = export. Solar parks
+- **Demand composition (LPG rework 2026-08-01, user-driven)**: zone net
+  load = LPG household base (shapes from rtpowerflow's `lpg_library`, 8
+  archetypes equal-weight, diversity-smeared σ 30 min; Sat/Sun classified
+  FROM THE DATA at >10 σ midday-presence separation — the library doesn't
+  record its year; winter weekend + transition-Saturday cells are filled
+  from cross-season kind shapes; 0.58 kW/house mean, PEAK-calibrated so the
+  ~3.1× LPG winter evening lands at the same ~1.8 kW/house the station
+  sizing assumes — H0's 1.05 had the same peak on a flatter shape)
+  + EV home charging (50 % × 11 kW, gaussian-arrival shapes, workday peak
+  ~19:00) − rooftop PV (40 % × 5–15 kWp fleet, mean 10 used in the
+  composition, on REAL measured rtpowerflow day
+  shapes, seasonal-scaled). A full 150-house zone incl. 50 % EV now peaks
+  ~102 % of its 630 kVA station — tense by design, trips only past 120 %. Negative at sunny noon = export. Solar parks
   dispatch from the same `DemandModel.pv_availability`; billing books only
   positive net import. **WEATHER-COUPLED PV (2026-07-31)**: WHICH measured
   day a game day gets follows `WeatherSystem.clearness_day` (the seeded

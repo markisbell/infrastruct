@@ -21,24 +21,31 @@ constants and the *why*; change a constant → rerun the smoke → commit both.
 | grid_connection cost | 120 000 € | The 110/20 kV interface (20 MVA, user correction). Gameplay-priced: a real station is millions, but the game bill is the player's SHARE of a shared asset. Upkeep stays 20 €/d for the same reason. |
 | overhead vs cable | 120 / 320 €/tile | 20-kV Freileitung (48-AL1, ~7.3 MVA) vs buried NA2XS2Y 1x95 (~8.7 MVA): the cable costs ~2.7x, buys ~20% rating and clean streets. MW-scale generation is what loads these lines — a trio of 3-MW wind turbines at full output overloads a single overhead run. |
 | `CREW_COST` | 1 500 € | One maintenance dispatch (overload trips never self-heal). An overloaded grid you ignore eats the profits, which is the teaching pressure toward more substations / local generation. |
-| substation `rating_kva` | 630 kVA | Ortsnetzstation (user correction; modeled as a REAL 20/0.4 kV pandapower trafo, loading solved). A 150-house zone incl. EV charging peaks near 90 % — the capacity signal is VISIBLE at full build-out. Override per building via params for scenarios (below 250 kVA the element gets explicit physical parameters). |
-| household composition | PV 40 % × 7 kWp · EV 35 % × 11 kW | Zone demand = BDEW H0 base + diversified EV home charging (gaussian-arrival shapes) − rooftop PV on REAL measured rtpowerflow day shapes. Net load goes NEGATIVE at sunny noon (backfeed, signed on the wire); billing books only the positive net import. |
+| substation `rating_kva` | 630 kVA | Ortsnetzstation (user correction; modeled as a REAL 20/0.4 kV pandapower trafo, loading solved). A 150-house zone incl. 50 % EV charging peaks near 102 % (LPG rework 2026-08-01) — overload pressure is REAL at full build-out (trip only past 120 %), pushing toward a second station or local generation. Override per building via params for scenarios (below 250 kVA the element gets explicit physical parameters). |
+| household composition | PV 40 % × 5–15 kWp (mean 10) · EV 50 % × 11 kW | Zone demand = LPG household base (rtpowerflow `lpg_library` shapes, diversity-smeared, 0.58 kW/house mean peak-calibrated to ~1.8 kW winter evenings) + diversified EV home charging (gaussian-arrival shapes) − rooftop PV on REAL measured rtpowerflow day shapes. Net load goes NEGATIVE at sunny noon (backfeed, signed on the wire); billing books only the positive net import. |
 
-## Measured result (2026-07-29, realism pass)
+## Measured result (2026-08-01, LPG demand rework)
 
 | Window | Income | Costs | Net |
 |---|---|---|---|
-| Winter, 2 days | ≈ €969 (el 508 · heat 345 · feed-in 66 · water 31 · base 19) | ≈ €754 (fuel 381 · upkeep 334 · grid 40) | **+€215** |
-| Summer, 2 days | ≈ €1 183 (feed-in 673 · el 380 · heat 74 · water 37 · base 19) | ≈ €556 (fuel 193 · upkeep 334 · grid 29) | **+€627** |
-| Blackout day | heat/water still sell; **electricity books €0** | fuel + upkeep keep running | ≈ −€130 vs a winter day's +€108 |
+| Winter, 2 days | ≈ €982 (el 389 · heat 347 · feed-in 196 · water 31 · base 19) | ≈ €680 (fuel 309 · upkeep 334 · grid 38) | **+€302** |
+| Summer, 2 days | ≈ €1 025 (feed-in 593 · el 302 · heat 74 · water 37 · base 19) | ≈ €499 (fuel 137 · upkeep 334 · grid 28) | **+€526** |
+| Blackout day | heat/water still sell; **electricity books €0** | fuel + upkeep keep running | ≈ −€49 |
 
-The MW-scale plants moved the reference town from break-even to solidly
-profitable: the 1.2-MWp solar park's feed-in carries the summer (€673/2d at
-only 0.06 €/kWh — winter feed-in is small because the daylight window is
-seasonally compressed, no phantom January-evening sun), electricity income
-grew with the EV charging demand. The tension shifts from "survive" to
-"fund the build-out" — scenario start budgets and difficulty money scaling
-stay the effective knobs.
+The LPG rework traded base-load electricity income (0.58 kW/house mean vs
+the inflated H0 1.05 at the same evening peak) for a bigger EV fleet
+(50 %) and a bigger PV fleet (5–15 kWp, mean 10): billed import fell
+~€80/2d in winter, feed-in and lower fuel/grid costs more than covered it.
+Both windows stay solidly profitable; the earlier 2026-07-29 measurement
+(winter +215, summer +627) is superseded.
+
+The MW-scale plants keep the reference town solidly profitable: the
+1.2-MWp solar park plus the larger rooftop fleet carry the summer via
+feed-in (€593/2d at only 0.06 €/kWh — winter feed-in stays small because
+the daylight window is seasonally compressed, no phantom January-evening
+sun), and the 50 % EV fleet props up billed import against the lower base
+mean. The tension shifts from "survive" to "fund the build-out" — scenario
+start budgets and difficulty money scaling stay the effective knobs.
 
 ## Known simplifications (Phase 8 candidates)
 

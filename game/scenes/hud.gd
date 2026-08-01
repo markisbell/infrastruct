@@ -448,14 +448,14 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 				var t1 := maxi(day - 1, 0) * 96 + i
 				var base0 := DemandModel.HOUSE_MEAN_KW * DemandModel.house_factor(t0) \
 					+ DemandModel.EV_SHARE * DemandModel.EV_CHARGER_KW * DemandModel.ev_factor(t0)
-				var pv0 := DemandModel.PV_SHARE * DemandModel.PV_KWP \
+				var pv0 := DemandModel.PV_SHARE * DemandModel.PV_KWP_MEAN \
 					* DemandModel.pv_availability(t0)
 				consumption.append(base0)
 				pv.append(pv0)
 				net.append(base0 - pv0)
 				net_prev.append(DemandModel.HOUSE_MEAN_KW * DemandModel.house_factor(t1)
 					+ DemandModel.EV_SHARE * DemandModel.EV_CHARGER_KW * DemandModel.ev_factor(t1)
-					- DemandModel.PV_SHARE * DemandModel.PV_KWP * DemandModel.pv_availability(t1))
+					- DemandModel.PV_SHARE * DemandModel.PV_KWP_MEAN * DemandModel.pv_availability(t1))
 			var zone: String = City.topo.house_zone.get(pos, "")
 			_show_config({"title": "House (%d, %d)" % [pos.x, pos.y],
 				"unit": "kW", "dec": 2, "base_zero": false,
