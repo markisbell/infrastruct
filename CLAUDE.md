@@ -101,11 +101,13 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   from cross-season kind shapes; 0.58 kW/house mean, PEAK-calibrated so the
   ~3.1× LPG winter evening lands at the same ~1.8 kW/house the station
   sizing assumes — H0's 1.05 had the same peak on a flatter shape)
-  + EV home charging (50 % × 11 kW, gaussian-arrival shapes, workday peak
-  ~19:00) − rooftop PV (40 % × 5–15 kWp fleet, mean 10 used in the
+  + EV home charging (50 % × 22-kW wallboxes, gaussian-arrival shapes ×
+  1.1 h at full power — same ~24 kWh session as the earlier 11 kW/2.2 h,
+  sharper coincidence; workday peak
+  ~18:45) − rooftop PV (40 % × 5–15 kWp fleet, mean 10 used in the
   composition, on REAL measured rtpowerflow day
   shapes, seasonal-scaled). A full 150-house zone incl. 50 % EV now peaks
-  ~102 % of its 630 kVA station — tense by design, trips only past 120 %. Negative at sunny noon = export. Solar parks
+  ~112 % of its 630 kVA station — tense by design, trips only past 120 %. Negative at sunny noon = export. Solar parks
   dispatch from the same `DemandModel.pv_availability`; billing books only
   positive net import. **WEATHER-COUPLED PV (2026-07-31)**: WHICH measured
   day a game day gets follows `WeatherSystem.clearness_day` (the seeded

@@ -77,7 +77,10 @@ const PV_KWP_MIN := 5.0
 const PV_KWP_MAX := 15.0
 const PV_KWP_MEAN := (PV_KWP_MIN + PV_KWP_MAX) / 2.0
 const EV_SHARE := 0.5        # fraction of houses with a home charger
-const EV_CHARGER_KW := 11.0
+## 22-kW wallboxes (user spec 2026-08-01); the pack shape charges the same
+## ~24 kWh session in half the window, so daily energy stays put while the
+## coincident peak sharpens.
+const EV_CHARGER_KW := 22.0
 
 ## NET zone load at the transformer: households + EV charging − rooftop PV.
 ## Negative = the zone exports (sunny noon), which the solver handles as a

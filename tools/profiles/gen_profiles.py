@@ -183,8 +183,9 @@ def gen_pv() -> None:
 def gen_ev() -> None:
     """Diversified home-charging shape (mirrors rtpowerflow's synthetic
     additive EV model): arrivals spread 16:30-21:00 on workdays (later and
-    flatter on weekends), ~2.2 h at full charger power per arrival. The
-    shape is the EXPECTED per-EV load as a fraction of charger power."""
+    flatter on weekends), ~1.1 h at full 22-kW charger power per arrival
+    (same ~24 kWh session the old 11-kW/2.2-h shape carried). The shape is
+    the EXPECTED per-EV load as a fraction of charger power."""
     import math
 
     def day_shape(arrival_mean_h: float, arrival_std_h: float,
@@ -205,13 +206,13 @@ def gen_ev() -> None:
 
     pack = _load_pack()
     pack["ev"] = {
-        "workday": day_shape(18.0, 1.6, 2.2),
-        "saturday": day_shape(15.5, 3.0, 2.2),
-        "sunday": day_shape(16.5, 3.2, 2.2),
+        "workday": day_shape(18.0, 1.6, 1.1),
+        "saturday": day_shape(15.5, 3.0, 1.1),
+        "sunday": day_shape(16.5, 3.2, 1.1),
     }
     pack["meta"]["ev_source"] = (
-        "synthetic diversified home charging (gaussian arrivals x 2.2 h), "
-        "expected per-EV fraction of charger power")
+        "synthetic diversified home charging (gaussian arrivals x 1.1 h "
+        "at 22 kW, ~24 kWh/session), expected per-EV fraction of charger power")
     _save_pack(pack)
 
 
