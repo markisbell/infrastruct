@@ -3,7 +3,8 @@ extends RefCounted
 ## BoundaryProvider (see Orchestrator) backed by the shared contract fixtures —
 ## the same files the contract test suite runs, so game e2e and backend tests
 ## exercise identical topologies and boundary series (single source of truth).
-## Phase 3 replaces this with the real demand/weather modules.
+## Superseded for gameplay by the real demand/weather modules (Phase 3);
+## kept as the fixture-backed provider for the cosim/cosim-kill smokes.
 
 var fixtures := {}  # network id -> parsed fixture file
 var weather_override := {}  # debug console injection (F4)

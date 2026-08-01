@@ -23,9 +23,10 @@ real physics through the user's own backends as co-simulation sidecars:
 | water | `backends/rtwaterflow` | pandapipes (hydraulics, Wagner PDD) |
 
 Outages, voltage sag, cold far-ends, pressure collapse, storage behavior — all
-come out of the solvers, never faked. Phases 0–7 of the roadmap are DONE
+come out of the solvers, never faked. Phases 0–8 of the roadmap are DONE
 (+ terrain, grid rework, signaling/maintenance, buried lines, inspector);
-Phase 8 (hardening/packaging) remains.
+Phase 8 (hardening/packaging) closed with envelope v4, the Windows
+installer, and the Linux port + tarball (details in §7).
 
 ## 2. Repo layout
 
@@ -36,7 +37,7 @@ game/                    Godot project (open with .tools/godot/*.exe --path game
               power/heat/water_topology · event_system · scenarios
   scenes/     main (modes+smokes) · city_view (3D) · hud (palette/panels) ·
               profile_graph · debug_panel
-  tests/      GdUnit suites (res://tests, 69 green)
+  tests/      GdUnit suites (res://tests, 98 green)
 backends/    three submodules pinned to their gamebridge branches
 docs/        contract/v1.md + schemas · adr/001-005 · screenshots/
 orchestration/  sidecars.json (8010/11/12) · sidecars_stress.json (8014/15/16) · logs/

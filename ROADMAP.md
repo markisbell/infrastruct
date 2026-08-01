@@ -207,6 +207,11 @@ so the teaching platforms keep working unchanged; the game pins the submodule SH
 
 ## 4. Phases
 
+> **Status: Phases 0–8 are all done.** Phases 0–4 predate the per-phase
+> status-marker habit and carry no marker of their own — the phase-gate rule
+> (each phase's acceptance criteria block the next) plus the markers on 5–8
+> cover them; the verified state lives in CLAUDE.md §7.
+
 ### Phase 0 — Feasibility spikes & ADRs (~1 week of agent time)
 
 **Goal:** de-risk the remaining unknowns — isometric drag-building in Godot, bridge
@@ -492,6 +497,13 @@ recorded in `tools/balancing/` sheets with rationale.
 ### Phase 8 — Hardening: save/load, performance, packaging
 
 **Goal:** shippable.
+
+> **Status (2026-07-31): done** — envelope v4 (trips, econ books, event-system
+> state incl. RNG position, device SoC survive loads; SoC replay on every
+> registration, heatstorage smoke pins 0.79→0.79), drag stalls halved,
+> `WorldModel.check_invariants`, Windows installer (v0.8.0/v0.8.1) and the
+> Linux port + tarball (v0.8.2), each verified from a clean install/fresh
+> extraction. Modding hooks (task 4) stay an unpicked stretch goal.
 
 Tasks:
 1. **Save/load, done properly:** persist logical world model, device states (storage
