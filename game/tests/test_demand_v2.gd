@@ -66,6 +66,55 @@ func test_pv_park_orientation() -> void:
 		.is_greater(DemandModel.pv_park_availability(morning, 1))
 
 
+func test_house_profiles_deterministic_and_diverse() -> void:
+	var a := DemandModel.house_profile(Vector2i(5, 5))
+	var b := DemandModel.house_profile(Vector2i(5, 5))
+	assert_str(a["archetype"]).is_equal(b["archetype"])
+	assert_float(a["pv_kwp"]).is_equal_approx(b["pv_kwp"], 0.0001)
+	assert_bool(a["has_ev"]).is_equal(b["has_ev"])
+	# distribution over a block of lots: shares near the fleet constants,
+	# PV sizes inside the 5-15 band, several distinct archetypes
+	var evs := 0
+	var pvs := 0
+	var archetypes := {}
+	for x in 20:
+		for y in 20:
+			var p := DemandModel.house_profile(Vector2i(x, y))
+			evs += 1 if p["has_ev"] else 0
+			pvs += 1 if p["has_pv"] else 0
+			archetypes[p["archetype"]] = true
+			if p["has_pv"]:
+				assert_float(p["pv_kwp"]).is_between(
+					DemandModel.PV_KWP_MIN, DemandModel.PV_KWP_MAX)
+	assert_float(evs / 400.0).is_between(0.4, 0.6)
+	assert_float(pvs / 400.0).is_between(0.3, 0.5)
+	assert_int(archetypes.size()).is_greater(4)
+
+
+func test_house_ev_block_is_full_charger_power() -> void:
+	# find an EV house and a non-EV house; the EV one must show a real
+	# 22-kW block on top of its base in the evening, the other never
+	var ev_pos := Vector2i(-1, -1)
+	var plain_pos := Vector2i(-1, -1)
+	for x in 40:
+		var p := DemandModel.house_profile(Vector2i(x, 0))
+		if p["has_ev"] and ev_pos.x < 0:
+			ev_pos = Vector2i(x, 0)
+		if not p["has_ev"] and plain_pos.x < 0:
+			plain_pos = Vector2i(x, 0)
+	var ev_profile := DemandModel.house_profile(ev_pos)
+	var plain_profile := DemandModel.house_profile(plain_pos)
+	var ev_max := 0.0
+	var plain_max := 0.0
+	for q in 96:
+		var t := 301 * 96 + q
+		ev_max = maxf(ev_max, DemandModel.house_ev_kw(ev_profile, t))
+		plain_max = maxf(plain_max,
+			DemandModel.house_ev_kw(plain_profile, t))
+	assert_float(ev_max).is_equal_approx(DemandModel.EV_CHARGER_KW, 0.001)
+	assert_float(plain_max).is_equal_approx(0.0, 0.001)
+
+
 func test_water_summer_exceeds_winter() -> void:
 	# same clock hour, seasonal swing + hot-day surcharge
 	var summer := DemandModel.water_zone_demand_m3h(10, _t(133, 11.0), 28.0)

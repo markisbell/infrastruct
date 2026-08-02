@@ -483,11 +483,12 @@ func _inspector_config(kind: String, id: String) -> Dictionary:
 func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 	match category:
 		"house":
-			# per-house expectation from the demand model (user request):
-			# net import, base consumption and rooftop-PV infeed — the
-			# DIVERSIFIED per-house curves behind the zone composition
-			# (real telemetry only exists per zone). Yesterday differs via
-			# day kind and the weather's measured-pv-day pick.
+			# THE sampled household on this lot (per-house individuality,
+			# user request): its LPG archetype's own curve, its concrete
+			# 22-kW charging block, its rooftop size/orientation, its
+			# heat/water volumes. Real telemetry still only exists per
+			# zone — these are the deterministic samples behind the mix.
+			var profile := DemandModel.house_profile(pos)
 			var day := City.current_t / 96
 			var net: Array[float] = []
 			var net_prev: Array[float] = []
@@ -500,30 +501,37 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 			for i in 96:
 				var t0 := day * 96 + i
 				var t1 := maxi(day - 1, 0) * 96 + i
-				var base0 := DemandModel.HOUSE_MEAN_KW * DemandModel.house_factor(t0) \
-					+ DemandModel.EV_SHARE * DemandModel.EV_CHARGER_KW * DemandModel.ev_factor(t0)
-				var pv0 := DemandModel.PV_SHARE * DemandModel.PV_KWP_MEAN \
-					* DemandModel.pv_availability(t0)
+				var base0 := DemandModel.house_base_kw(profile, t0) \
+					+ DemandModel.house_ev_kw(profile, t0)
+				var pv0 := DemandModel.house_pv_kw(profile, t0)
 				consumption.append(base0)
 				pv.append(pv0)
 				net.append(base0 - pv0)
-				net_prev.append(DemandModel.HOUSE_MEAN_KW * DemandModel.house_factor(t1)
-					+ DemandModel.EV_SHARE * DemandModel.EV_CHARGER_KW * DemandModel.ev_factor(t1)
-					- DemandModel.PV_SHARE * DemandModel.PV_KWP_MEAN * DemandModel.pv_availability(t1))
+				net_prev.append(DemandModel.house_base_kw(profile, t1)
+					+ DemandModel.house_ev_kw(profile, t1)
+					- DemandModel.house_pv_kw(profile, t1))
 				# heat (SH physics + LPG DHW shape) and water follow the
 				# seeded weather — yesterday's curves use yesterday's temps
-				heat.append(DemandModel.heat_zone_demand_kw(
-					1, t0, City.weather.temp_c(t0)))
-				heat_prev.append(DemandModel.heat_zone_demand_kw(
-					1, t1, City.weather.temp_c(t1)))
-				water_l.append(1000.0 * DemandModel.water_zone_demand_m3h(
-					1, t0, City.weather.temp_c(t0)))
-				water_l_prev.append(1000.0 * DemandModel.water_zone_demand_m3h(
-					1, t1, City.weather.temp_c(t1)))
+				heat.append(DemandModel.house_heat_kw(
+					profile, t0, City.weather.temp_c(t0)))
+				heat_prev.append(DemandModel.house_heat_kw(
+					profile, t1, City.weather.temp_c(t1)))
+				water_l.append(1000.0 * DemandModel.house_water_m3h(
+					profile, t0, City.weather.temp_c(t0)))
+				water_l_prev.append(1000.0 * DemandModel.house_water_m3h(
+					profile, t1, City.weather.temp_c(t1)))
 			var zone: String = City.topo.house_zone.get(pos, "")
+			var tags: String = profile["label"]
+			if profile["has_ev"]:
+				tags += " · EV 22 kW"
+			if profile["has_pv"]:
+				tags += " · PV %.1f kWp %s" % [profile["pv_kwp"],
+					DemandModel.PV_ROT_FACING[profile["pv_rot"]]]
+			if zone != "":
+				tags += " · " + zone
 			_show_config({"title": "House (%d, %d)" % [pos.x, pos.y],
 				"unit": "kW", "dec": 2, "base_zero": false,
-				"y": "Diversified per-house [kW]", "limits": [],
+				"y": "This household [kW]", "limits": [],
 				"series": [
 					{"label": "Net import", "color": Color(0.95, 0.68, 0.21),
 						"values": net, "values_prev": net_prev},
@@ -539,7 +547,7 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 					"series": [{"label": "Water",
 						"color": Color(0.25, 0.75, 0.5),
 						"values": water_l, "values_prev": water_l_prev}]},
-			}, zone if zone != "" else "no substation coverage")
+			}, tags if zone != "" else tags + " · no substation coverage")
 		"cable":
 			var edge := City.topo.line_id_at(pos)
 			if edge == "":

@@ -213,7 +213,17 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   since 2026-08-02 the house panel also carries a HEAT series (SH physics
   + LPG DHW, weather-driven incl. yesterday's temps) in the kW graph and a
   SECOND ProfileGraph for water in L/h (`_show_config` optional
-  `secondary` sub-config — units must not share an axis). Buildings show their
+  `secondary` sub-config — units must not share an axis). PER-HOUSE
+  INDIVIDUALITY (user request, same day): every lot hosts a DETERMINISTIC
+  sampled household (`DemandModel.house_profile`, tile-hash seeded, world-
+  seed independent, FIXED draw order): LPG archetype with its own
+  UNsmeared shapes + level (`pack.elec_arch`), EV or not with a CONCRETE
+  22-kW charging block at a sampled arrival, PV size 5–15 kWp + roof
+  facing (via `pv_park_availability`), DHW/water volume scale
+  (`pack.dhw_arch_scale`). DISPLAY TIER: the zone boundary stays the
+  diversified expectation — samples average back to it but don't sum
+  exactly; the PHYSICS tier (zones summing sampled households) is the
+  designed next step if wanted. Buildings show their
   quantity (trafo %, import kW, SoC %, °C, bar, m³/h); power lines show
   per-segment loading (contract edges, telemetry keyed by the segment's MIDDLE
   tile — L-indices renumber on rebuild); heat/water pipes show network totals

@@ -125,11 +125,47 @@ def gen_elec() -> None:
     shapes = {key: [round(float(x), 4) for x in curve / year_mean]
               for key, curve in mean_curves.items()}
 
+    # per-ARCHETYPE shapes for the sampled house identities (per-house
+    # individuality, user request 2026-08-02): same cell/fallback pipeline
+    # per household, deliberately UNsmeared — an individual household's
+    # schedule is its own, only the neighborhood mix gets the diversity
+    # smear. "scale" carries the archetype's level relative to the mix
+    # (retiree 0.24 kW mean vs family 0.63), shapes stay mean-1.0.
+    arch_out = {}
+    mix_mean = float(np.mean([a["mean_kw"] for a in index["archetypes"]]))
+    for arch in index["archetypes"]:
+        doc = json.loads((lib / arch["file"]).read_text(encoding="utf-8"))
+        acells: dict[str, list] = {}
+        for doy, curve in zip(doc["variant_day_of_year"], doc["variants_kw"]):
+            kind = ("saturday" if doy % 7 == 5 else
+                    "sunday" if doy % 7 == 6 else "workday")
+            ticks = np.asarray(curve, dtype=float).reshape(96, 15).mean(axis=1)
+            acells.setdefault(f"{_doy_season(doy)}_{kind}", []).append(ticks)
+        acurves = {key: np.mean(curves, axis=0) for key, curves in acells.items()}
+        akind = {kind: np.mean([c for key, curves in acells.items()
+                                if key.endswith(kind) for c in curves], axis=0)
+                 for kind in DAY_KINDS}
+        for season in GAME_SEASONS:
+            for kind in DAY_KINDS:
+                key = f"{season}_{kind}"
+                if key not in acurves:
+                    level = (acurves[f"{season}_workday"].mean()
+                             / akind["workday"].mean())
+                    acurves[key] = akind[kind] * level
+        ayear = sum(season_w[s] * kind_w[k] * acurves[f"{s}_{k}"].mean()
+                    for s in GAME_SEASONS for k in DAY_KINDS)
+        entry = {"label": arch["label"], "scale": round(arch["mean_kw"] / mix_mean, 4)}
+        for key, curve in acurves.items():
+            entry[key] = [round(float(x), 4) for x in curve / ayear]
+        arch_out[arch["id"]] = entry
+
     pack = _load_pack()
     pack["elec"] = shapes
+    pack["elec_arch"] = arch_out
     pack["meta"]["elec_source"] = (
         "rtpowerflow lpg_library (%s, %d archetypes, equal-weight mix; "
-        "Sat/Sun = doy%%7 5/6, data-derived; filled cells: %s)" % (
+        "Sat/Sun = doy%%7 5/6, data-derived; filled cells: %s; elec_arch = "
+        "per-archetype unsmeared shapes + level scales)" % (
             index.get("source", "LPG"), len(index["archetypes"]),
             ", ".join(filled) or "none"))
     _save_pack(pack)
@@ -242,6 +278,15 @@ def gen_dhw() -> None:
     pack = _load_pack()
     pack["dhw"] = {kind: [round(float(x / week_mean), 4) for x in curve]
                    for kind, curve in shapes.items()}
+    # per-archetype level scales for sampled house identities: warm-water
+    # volume relative to the mix (a family draws ~2.5x a retired single);
+    # also reused as the per-house drinking-water scale (documented
+    # approximation — tap volume tracks household size like DHW does)
+    mix_litres = sum(a["annual_litres"] for a in lib["archetypes"].values()) \
+        / len(lib["archetypes"])
+    pack["dhw_arch_scale"] = {
+        cid: round(arch["annual_litres"] / mix_litres, 4)
+        for cid, arch in lib["archetypes"].items()}
     pack["meta"]["dhw_source"] = (
         "%s (%d archetypes, equal-weight mix, 30-min diversity smear, "
         "holidays excluded from workdays)" % (

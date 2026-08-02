@@ -201,11 +201,88 @@ static func dhw_factor(t: int) -> float:
 
 
 static func heat_zone_demand_kw(n_houses: int, t: int, temp_c: float) -> float:
+	return n_houses * _house_heat_kw(1.0, t, temp_c)
+
+
+static func _house_heat_kw(dhw_scale: float, t: int, temp_c: float) -> float:
 	var sh_factor := clampf((16.0 - temp_c) / 30.0, 0.0, 1.15)
 	var minute := (t * 15) % 1440
 	var night_setback := 0.82 if (minute < 300 or minute >= 1380) else 1.0
-	return n_houses * (HOUSE_HEAT_DESIGN_KW * sh_factor * night_setback
-		+ HOUSE_DHW_KW * dhw_factor(t))
+	return HOUSE_HEAT_DESIGN_KW * sh_factor * night_setback \
+		+ HOUSE_DHW_KW * dhw_scale * dhw_factor(t)
+
+
+# ─── per-house identity (user request 2026-08-02: individuality) ───
+# Deterministic sampled household per TILE (independent of the world seed:
+# the same lot always houses the same family): LPG archetype with its own
+# unsmeared day shapes and level, EV ownership with a CONCRETE 22-kW
+# charging block, rooftop-PV size + roof orientation, DHW/water volume
+# scale. DISPLAY TIER: the zone boundary stays the diversified
+# expectation — 150 samples average back to it, but one day's sum may sit
+# a few percent off the mean (documented, not a bug).
+
+const EV_SESSION_H := 1.1  # 22 kW x 1.1 h ~= the 24 kWh pack session
+
+
+static func house_profile(pos: Vector2i) -> Dictionary:
+	var pack := _get_pack()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(pos.x) * 73856093 + int(pos.y) * 19349663
+	# FIXED draw order — reordering reshuffles every town's identities
+	var arch_ids: Array = pack.get("elec_arch", {}).keys()
+	arch_ids.sort()
+	var arch: String = "" if arch_ids.is_empty() \
+		else arch_ids[rng.randi() % arch_ids.size()]
+	var has_ev := rng.randf() < EV_SHARE
+	var ev_start := {}
+	for spec: Array in [["workday", 18.0, 1.6], ["saturday", 15.5, 3.0],
+			["sunday", 16.5, 3.2]]:  # the gen_ev arrival distributions
+		ev_start[spec[0]] = clampf(rng.randfn(spec[1], spec[2]), 6.0, 22.5)
+	var has_pv := rng.randf() < PV_SHARE
+	var pv_kwp := lerpf(PV_KWP_MIN, PV_KWP_MAX, rng.randf())
+	var roof := rng.randf()  # 70% south roofs, 15% east, 15% west
+	var arch_entry: Dictionary = pack.get("elec_arch", {}).get(arch, {})
+	return {"archetype": arch,
+		"label": str(arch_entry.get("label", "household")),
+		"scale": float(arch_entry.get("scale", 1.0)),
+		"has_ev": has_ev, "ev_start_h": ev_start,
+		"has_pv": has_pv, "pv_kwp": pv_kwp,
+		"pv_rot": 0 if roof < 0.7 else (3 if roof < 0.85 else 1),
+		"dhw_scale": float(pack.get("dhw_arch_scale", {}).get(arch, 1.0))}
+
+
+## Sampled base consumption of THE household (no EV), kW.
+static func house_base_kw(profile: Dictionary, t: int) -> float:
+	var arch: Dictionary = _get_pack().get("elec_arch", {}) \
+		.get(profile.get("archetype", ""), {})
+	if arch.is_empty():
+		return HOUSE_MEAN_KW * house_factor(t)  # pack-less fallback: the mean
+	return HOUSE_MEAN_KW * float(profile["scale"]) \
+		* float(arch["%s_%s" % [season_key(t), day_kind(t)]][t % STEPS_PER_DAY])
+
+
+## The concrete charging block: full charger power inside the sampled
+## arrival window, zero outside — what a wallbox actually does.
+static func house_ev_kw(profile: Dictionary, t: int) -> float:
+	if not profile.get("has_ev", false):
+		return 0.0
+	var start_h: float = profile["ev_start_h"][day_kind(t)]
+	var h := float(t % STEPS_PER_DAY) / 4.0
+	return EV_CHARGER_KW if (h >= start_h and h < start_h + EV_SESSION_H) else 0.0
+
+
+static func house_pv_kw(profile: Dictionary, t: int) -> float:
+	if not profile.get("has_pv", false):
+		return 0.0
+	return float(profile["pv_kwp"]) * pv_park_availability(t, int(profile["pv_rot"]))
+
+
+static func house_heat_kw(profile: Dictionary, t: int, temp_c: float) -> float:
+	return _house_heat_kw(float(profile.get("dhw_scale", 1.0)), t, temp_c)
+
+
+static func house_water_m3h(profile: Dictionary, t: int, temp_c: float) -> float:
+	return water_zone_demand_m3h(1, t, temp_c) * float(profile.get("dhw_scale", 1.0))
 
 
 # ─── water: archetype shape x weekend volume x seasonal swing (peak
