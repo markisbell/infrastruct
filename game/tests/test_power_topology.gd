@@ -73,6 +73,21 @@ func test_grid_connection_taps_all_adjacent_runs() -> void:
 	assert_bool(topo.connected.get(sub, false)).is_true()
 
 
+func test_diagonal_staircase_stays_one_run() -> void:
+	# drag interpolation draws diagonals as x/y staircases — zigzag corners
+	# continue on OPPOSITE sides and must remain ONE conductive run (the
+	# first parallel-rule cut them apart — user bug report 2026-08-02)
+	var model := WorldModel.new()
+	model.place_building("grid_connection", Vector2i(0, 0))
+	model.set_cable(Vector2i(2, 0), 1)
+	for i in range(0, 5):
+		model.set_cable(Vector2i(3 + i, i), 1)
+		model.set_cable(Vector2i(3 + i, i + 1), 1)
+	var sub := model.place_building("substation", Vector2i(8, 5))
+	var topo := PowerTopology.build(model, {})
+	assert_bool(topo.connected.get(sub, false)).is_true()
+
+
 func test_heat_parallel_runs_do_not_join() -> void:
 	# same rule as power (user correction): a parallel heat run beside the
 	# trunk stays a separate hydraulic circuit; ending INTO the trunk taps

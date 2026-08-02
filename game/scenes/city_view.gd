@@ -1079,6 +1079,48 @@ func _network_building_at(pos: Vector2i, network: String) -> bool:
 ## and a sloped SERVICE DROP to any adjacent electrical building (the
 ## visible connection). Underground: a trench strip with a marker post
 ## (Kabelmerkstein) and a grey riser box where it enters a building.
+## Kabelendmast dressing: strain bracket, three cable terminations
+## (Endverschluesse), a surge-arrester pair and the steel riser conduit
+## the cable descends in — oriented toward the buried neighbor.
+func _termination_hardware(toward: Vector3) -> Node3D:
+	var rig := Node3D.new()
+	var grey := Color(0.62, 0.64, 0.66)
+	var porcelain := Color(0.45, 0.35, 0.3)
+	rig.add_child(_box(Vector3(0.16, 0.035, 0.16), grey, Vector3(0, 0.58, 0)))
+	for k in 3:
+		var cone := MeshInstance3D.new()
+		var cone_mesh := CylinderMesh.new()
+		cone_mesh.top_radius = 0.012
+		cone_mesh.bottom_radius = 0.028
+		cone_mesh.height = 0.11
+		cone_mesh.radial_segments = 8
+		cone.mesh = cone_mesh
+		cone.position = Vector3(-0.05 + k * 0.05, 0.65, 0.05)
+		cone.material_override = _flat(porcelain)
+		rig.add_child(cone)
+	# arrester pair on the opposite bracket edge
+	for k in 2:
+		rig.add_child(_box(Vector3(0.025, 0.09, 0.025), Color(0.55, 0.57, 0.6),
+			Vector3(-0.03 + k * 0.06, 0.64, -0.055)))
+	# steel riser conduit down the pole toward the buried side
+	var conduit := MeshInstance3D.new()
+	var conduit_mesh := CylinderMesh.new()
+	conduit_mesh.top_radius = 0.022
+	conduit_mesh.bottom_radius = 0.022
+	conduit_mesh.height = 0.6
+	conduit_mesh.radial_segments = 8
+	conduit.mesh = conduit_mesh
+	conduit.position = toward * 0.09 + Vector3(0, 0.3, 0)
+	conduit.material_override = _flat(grey)
+	rig.add_child(conduit)
+	# jumper from the crossarm down into the terminations
+	rig.add_child(_wire_segment(Vector3(0, 0.74, 0), Vector3(0, 0.6, 0.05),
+		0.02, Color(0.16, 0.16, 0.18)))
+	rig.add_child(_wire_segment(Vector3(0, 0.6, 0.05),
+		toward * 0.09 + Vector3(0, 0.58, 0), 0.02, Color(0.16, 0.16, 0.18)))
+	return rig
+
+
 func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 	var kind := int(City.model.cables.get(pos, BuildingDefs.LINE_OVERHEAD))
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
@@ -1087,7 +1129,10 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 		if City.model.cables.has(pos + directions[i]) \
 				and PowerTopology.cable_linked(City.model.cables, pos,
 					pos + directions[i]):
-			connections += str(i)
+			# neighbor KIND rides the cache key: an overhead pole becomes a
+			# Kabelendmast when its neighbor turns buried
+			connections += "%d k%d" % [i,
+				int(City.model.cables.get(pos + directions[i], 0))]
 		if _building_taps_here(pos + directions[i], pos):
 			connections += "b%d" % i
 	var wanted := "%s|r%s@%s" % [connections,
@@ -1102,6 +1147,17 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 			[Color(0.85, 0.75, 0.35)], true)
 		return
 	node.add_child(_pole_visual())
+	# Kabelendmast (user request 2026-08-02; researched: Endmast carries
+	# Endverschluesse + Ueberspannungsableiter + Kabelschutzrohr): where
+	# the overhead run hands over to a buried cable, dress the pole
+	for i in 4:
+		var d0 := directions[i]
+		if kind == BuildingDefs.LINE_OVERHEAD \
+				and int(City.model.cables.get(pos + d0, -1)) \
+					== BuildingDefs.LINE_UNDERGROUND \
+				and PowerTopology.cable_linked(City.model.cables, pos, pos + d0):
+			node.add_child(_termination_hardware(Vector3(d0.x, 0, d0.y)))
+			break
 	for i in 4:
 		var d := directions[i]
 		var dh := _ground_y(pos + d) - _ground_y(pos)

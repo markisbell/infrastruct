@@ -54,19 +54,19 @@ var warnings: Array[String] = []
 
 ## Two adjacent cable tiles carry current unless they are PARALLEL RUNS
 ## touching sideways (user correction 2026-08-02: two lines laid side by
-## side must not short together): a strictly straight mid-run tile stays
-## CLOSED toward a lateral contact; ends, corners and junction tiles stay
-## open. A T-tap is therefore built by ending the new run INTO the old
-## one. (3+ tightly stacked parallel runs still bond — leave a gap.)
+## side must not short together). PARALLEL means: both runs continue on a
+## COMMON side of the contact. Zigzag/staircase steps (diagonal drags!)
+## continue on OPPOSITE sides and stay one run (the first formulation cut
+## them apart — user bug report), and anything continuing THROUGH the
+## contact axis (T-approaches, crossings) always bonds. A T-tap is built
+## by ending the new run INTO the old one.
 static func cable_linked(cable: Dictionary, a: Vector2i, b: Vector2i) -> bool:
 	var d := b - a
-	return not (_closed_toward(cable, a, d) and _closed_toward(cable, b, -d))
-
-
-static func _closed_toward(cable: Dictionary, pos: Vector2i, d: Vector2i) -> bool:
-	var perp := Vector2i(d.y, d.x)
-	return (cable.has(pos + perp) or cable.has(pos - perp)) \
-		and not cable.has(pos - d)
+	var p := Vector2i(d.y, d.x)
+	if cable.has(a - d) or cable.has(b + d):
+		return true  # a run continues through the contact — junction gesture
+	return not ((cable.has(a - p) and cable.has(b - p))
+		or (cable.has(a + p) and cable.has(b + p)))
 
 
 ## The cable tiles a building actually taps: ALL adjacent runs for the

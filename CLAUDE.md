@@ -98,10 +98,20 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   (manhole plates) and share street cross-sections; NOTHING runs under
   houses/buildings; roads may pave over buried-only tiles; kind transitions
   become junction buses (one per joint). PARALLEL RULE (2026-08-02, user
-  correction): two runs laid side by side DON'T short —
-  `PowerTopology.cable_linked` keeps strictly-straight lateral contacts
-  open (to tap, END the new run INTO the target = T-junction; 3+ tightly
-  stacked runs still bond, leave a gap). Every plant/battery/consumer taps
+  correction; REFORMULATED same day after the staircase bug): two runs
+  laid side by side DON'T short — `PowerTopology.cable_linked` cuts a
+  lateral contact ONLY when both runs continue on a COMMON side
+  (genuinely parallel). Zigzag/staircase steps (how diagonal drags
+  interpolate!) continue on OPPOSITE sides and stay ONE run — the first
+  strictly-straight formulation shattered every diagonal powerline (user
+  report). Runs continuing THROUGH the contact axis (T-approaches,
+  crossings) always bond; to tap, END the new run INTO the target.
+  KABELENDMAST (same day, user request + web research: Endmast,
+  Endverschluesse, Ueberspannungsableiter, Kabelschutzrohr): an overhead
+  pole whose linked neighbor is BURIED renders termination hardware —
+  bracket, three porcelain cones, arrester pair, steel riser conduit,
+  jumper wires (`_termination_hardware`; neighbor KIND rides the
+  orientation cache key so kind flips refresh the pole). Every plant/battery/consumer taps
   its line at exactly ONE tile (`connection_tiles`, sorted-first); only
   the GRID CONNECTION bonds every run it touches (its model now carries a
   110/20 kV switchyard — trafo tank/fins/bushings, breaker bay, busbar
