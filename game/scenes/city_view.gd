@@ -510,9 +510,14 @@ func redraw() -> void:
 		var affected := {}
 		for pos: Vector2i in dirty:
 			affected[pos] = true
+			# TWO rings: cable LINKAGE (parallel-run rule) reads neighbors'
+			# neighbors, so a one-ring refresh could leave stale cross-wires
 			for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0),
 					Vector2i(0, 1), Vector2i(0, -1)]:
 				affected[pos + offset] = true
+				for offset2: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0),
+						Vector2i(0, 1), Vector2i(0, -1)]:
+					affected[pos + offset + offset2] = true
 		for pos: Vector2i in affected:
 			if _roads.has(pos):
 				_orient_road(pos, _roads[pos])
@@ -960,6 +965,17 @@ func _electrical_building_at(pos: Vector2i) -> bool:
 	return def.get("network", "") == "power" or def.get("device", "") != ""
 
 
+## Does the building on `building_pos` take its (single) service connection
+## from the cable at `cable_pos`? Grid connections tap everywhere; every
+## other building only at its sorted-first tile (mirrors PowerTopology).
+func _building_taps_here(building_pos: Vector2i, cable_pos: Vector2i) -> bool:
+	if not _electrical_building_at(building_pos):
+		return false
+	var id: String = City.model.building_tiles.get(building_pos, "")
+	return PowerTopology.connection_tiles(City.model, id, City.model.cables) \
+		.has(cable_pos)
+
+
 ## Is the neighbor tile part of a building of the given network? (pipe
 ## connection stubs — heat plants/exchangers, water sources/stations)
 func _network_building_at(pos: Vector2i, network: String) -> bool:
@@ -979,9 +995,11 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	var connections := "%d|" % kind
 	for i in 4:
-		if City.model.cables.has(pos + directions[i]):
+		if City.model.cables.has(pos + directions[i]) \
+				and PowerTopology.cable_linked(City.model.cables, pos,
+					pos + directions[i]):
 			connections += str(i)
-		if _electrical_building_at(pos + directions[i]):
+		if _building_taps_here(pos + directions[i], pos):
 			connections += "b%d" % i
 	var wanted := "%s|r%s@%s" % [connections,
 		City.model.roads.has(pos), _terrain_fingerprint]
@@ -998,13 +1016,16 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 	for i in 4:
 		var d := directions[i]
 		var dh := _ground_y(pos + d) - _ground_y(pos)
-		if City.model.cables.has(pos + d):
-			# half-span to the tile edge; slopes across terrain steps
+		if City.model.cables.has(pos + d) \
+				and PowerTopology.cable_linked(City.model.cables, pos, pos + d):
+			# half-span to the tile edge; slopes across terrain steps.
+			# PARALLEL runs are electrically separate — no cross-wires
+			# (the map must show what the solver sees)
 			node.add_child(_wire_segment(Vector3(0, 0.74, 0),
 				Vector3(d.x * 0.5, 0.74 + dh / 2.0, d.y * 0.5),
 				0.03, Color(0.2, 0.2, 0.22)))
-		elif _electrical_building_at(pos + d):
-			# service drop: from the crossarm down to the building's edge
+		elif _building_taps_here(pos + d, pos):
+			# service drop ONLY at the building's single chosen tap tile
 			node.add_child(_wire_segment(Vector3(0, 0.74, 0),
 				Vector3(d.x * 0.5, 0.32 + dh, d.y * 0.5),
 				0.025, Color(0.16, 0.16, 0.18)))
@@ -1036,14 +1057,16 @@ func _orient_buried(pos: Vector2i, node: Node3D, layer: Dictionary,
 			Vector3(0.2, 0.1, 0.2 - 0.14 * i)))
 	for i in 4:
 		var d := directions[i]
-		if layer.has(pos + d):
+		if layer.has(pos + d) and (network != "power"
+				or PowerTopology.cable_linked(layer, pos, pos + d)):
 			var strip := _box(Vector3(0.16 if d.y != 0 else 0.5,
 				0.025, 0.16 if d.x != 0 else 0.5), trench,
 				Vector3(d.x * 0.25, 0.012, d.y * 0.25))
 			if tint_loading:
 				strip.set_meta("wire", true)  # loading overlay tints the trench
 			node.add_child(strip)
-		elif _buried_building_target(pos + d, network):
+		elif _buried_building_target(pos + d, network) \
+				and (network != "power" or _building_taps_here(pos + d, pos)):
 			# riser box where the line comes up into the building
 			node.add_child(_box(Vector3(0.4 if d.x != 0 else 0.16, 0.025,
 				0.4 if d.y != 0 else 0.16), trench,
@@ -1927,7 +1950,81 @@ func _make_grid_connection() -> Node3D:
 			dot.position = Vector3(arm[1] * sx, arm[0] - 0.13, 0)
 			dot.material_override = _flat(Color(0.85, 0.2, 0.18))
 			node.add_child(dot)
-	node.add_child(_box(Vector3(0.5, 0.35, 0.5), Color(0.75, 0.3, 0.28), Vector3(0.55, 0.18, 0.55)))
+	# ─── 110/20 kV switchyard (user request 2026-08-02: the station must
+	# READ as the transmission link, not just a pylon on a slab) ───
+	var tank_grey := Color(0.6, 0.62, 0.65)
+	var steel_grey := Color(0.5, 0.52, 0.55)
+	# power transformer: tank, radiator fin bank, conservator drum, three
+	# HV bushings with red tips
+	var trafo := Node3D.new()
+	trafo.position = Vector3(0.52, 0, -0.48)
+	trafo.add_child(_box(Vector3(0.46, 0.32, 0.3), tank_grey, Vector3(0, 0.19, 0)))
+	for i in 5:
+		trafo.add_child(_box(Vector3(0.05, 0.26, 0.1), steel_grey,
+			Vector3(-0.18 + i * 0.09, 0.17, -0.21)))
+	var drum := MeshInstance3D.new()
+	var drum_mesh := CylinderMesh.new()
+	drum_mesh.top_radius = 0.05
+	drum_mesh.bottom_radius = 0.05
+	drum_mesh.height = 0.3
+	drum.mesh = drum_mesh
+	drum.rotation_degrees.z = 90.0
+	drum.position = Vector3(0, 0.42, 0.08)
+	drum.material_override = _flat(tank_grey)
+	trafo.add_child(drum)
+	for i in 3:
+		var bushing := MeshInstance3D.new()
+		var bushing_mesh := CylinderMesh.new()
+		bushing_mesh.top_radius = 0.014
+		bushing_mesh.bottom_radius = 0.022
+		bushing_mesh.height = 0.16
+		bushing_mesh.radial_segments = 8
+		bushing.mesh = bushing_mesh
+		bushing.position = Vector3(-0.13 + i * 0.13, 0.43, -0.06)
+		bushing.material_override = porcelain
+		trafo.add_child(bushing)
+		trafo.add_child(_box(Vector3(0.03, 0.02, 0.03), Color(0.85, 0.2, 0.18),
+			Vector3(-0.13 + i * 0.13, 0.52, -0.06)))
+	node.add_child(trafo)
+	# circuit-breaker bay: steel frame + three interrupter columns
+	var breakers := Node3D.new()
+	breakers.position = Vector3(-0.55, 0, 0.5)
+	breakers.add_child(_box(Vector3(0.5, 0.05, 0.16), steel_grey, Vector3(0, 0.1, 0)))
+	for i in 3:
+		var column := MeshInstance3D.new()
+		var column_mesh := CylinderMesh.new()
+		column_mesh.top_radius = 0.03
+		column_mesh.bottom_radius = 0.03
+		column_mesh.height = 0.3
+		column_mesh.radial_segments = 8
+		column.mesh = column_mesh
+		column.position = Vector3(-0.16 + i * 0.16, 0.27, 0)
+		column.material_override = _flat(Color(0.78, 0.8, 0.82))
+		breakers.add_child(column)
+		breakers.add_child(_box(Vector3(0.05, 0.03, 0.05), steel_grey,
+			Vector3(-0.16 + i * 0.16, 0.43, 0)))
+	node.add_child(breakers)
+	# 20 kV busbar: two posts, tube, post insulators — the outgoing side
+	for post_x: float in [0.12, 0.82]:
+		node.add_child(_box(Vector3(0.04, 0.5, 0.04), steel_grey,
+			Vector3(post_x, 0.25, 0.62)))
+	node.add_child(_box(Vector3(0.78, 0.035, 0.035), Color(0.72, 0.6, 0.35),
+		Vector3(0.47, 0.52, 0.62)))
+	for i in 3:
+		node.add_child(_box(Vector3(0.025, 0.08, 0.025), Color(0.32, 0.24, 0.2),
+			Vector3(0.22 + i * 0.25, 0.57, 0.62)))
+	# droppers: pylon arms -> breakers -> transformer -> busbar
+	node.add_child(_wire_segment(Vector3(-0.34, 1.7, 0), Vector3(-0.55, 0.45, 0.5),
+		0.02, Color(0.16, 0.16, 0.18)))
+	node.add_child(_wire_segment(Vector3(-0.55, 0.45, 0.5), Vector3(0.39, 0.5, -0.54),
+		0.02, Color(0.16, 0.16, 0.18)))
+	node.add_child(_wire_segment(Vector3(0.52, 0.5, -0.42), Vector3(0.47, 0.55, 0.6),
+		0.02, Color(0.16, 0.16, 0.18)))
+	# compact station house (protection + telecontrol)
+	node.add_child(_box(Vector3(0.34, 0.26, 0.3), Color(0.75, 0.3, 0.28),
+		Vector3(-0.6, 0.13, -0.55)))
+	node.add_child(_box(Vector3(0.36, 0.04, 0.32), Color(0.5, 0.22, 0.2),
+		Vector3(-0.6, 0.28, -0.55)))
 	return node
 
 

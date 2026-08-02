@@ -1962,10 +1962,11 @@ func _smoke_maintenance() -> void:
 		return
 	City.reset_for_scenario(42)
 	City.growth_enabled = false
-	# evening import (30 houses incl. EV charging) crosses 80% of 100 kW well
-	# before the trafo trips — the signal precedes the failure, and the
-	# 110/20 kV interface itself never trips in this smoke
-	City.grid_capacity_override = 100.0
+	# evening import (30 houses incl. 22-kW EV charging peaks ~141 kW since
+	# the LPG demand rework) crosses 80% of 160 kW well before the trafo
+	# trips — the signal precedes the failure, and the 110/20 kV interface
+	# itself never trips in this smoke (grid trips at 100% sustained)
+	City.grid_capacity_override = 160.0
 	City.place_building("grid_connection", Vector2i(6, 4))
 	for x in range(8, 33):
 		City.build_cable(Vector2i(x, 5))

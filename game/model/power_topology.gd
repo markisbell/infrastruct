@@ -52,6 +52,44 @@ var has_slack := false
 var warnings: Array[String] = []
 
 
+## Two adjacent cable tiles carry current unless they are PARALLEL RUNS
+## touching sideways (user correction 2026-08-02: two lines laid side by
+## side must not short together): a strictly straight mid-run tile stays
+## CLOSED toward a lateral contact; ends, corners and junction tiles stay
+## open. A T-tap is therefore built by ending the new run INTO the old
+## one. (3+ tightly stacked parallel runs still bond — leave a gap.)
+static func cable_linked(cable: Dictionary, a: Vector2i, b: Vector2i) -> bool:
+	var d := b - a
+	return not (_closed_toward(cable, a, d) and _closed_toward(cable, b, -d))
+
+
+static func _closed_toward(cable: Dictionary, pos: Vector2i, d: Vector2i) -> bool:
+	var perp := Vector2i(d.y, d.x)
+	return (cable.has(pos + perp) or cable.has(pos - perp)) \
+		and not cable.has(pos - d)
+
+
+## The cable tiles a building actually taps: ALL adjacent runs for the
+## grid connection (the 110/20 kV station bonds everything it touches),
+## exactly ONE (sorted-first) for every other plant, battery or consumer
+## (user correction 2026-08-02: single service connection per building).
+static func connection_tiles(model: WorldModel, id: String,
+		cable: Dictionary) -> Array[Vector2i]:
+	var entry: Dictionary = model.buildings[id]
+	var adjacent := {}
+	for tile: Vector2i in BuildingDefs.footprint(entry["kind"], entry["anchor"]):
+		for offset: Vector2i in NEIGHBORS:
+			var n: Vector2i = tile + offset
+			if cable.has(n):
+				adjacent[n] = true
+	var out: Array[Vector2i] = []
+	out.assign(adjacent.keys())
+	out.sort()
+	if entry["kind"] != "grid_connection" and out.size() > 1:
+		out.resize(1)
+	return out
+
+
 static func build(model: WorldModel, tripped: Dictionary) -> PowerTopology:
 	var topo := PowerTopology.new()
 	topo._build(model, tripped)
@@ -69,17 +107,13 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	# adjacent to SEVERAL buildings serves them ALL — the first id names the
 	# bus, the rest attach through short service edges below (first-wins
 	# used to silently orphan every later neighbor of a shared tile)
-	var tile_buildings := {}  # cable tile -> Array[String] (adjacent buildings)
+	var tile_buildings := {}  # cable tile -> Array[String] (tapping buildings)
 	for id: String in model.buildings:
-		var entry: Dictionary = model.buildings[id]
-		for tile: Vector2i in BuildingDefs.footprint(entry["kind"], entry["anchor"]):
-			for offset: Vector2i in NEIGHBORS:
-				var n: Vector2i = tile + offset
-				if cable.has(n):
-					if not tile_buildings.has(n):
-						tile_buildings[n] = []
-					if not (tile_buildings[n] as Array).has(id):
-						tile_buildings[n].append(id)
+		for n: Vector2i in connection_tiles(model, id, cable):
+			if not tile_buildings.has(n):
+				tile_buildings[n] = []
+			if not (tile_buildings[n] as Array).has(id):
+				tile_buildings[n].append(id)
 	var bus_tiles := {}  # tile -> bus key (building id or "j:x,y")
 	for pos: Vector2i in cable:
 		if tile_buildings.has(pos):
@@ -93,7 +127,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	for pos: Vector2i in bus_tiles:
 		for offset: Vector2i in NEIGHBORS:
 			var step: Vector2i = pos + offset
-			if not cable.has(step):
+			if not cable.has(step) or not cable_linked(cable, pos, step):
 				continue
 			var seg_key := "%s>%s" % [pos, step]
 			if walked.has(seg_key):
@@ -107,7 +141,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 				var nxt := Vector2i(99999, 99999)
 				for o2: Vector2i in NEIGHBORS:
 					var cand: Vector2i = cur + o2
-					if cand != prev and cable.has(cand):
+					if cand != prev and cable.has(cand) \
+							and cable_linked(cable, cur, cand):
 						nxt = cand
 						break
 				if nxt.x == 99999:
@@ -277,7 +312,8 @@ func _assign_houses(model: WorldModel) -> void:
 static func _degree(cable: Dictionary, pos: Vector2i) -> int:
 	var degree := 0
 	for offset: Vector2i in NEIGHBORS:
-		if cable.has(pos + offset):
+		var n := pos + offset
+		if cable.has(n) and cable_linked(cable, pos, n):
 			degree += 1
 	return degree
 
@@ -288,7 +324,8 @@ static func _degree(cable: Dictionary, pos: Vector2i) -> int:
 static func _kind_transition(cable: Dictionary, pos: Vector2i) -> bool:
 	for offset: Vector2i in NEIGHBORS:
 		var n: Vector2i = pos + offset
-		if cable.has(n) and cable[n] > cable[pos]:
+		if cable.has(n) and cable[n] > cable[pos] \
+				and cable_linked(cable, pos, n):
 			return true
 	return false
 

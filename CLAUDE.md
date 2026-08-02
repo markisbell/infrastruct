@@ -84,7 +84,18 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   pipes have surface + buried builds too. Buried lines cross under ROADS
   (manhole plates) and share street cross-sections; NOTHING runs under
   houses/buildings; roads may pave over buried-only tiles; kind transitions
-  become junction buses (one per joint).
+  become junction buses (one per joint). PARALLEL RULE (2026-08-02, user
+  correction): two runs laid side by side DON'T short —
+  `PowerTopology.cable_linked` keeps strictly-straight lateral contacts
+  open (to tap, END the new run INTO the target = T-junction; 3+ tightly
+  stacked runs still bond, leave a gap). Every plant/battery/consumer taps
+  its line at exactly ONE tile (`connection_tiles`, sorted-first); only
+  the GRID CONNECTION bonds every run it touches (its model now carries a
+  110/20 kV switchyard — trafo tank/fins/bushings, breaker bay, busbar
+  portal, droppers — so the link READS as one). The renderer shares both
+  predicates (wire spans, service drops, buried strips/risers), and the
+  dirty-tile fast path refreshes TWO rings — linkage reads neighbors'
+  neighbors, one ring left stale cross-wires.
 - **Ratings semantics** (user corrections): grid connection = 110/20 kV,
   20 MVA; substation = 20/0.4 kV Ortsnetzstation, 630 kVA (150-house zones);
   wind turbine 3 MW each, 1x1, ROUND pad (user direction 2026-07-31: farms

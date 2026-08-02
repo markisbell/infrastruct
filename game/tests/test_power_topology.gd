@@ -18,6 +18,61 @@ func _town() -> WorldModel:
 	return model
 
 
+func test_parallel_runs_do_not_short() -> void:
+	# two lines laid side by side must not connect (user correction): the
+	# second run stays a separate circuit and its substation stays dark
+	var model := WorldModel.new()
+	model.place_building("grid_connection", Vector2i(0, 0))
+	for x in range(2, 11):
+		model.set_cable(Vector2i(x, 0), 1)
+	for x in range(4, 11):
+		model.set_cable(Vector2i(x, 1), 1)  # directly beside the first run
+	var sub := model.place_building("substation", Vector2i(11, 1))
+	var topo := PowerTopology.build(model, {})
+	assert_bool(topo.connected.get(sub, true)).is_false()
+
+
+func test_t_tap_connects() -> void:
+	# ending a run INTO another one is the junction gesture — that bonds
+	var model := WorldModel.new()
+	model.place_building("grid_connection", Vector2i(0, 0))
+	for x in range(2, 11):
+		model.set_cable(Vector2i(x, 0), 1)
+	for y in range(1, 5):
+		model.set_cable(Vector2i(6, y), 1)
+	var sub := model.place_building("substation", Vector2i(6, 5))
+	var topo := PowerTopology.build(model, {})
+	assert_bool(topo.connected.get(sub, false)).is_true()
+
+
+func test_single_tap_does_not_bridge_runs() -> void:
+	# a plant touching two separate runs taps only ONE (sorted-first) and
+	# must not act as a jumper between them
+	var model := WorldModel.new()
+	model.place_building("grid_connection", Vector2i(0, 0))
+	for x in range(2, 11):
+		model.set_cable(Vector2i(x, 0), 1)   # energized run
+		model.set_cable(Vector2i(x, 2), 1)   # separate run one row below
+	var battery := model.place_building("battery", Vector2i(10, 1))
+	var sub := model.place_building("substation", Vector2i(2, 3))
+	var topo := PowerTopology.build(model, {})
+	assert_bool(topo.connected.get(battery, false)).is_true()
+	assert_bool(topo.connected.get(sub, true)).is_false()
+
+
+func test_grid_connection_taps_all_adjacent_runs() -> void:
+	# the 110/20 kV station is the ONE building allowed multiple line
+	# connections — both runs energize through it
+	var model := WorldModel.new()
+	model.place_building("grid_connection", Vector2i(0, 0))
+	for x in range(2, 11):
+		model.set_cable(Vector2i(x, 0), 1)
+		model.set_cable(Vector2i(x, 1), 1)
+	var sub := model.place_building("substation", Vector2i(11, 1))
+	var topo := PowerTopology.build(model, {})
+	assert_bool(topo.connected.get(sub, false)).is_true()
+
+
 func test_simple_town_extraction() -> void:
 	var topo := PowerTopology.build(_town(), {})
 	assert_bool(topo.has_slack).is_true()
