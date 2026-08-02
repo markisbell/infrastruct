@@ -52,6 +52,20 @@ func test_weekend_shape_differs() -> void:
 	assert_float(diff).is_greater(3.0)  # sunday is a genuinely different day
 
 
+func test_pv_park_orientation() -> void:
+	# rot 0 = south = EXACTLY the plain availability (pre-existing parks
+	# keep their yield); north is starved; east out-produces west in the
+	# morning (the curve shifts toward the sun's side of the day)
+	var noon := _t(135, 12.5)
+	var morning := _t(135, 9.0)
+	var south := DemandModel.pv_park_availability(noon, 0)
+	assert_float(south).is_equal_approx(DemandModel.pv_availability(noon), 0.0001)
+	assert_float(south).is_greater(0.1)
+	assert_float(DemandModel.pv_park_availability(noon, 2)).is_less(south * 0.6)
+	assert_float(DemandModel.pv_park_availability(morning, 3)) \
+		.is_greater(DemandModel.pv_park_availability(morning, 1))
+
+
 func test_water_summer_exceeds_winter() -> void:
 	# same clock hour, seasonal swing + hot-day surcharge
 	var summer := DemandModel.water_zone_demand_m3h(10, _t(133, 11.0), 28.0)

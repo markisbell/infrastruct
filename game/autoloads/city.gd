@@ -649,9 +649,11 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 			"pv":
 				# solar parks follow the REAL measured day shapes (rtpowerflow
 				# real_pv_days via the profile pack) — the same sun that drives
-				# the households' rooftop PV in the zone composition
+				# the households' rooftop PV — scaled/shifted by the park's
+				# FACING (rot 0 = south = optimal; E/W spread the day, N starves)
 				var p: float = 0.0 if down else float(params["p_rated_kw"]) \
-					* DemandModel.pv_availability(t)
+					* DemandModel.pv_park_availability(t, int(model.buildings
+						.get(device["id"], {}).get("rot", 0)))
 				out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
 				renewable += p
 			"battery":

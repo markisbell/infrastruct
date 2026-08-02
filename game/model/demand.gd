@@ -115,6 +115,28 @@ static func ev_factor(t: int) -> float:
 ## shapes are time-compressed toward noon (a 4-pm winter sunset), otherwise
 ## a January evening would still show phantom summer sun.
 
+## Solar-park orientation (2026-08-02): building `rot` is MEANINGFUL for
+## parks — rot 0 faces SOUTH (+Z, the noon sun; optimal and the default,
+## so every pre-existing placement keeps its old yield), CCW quarter
+## turns map 1=W, 2=N, 3=E. East/West shift the day curve by ∓1.5 h at
+## ~12 % loss (the same ±1.5 h rtpowerflow's orientation mix uses);
+## North is diffuse-only. Rooftop fleets stay pv_availability (mixed
+## orientations are already priced into the measured shapes).
+const PV_ROT_FACING: Array[String] = ["S", "W", "N", "E"]
+
+
+static func pv_park_availability(t: int, rot: int) -> float:
+	match PV_ROT_FACING[((rot % 4) + 4) % 4]:
+		"E":
+			return 0.88 * pv_availability(t + 6)
+		"W":
+			return 0.88 * pv_availability(maxi(t - 6, 0))
+		"N":
+			return 0.50 * pv_availability(t)
+		_:
+			return pv_availability(t)
+
+
 ## Injected by City (and re-injected on scenario start + save-load, where
 ## the WeatherSystem is recreated with the scenario's seed).
 static var weather: WeatherSystem = null

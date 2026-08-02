@@ -108,6 +108,13 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   composition, on REAL measured rtpowerflow day
   shapes, seasonal-scaled). A full 150-house zone incl. 50 % EV now peaks
   ~112 % of its 630 kVA station — tense by design, trips only past 120 %.
+  SOLAR-PARK FACING (2026-08-02, user request): building `rot` is
+  MEANINGFUL for parks — `DemandModel.pv_park_availability(t, rot)`:
+  rot 0 = SOUTH (+Z) = plain availability (pre-existing placements keep
+  their yield; smokes stay bit-identical), CCW 1=W/2=N/3=E; E/W shift
+  the curve ∓1.5 h at 12 % loss (rtpowerflow's own orientation-mix
+  numbers), N = 0.5× diffuse-only. Panel meshes tilt toward +Z at rot 0;
+  the palette desc + inspector subtitle ("facing S/W/N/E") carry it.
   HEAT DHW (2026-08-02): the DHW day shape comes from LPG WARM-WATER runs
   of the SAME 8 households (committed cache
   `tools/profiles/lpg_dhw_library.json`, regeneration recipe in
@@ -300,7 +307,12 @@ re-verified green).
 - **Renderer is Forward+ since the graphics pass (2026-07-30)** — SSAO,
   soft shadows, ACES, sky ambient, animated water shader. DAY/NIGHT cycle
   follows the game clock (`_update_daylight`: sun arc/energy/color, sky +
-  fog colors, dusk glow; nights dim blue, never black); CLOUDS drift with
+  fog colors, dusk glow; nights dim blue, never black; since 2026-08-02
+  the azimuth sweeps a REAL half circle — rise E(−X), noon S(+Z), set
+  W(+X) — the old ±45° quadrant made sun direction meaningless for the
+  COMPASS: hud `CompassRose`, letters PROJECTED through the live ortho
+  camera so Q/E rotation can't lie, gold dot = live sun azimuth via
+  `city_view.sun_dir_world()`); CLOUDS drift with
   the wind (smooth alpha puffs + invisible SHADOWS_ONLY twins — alpha-hash
   cast shadows but dithered; unshaded overlays glow at night, keep them
   shaded). WIND DIRECTION (2026-07-31): `WeatherSystem.wind_dir_rad` (slow

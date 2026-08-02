@@ -244,6 +244,7 @@ func _build_environment() -> void:
 var _clouds: Array[Node3D] = []
 const CLOUD_COUNT := 26
 var _brightness := 1.0  # daylight brightness from _update_daylight
+var _daylight := 1.0    # raw daylight window (compass hides its sun at night)
 
 
 ## Window lights fade in as evening falls; every household keeps its own
@@ -285,11 +286,15 @@ func _update_daylight() -> void:
 	_sun.light_energy = lerpf(0.28, 1.5, brightness)
 	var day_color := Color(1.0, 0.965, 0.89).lerp(Color(1.0, 0.62, 0.38), dusk)
 	_sun.light_color = Color(0.62, 0.7, 0.95).lerp(day_color, brightness)
-	# the sun ARCS: shallow at dawn/dusk, high at noon; azimuth sweeps east
-	# to west across the day (at night it parks as faint moonlight)
+	# the sun ARCS: shallow at dawn/dusk, high at noon; azimuth sweeps a
+	# REAL half circle — rise EAST (-X), noon SOUTH (+Z), set WEST (+X) —
+	# so the compass and solar-park facing can be trusted (the old ±45°
+	# quadrant sweep made "sun direction" meaningless). At night it parks
+	# as faint moonlight.
+	_daylight = daylight
 	_sun.rotation_degrees.x = -lerpf(10.0, 52.0, daylight)
 	if daylight > 0.0:
-		_sun.rotation_degrees.y = lerpf(-75.0, 15.0,
+		_sun.rotation_degrees.y = lerpf(-90.0, 90.0,
 			clampf((hour - 5.5) / 14.0, 0.0, 1.0))
 	_env.ambient_light_energy = lerpf(0.32, 0.75, brightness)
 	# fog must darken with the sky — daylight-colored fog washed the night
@@ -432,6 +437,15 @@ func _drift_clouds(delta: float) -> void:
 		arrow.position = Vector3(
 			origin.x + fposmod(base.x + _wind_drift.x, extent), 9.5,
 			origin.y + fposmod(base.y + _wind_drift.y, extent))
+
+
+## Horizontal world direction the sun sits in (XZ unit vector), ZERO at
+## night — the HUD compass paints its sun marker from this.
+func sun_dir_world() -> Vector3:
+	if _sun == null or _daylight <= 0.0:
+		return Vector3.ZERO
+	var yaw := deg_to_rad(_sun.rotation_degrees.y)
+	return Vector3(sin(yaw), 0.0, cos(yaw))
 
 
 func _place_camera() -> void:
@@ -1672,7 +1686,8 @@ func _make_solar_park() -> Node3D:
 			mount.add_child(pole)
 			var assembly := Node3D.new()
 			assembly.position.y = 0.26
-			assembly.rotation_degrees.x = -30
+			# +30: panels face +Z = SOUTH at rot 0 (facing is gameplay now)
+			assembly.rotation_degrees.x = 30
 			# silver frame slab, blue modules on top with gridline gaps
 			assembly.add_child(_box(Vector3(0.52, 0.014, 0.36), silver, Vector3.ZERO))
 			for mx in 3:
