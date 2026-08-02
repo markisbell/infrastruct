@@ -65,14 +65,13 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		if not _relevant(model, id):
 			continue
 		var entry: Dictionary = model.buildings[id]
-		for tile: Vector2i in BuildingDefs.footprint(entry["kind"], entry["anchor"]):
-			for offset: Vector2i in NEIGHBORS:
-				var n: Vector2i = tile + offset
-				if pipe.has(n):
-					if not tile_buildings.has(n):
-						tile_buildings[n] = []
-					if not (tile_buildings[n] as Array).has(id):
-						tile_buildings[n].append(id)
+		# single service connection per building (user correction
+		# 2026-08-02) — same rule as power, no multi-tap exception here
+		for n: Vector2i in PowerTopology.connection_tiles(model, id, pipe):
+			if not tile_buildings.has(n):
+				tile_buildings[n] = []
+			if not (tile_buildings[n] as Array).has(id):
+				tile_buildings[n].append(id)
 	var bus_tiles := {}
 	for pos: Vector2i in pipe:
 		if tile_buildings.has(pos):
@@ -86,7 +85,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	for pos: Vector2i in bus_tiles:
 		for offset: Vector2i in NEIGHBORS:
 			var step: Vector2i = pos + offset
-			if not pipe.has(step) or walked.has("%s>%s" % [pos, step]):
+			if not pipe.has(step) or not PowerTopology.cable_linked(pipe, pos, step) \
+					or walked.has("%s>%s" % [pos, step]):
 				continue
 			var path: Array[Vector2i] = [pos]
 			var prev := pos
@@ -97,7 +97,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 				var nxt := Vector2i(99999, 99999)
 				for o2: Vector2i in NEIGHBORS:
 					var cand: Vector2i = cur + o2
-					if cand != prev and pipe.has(cand):
+					if cand != prev and pipe.has(cand) \
+							and PowerTopology.cable_linked(pipe, cur, cand):
 						nxt = cand
 						break
 				if nxt.x == 99999:
@@ -267,7 +268,8 @@ func _assign_houses(model: WorldModel) -> void:
 static func _degree(pipe: Dictionary, pos: Vector2i) -> int:
 	var degree := 0
 	for offset: Vector2i in NEIGHBORS:
-		if pipe.has(pos + offset):
+		var n := pos + offset
+		if pipe.has(n) and PowerTopology.cable_linked(pipe, pos, n):
 			degree += 1
 	return degree
 

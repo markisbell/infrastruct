@@ -95,7 +95,12 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   portal, droppers — so the link READS as one). The renderer shares both
   predicates (wire spans, service drops, buried strips/risers), and the
   dirty-tile fast path refreshes TWO rings — linkage reads neighbors'
-  neighbors, one ring left stale cross-wires.
+  neighbors, one ring left stale cross-wires. HEAT/WATER PIPES follow the
+  SAME rules (2026-08-02, user correction): parallel runs don't join, one
+  tap per building, NO multi-tap exception (a mid-run tap still leaves
+  the trunk through-going, which the heat backend requires — only
+  stub-ends are dead ends); `PowerTopology.cable_linked`/
+  `connection_tiles` are layer-agnostic and shared by all three.
 - **Ratings semantics** (user corrections): grid connection = 110/20 kV,
   20 MVA; substation = 20/0.4 kV Ortsnetzstation, 630 kVA (150-house zones);
   wind turbine 3 MW each, 1x1, ROUND pad (user direction 2026-07-31: farms

@@ -73,6 +73,38 @@ func test_grid_connection_taps_all_adjacent_runs() -> void:
 	assert_bool(topo.connected.get(sub, false)).is_true()
 
 
+func test_heat_parallel_runs_do_not_join() -> void:
+	# same rule as power (user correction): a parallel heat run beside the
+	# trunk stays a separate hydraulic circuit; ending INTO the trunk taps
+	var model := WorldModel.new()
+	model.place_building("boiler_plant", Vector2i(0, 0))  # 2x2, taps (2,0)-run
+	for x in range(2, 11):
+		model.set_heat_pipe(Vector2i(x, 0), 1)
+	for x in range(4, 11):
+		model.set_heat_pipe(Vector2i(x, 1), 1)  # parallel, directly beside
+	var ex := model.place_building("heat_exchanger", Vector2i(11, 1))
+	var topo := HeatTopology.build(model, {})
+	assert_bool(topo.connected.get(ex, true)).is_false()
+	# T-tap: a spur ending INTO the trunk connects a second exchanger
+	for y in range(1, 4):
+		model.set_heat_pipe(Vector2i(6, y), 1)
+	var ex2 := model.place_building("heat_exchanger", Vector2i(6, 4))
+	var topo2 := HeatTopology.build(model, {})
+	assert_bool(topo2.connected.get(ex2, false)).is_true()
+
+
+func test_water_parallel_runs_do_not_join() -> void:
+	var model := WorldModel.new()
+	model.place_building("water_tower", Vector2i(0, 0))
+	for x in range(1, 11):
+		model.set_water_pipe(Vector2i(x, 0), 1)
+	for x in range(3, 11):
+		model.set_water_pipe(Vector2i(x, 1), 1)  # parallel run
+	var station := model.place_building("water_station", Vector2i(11, 1))
+	var topo := WaterTopology.build(model, {})
+	assert_bool(topo.connected.get(station, true)).is_false()
+
+
 func test_simple_town_extraction() -> void:
 	var topo := PowerTopology.build(_town(), {})
 	assert_bool(topo.has_slack).is_true()

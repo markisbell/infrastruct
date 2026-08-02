@@ -961,6 +961,18 @@ func _wire_segment(from: Vector3, to: Vector3, thickness: float,
 
 ## Is the neighbor tile part of a building that belongs on the grid —
 ## power buildings, or any coupled plant (heat pumps, water pumps...)?
+## Single-tap check for heat/water service stubs — pipes tap a building at
+## ONE tile too (PowerTopology.connection_tiles is layer-agnostic).
+func _network_taps_here(building_pos: Vector2i, network: String,
+		pipe_pos: Vector2i) -> bool:
+	if not _network_building_at(building_pos, network):
+		return false
+	var id: String = City.model.building_tiles.get(building_pos, "")
+	var layer: Dictionary = City.model.heat_pipes if network == "heat" \
+		else City.model.water_pipes
+	return PowerTopology.connection_tiles(City.model, id, layer).has(pipe_pos)
+
+
 func _electrical_building_at(pos: Vector2i) -> bool:
 	var id: String = City.model.building_tiles.get(pos, "")
 	if id == "":
@@ -1061,8 +1073,8 @@ func _orient_buried(pos: Vector2i, node: Node3D, layer: Dictionary,
 			Vector3(0.2, 0.1, 0.2 - 0.14 * i)))
 	for i in 4:
 		var d := directions[i]
-		if layer.has(pos + d) and (network != "power"
-				or PowerTopology.cable_linked(layer, pos, pos + d)):
+		if layer.has(pos + d) \
+				and PowerTopology.cable_linked(layer, pos, pos + d):
 			var strip := _box(Vector3(0.16 if d.y != 0 else 0.5,
 				0.025, 0.16 if d.x != 0 else 0.5), trench,
 				Vector3(d.x * 0.25, 0.012, d.y * 0.25))
@@ -1070,7 +1082,8 @@ func _orient_buried(pos: Vector2i, node: Node3D, layer: Dictionary,
 				strip.set_meta("wire", true)  # loading overlay tints the trench
 			node.add_child(strip)
 		elif _buried_building_target(pos + d, network) \
-				and (network != "power" or _building_taps_here(pos + d, pos)):
+				and (_building_taps_here(pos + d, pos) if network == "power"
+					else _network_taps_here(pos + d, network, pos)):
 			# riser box where the line comes up into the building
 			node.add_child(_box(Vector3(0.4 if d.x != 0 else 0.16, 0.025,
 				0.4 if d.y != 0 else 0.16), trench,
@@ -1105,9 +1118,11 @@ func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
 	var connections := "%d|" % kind
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	for i in 4:
-		if City.model.heat_pipes.has(pos + directions[i]):
+		if City.model.heat_pipes.has(pos + directions[i]) \
+				and PowerTopology.cable_linked(City.model.heat_pipes, pos,
+					pos + directions[i]):
 			connections += str(i)
-		elif _network_building_at(pos + directions[i], "heat"):
+		elif _network_taps_here(pos + directions[i], "heat", pos):
 			connections += "b%d" % i
 	var wanted := "%s|r%s@%s" % [connections,
 		City.model.roads.has(pos), _terrain_fingerprint]
@@ -1126,9 +1141,11 @@ func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
 	var any_connection := false
 	for i in 4:
 		var d := directions[i]
+		var joined: bool = City.model.heat_pipes.has(pos + d) \
+			and PowerTopology.cable_linked(City.model.heat_pipes, pos, pos + d)
 		var to_building: bool = not City.model.heat_pipes.has(pos + d) \
-			and _network_building_at(pos + d, "heat")
-		if not City.model.heat_pipes.has(pos + d) and not to_building:
+			and _network_taps_here(pos + d, "heat", pos)
+		if not joined and not to_building:
 			continue
 		any_connection = true
 		if to_building:
@@ -1189,9 +1206,11 @@ func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
 	var connections := "%d|" % kind
 	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
 	for i in 4:
-		if City.model.water_pipes.has(pos + directions[i]):
+		if City.model.water_pipes.has(pos + directions[i]) \
+				and PowerTopology.cable_linked(City.model.water_pipes, pos,
+					pos + directions[i]):
 			connections += str(i)
-		elif _network_building_at(pos + directions[i], "water"):
+		elif _network_taps_here(pos + directions[i], "water", pos):
 			connections += "b%d" % i
 	var wanted := "%s|r%s@%s" % [connections,
 		City.model.roads.has(pos), _terrain_fingerprint]
@@ -1209,9 +1228,11 @@ func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
 	var any_connection := false
 	for i in 4:
 		var d := directions[i]
+		var joined: bool = City.model.water_pipes.has(pos + d) \
+			and PowerTopology.cable_linked(City.model.water_pipes, pos, pos + d)
 		var to_building: bool = not City.model.water_pipes.has(pos + d) \
-			and _network_building_at(pos + d, "water")
-		if not City.model.water_pipes.has(pos + d) and not to_building:
+			and _network_taps_here(pos + d, "water", pos)
+		if not joined and not to_building:
 			continue
 		any_connection = true
 		if to_building:
