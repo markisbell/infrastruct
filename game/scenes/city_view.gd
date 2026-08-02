@@ -249,6 +249,13 @@ var _clouds: Array[Node3D] = []
 const CLOUD_COUNT := 26
 var _brightness := 1.0  # daylight brightness from _update_daylight
 var _daylight := 1.0    # raw daylight window (compass hides its sun at night)
+## The sun rotates in DISCRETE steps: a continuously creeping light
+## re-fits the shadow map every frame and every shadow edge texel crawls
+## ("flickering", user reports x2 — filter quality alone cannot hide it).
+## Snapped to a fixed grid the map is rock-stable between steps; one
+## 0.75-degree jump is invisible next to continuous shimmer. Colors and
+## energy stay continuous — only the ROTATION shifts texels.
+const SUN_QUANT_DEG := 0.75
 
 
 ## Window lights fade in as evening falls; every household keeps its own
@@ -296,10 +303,11 @@ func _update_daylight() -> void:
 	# quadrant sweep made "sun direction" meaningless). At night it parks
 	# as faint moonlight.
 	_daylight = daylight
-	_sun.rotation_degrees.x = -lerpf(10.0, 52.0, daylight)
+	_sun.rotation_degrees.x = -snappedf(lerpf(10.0, 52.0, daylight),
+		SUN_QUANT_DEG)
 	if daylight > 0.0:
-		_sun.rotation_degrees.y = lerpf(-90.0, 90.0,
-			clampf((hour - 5.5) / 14.0, 0.0, 1.0))
+		_sun.rotation_degrees.y = snappedf(lerpf(-90.0, 90.0,
+			clampf((hour - 5.5) / 14.0, 0.0, 1.0)), SUN_QUANT_DEG)
 	_env.ambient_light_energy = lerpf(0.32, 0.75, brightness)
 	# fog must darken with the sky — daylight-colored fog washed the night
 	# scene in a bright teal haze
