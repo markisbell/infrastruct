@@ -170,7 +170,14 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   `build_path`, `WorldModel.can_set_*` dry-runs). Building ghosts: R
   rotates, F flips (`flip` serialized additively, visual-only like rot).
   Builders validate-then-pay (the old pay-first order leaked money on
-  blocked tiles).
+  blocked tiles). DEAD-LOT overlay (2026-08-02): zoned lots that can't
+  take a house RIGHT NOW (no same-height road — cliff edges!, a line
+  across, paved over) tint AMBER instead of green;
+  `WorldModel.lot_buildable` is the ONE predicate shared by growth,
+  `spawn_candidates` and the overlay (a cliff-side zoning strip stalled a
+  real town at 3 houses for 120 days with zero feedback), and `_grow`
+  tries candidates in order trusting spawn_house's verdict instead of
+  firing-and-forgetting the first one.
 - **Inspector**: left-click with no tool → daily profile graph in rtpowerflow's
   ProfileGraph conventions (0–24 h, 2 h ticks, unit y-axis, staircase, dashed
   limits, now marker, yesterday faded, hover readout). HOUSES are clickable

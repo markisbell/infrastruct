@@ -1340,12 +1340,13 @@ func _grow(t: int) -> void:
 		var info: Dictionary = topo.zones_info[zone_id]
 		if not zone_supplied.get(zone_id, false) or info["houses"] >= capacity:
 			continue
-		var candidates := model.spawn_candidates(info["center"], radius)
-		if not candidates.is_empty():
-			model.spawn_house(candidates[0])
-			_refresh_topo_assignment()
-			world_changed.emit()
-			return  # one house per growth tick, city-wide
+		# try candidates in order and trust spawn_house's verdict — a stale
+		# or disagreeing first candidate must not stall growth forever
+		for pos: Vector2i in model.spawn_candidates(info["center"], radius):
+			if model.spawn_house(pos):
+				_refresh_topo_assignment()
+				world_changed.emit()
+				return  # one house per growth tick, city-wide
 
 
 ## Spare-margin gate: nobody moves into a town running at its limits.

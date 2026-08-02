@@ -172,13 +172,19 @@ func remove_zone(pos: Vector2i) -> void:
 	zoning.erase(pos)
 
 
+## Shared buildability predicate — growth, the spawn-candidate list and the
+## zone overlay must agree on whether a lot can take a house RIGHT NOW.
+## Lines may legally cross ZONED land, but a house must never grow on top
+## of one (playtest-monkey finding); road access needs the same terrain
+## height (no driveway up a cliff — a mismatch stalled a real town).
+func lot_buildable(pos: Vector2i) -> bool:
+	return zoning.has(pos) and not houses.has(pos) and not roads.has(pos) \
+		and not cables.has(pos) and not heat_pipes.has(pos) \
+		and not water_pipes.has(pos) and _adjacent_to_road(pos)
+
+
 func spawn_house(pos: Vector2i) -> bool:
-	# lines may legally cross ZONED land — but a house must never grow on
-	# top of one (playtest-monkey finding: drag a cable over a zoned row,
-	# growth put houses on the cable tiles)
-	if not zoning.has(pos) or houses.has(pos) or not _adjacent_to_road(pos) \
-			or roads.has(pos) or cables.has(pos) or heat_pipes.has(pos) \
-			or water_pipes.has(pos):
+	if not lot_buildable(pos):
 		return false
 	houses[pos] = {"level": 1}
 	return true
@@ -243,12 +249,9 @@ func _adjacent_to_road(pos: Vector2i) -> bool:
 func spawn_candidates(center: Vector2i, radius: int) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	for pos: Vector2i in zoning:
-		if houses.has(pos) or cables.has(pos) or heat_pipes.has(pos) \
-				or water_pipes.has(pos):
-			continue  # a line crossing zoned land blocks that lot
 		if absi(pos.x - center.x) + absi(pos.y - center.y) > radius:
 			continue
-		if _adjacent_to_road(pos):
+		if lot_buildable(pos):
 			out.append(pos)
 	out.sort()  # deterministic order for seeded growth
 	return out

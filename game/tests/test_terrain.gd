@@ -69,6 +69,21 @@ func test_house_needs_same_height_road() -> void:
 	assert_bool(model.spawn_house(Vector2i(3, 4))).is_true()
 
 
+func test_spawn_candidates_agree_with_lot_buildable() -> void:
+	# growth list, spawn_house and the zone overlay share ONE predicate: a
+	# cliff-side lot must never be offered as a candidate (nor tinted green)
+	var model := WorldModel.new()
+	model.terrain.force_height(Vector2i(3, 3), Vector2i(3, 3), 1)
+	model.set_road(Vector2i(3, 3))       # road up on the ledge only
+	model.set_zone(Vector2i(3, 4))
+	assert_bool(model.lot_buildable(Vector2i(3, 4))).is_false()
+	assert_array(model.spawn_candidates(Vector2i(3, 4), 5)).is_empty()
+	model.set_road(Vector2i(2, 4))       # road on the lot's own level
+	assert_bool(model.lot_buildable(Vector2i(3, 4))).is_true()
+	assert_array(model.spawn_candidates(Vector2i(3, 4), 5)) \
+		.contains([Vector2i(3, 4)])
+
+
 func test_water_junction_elevation_from_terrain() -> void:
 	var model := WorldModel.new()
 	model.terrain.force_height(Vector2i(0, 4), Vector2i(2, 6), 3)  # 15 m hill

@@ -470,6 +470,14 @@ func redraw() -> void:
 	_diff(_water_pipes, model.water_pipes, _make_water_pipe)
 	_diff(_houses, model.houses, _make_house)
 	_diff(_buildings, model.buildings, _make_building)
+	# zoned lots that cannot take a house right now (no same-height road,
+	# a line across, paved over) glow amber instead of green — cliff-locked
+	# zoning used to stall growth with no visible reason (_flat caches the
+	# two materials, so this pass only swaps references)
+	for pos: Vector2i in _zones:
+		var dead: bool = not model.houses.has(pos) and not model.lot_buildable(pos)
+		(_zones[pos] as MeshInstance3D).material_override = _flat(
+			Color(0.95, 0.55, 0.12, 0.22) if dead else Color(0.45, 0.8, 0.4, 0.10), true)
 	# neighbor-dependent pieces refresh in place. When City hands us the
 	# tiles it touched, re-orient only those + neighbors — the full pass is
 	# O(city) per placed tile and stalled drags ~36 ms on a modest town.
