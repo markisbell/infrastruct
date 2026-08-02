@@ -550,7 +550,36 @@ func _diff(nodes: Dictionary, source: Dictionary, maker: Callable) -> void:
 # ─── terrain (stepped plateaus, one static ArrayMesh, rebuilt on change) ───
 
 func _ground_y(pos: Vector2i) -> float:
-	return City.model.terrain.visual_y(pos)
+	var terrain: Terrain = City.model.terrain
+	if terrain.is_water(pos):
+		return terrain.visual_y(pos)
+	var h := terrain.height(pos)
+	return (_corner_y(terrain, pos.x, pos.y, h)
+		+ _corner_y(terrain, pos.x + 1, pos.y, h)
+		+ _corner_y(terrain, pos.x + 1, pos.y + 1, h)
+		+ _corner_y(terrain, pos.x, pos.y + 1, h)) / 4.0
+
+
+## Smoothed corner height (the anti-Minecraft pass, user request
+## 2026-08-02): mean visual y of the up-to-4 tiles meeting at corner
+## (x, z), counting only tiles within ONE level of the asking tile —
+## gentle steps become real slopes, >=2-level cliffs keep their edges
+## (the stitch quads in _rebuild_terrain cover the remaining faces).
+static func _corner_y(terrain: Terrain, x: int, z: int, ref_level: int) -> float:
+	var total := 0.0
+	var n := 0
+	for tile: Vector2i in [Vector2i(x - 1, z - 1), Vector2i(x, z - 1),
+			Vector2i(x - 1, z), Vector2i(x, z)]:
+		var lvl := terrain.height(tile)
+		if absi(lvl - ref_level) <= 1:
+			total += lvl * Terrain.VISUAL_STEP
+			n += 1
+	return total / n if n > 0 else ref_level * Terrain.VISUAL_STEP
+
+
+static func _face_normal(q: Array) -> Vector3:
+	var n: Vector3 = (q[2] - q[0]).cross(q[3] - q[1]).normalized()
+	return -n if n.y < 0.0 else n
 
 
 func _rebuild_terrain() -> void:
@@ -581,6 +610,12 @@ func _rebuild_terrain() -> void:
 	var water_normals := PackedVector3Array()
 	var water_colors := PackedColorArray()
 	var water_indices := PackedInt32Array()
+	# color ramp normalized by the MAP's top level: baked DEM regions span
+	# ~40 levels, the noise fields 5 — both get the full green->rock ramp
+	var top_level := Terrain.MAX_LEVEL
+	for x in WORLD_TILES:
+		for z in WORLD_TILES:
+			top_level = maxi(top_level, terrain.height(Vector2i(x, z)))
 	for x in WORLD_TILES:
 		for z in WORLD_TILES:
 			var pos := Vector2i(x, z)
@@ -596,31 +631,56 @@ func _rebuild_terrain() -> void:
 				continue
 			# meadow patchiness: hash-jitter each tile toward dry grass —
 			# flat single-color plains read as plastic, this reads as land
-			var color := TERRAIN_COLORS[clampi(h, 0, TERRAIN_COLORS.size() - 1)]
+			var color := TERRAIN_COLORS[clampi(int(round(float(h)
+				/ float(top_level) * (TERRAIN_COLORS.size() - 1))),
+				0, TERRAIN_COLORS.size() - 1)]
 			var jitter := float(_tile_hash(pos, terrain.seed_value + 17) % 100) / 100.0
 			color = color.lerp(MEADOW_JITTER, jitter * 0.18)
-			_emit_quad(verts, normals, colors, indices,
-				[Vector3(x, y, z), Vector3(x + 1, y, z),
-					Vector3(x + 1, y, z + 1), Vector3(x, y, z + 1)],
-				Vector3.UP, color)
-			# skirts where this plateau stands above a neighbor (each tile
-			# emits only its own descending faces — no doubles); river banks
-			# come out of the same rule (water tiles dip below their plateau)
+			# smoothed corners: 1-level steps become real slopes with true
+			# face normals (sun-shaded relief); >=2-level cliffs keep edges
+			var c00 := _corner_y(terrain, x, z, h)
+			var c10 := _corner_y(terrain, x + 1, z, h)
+			var c11 := _corner_y(terrain, x + 1, z + 1, h)
+			var c01 := _corner_y(terrain, x, z + 1, h)
+			var quad: Array = [Vector3(x, c00, z), Vector3(x + 1, c10, z),
+				Vector3(x + 1, c11, z + 1), Vector3(x, c01, z + 1)]
+			_emit_quad(verts, normals, colors, indices, quad,
+				_face_normal(quad), color)
+			# stitch quads close every remaining face: cliff walls AND the
+			# small seams mixed-level corners leave (each tile emits only
+			# its own DESCENDING faces — no doubles). River banks too.
 			for side: Array in [
-				[Vector2i(1, 0), Vector3(x + 1, 0, z), Vector3(x + 1, 0, z + 1), Vector3.RIGHT],
-				[Vector2i(-1, 0), Vector3(x, 0, z + 1), Vector3(x, 0, z), Vector3.LEFT],
-				[Vector2i(0, 1), Vector3(x + 1, 0, z + 1), Vector3(x, 0, z + 1), Vector3.BACK],
-				[Vector2i(0, -1), Vector3(x, 0, z), Vector3(x + 1, 0, z), Vector3.FORWARD],
+				[Vector2i(1, 0), Vector2i(x + 1, z), Vector2i(x + 1, z + 1),
+					c10, c11, Vector3.RIGHT],
+				[Vector2i(-1, 0), Vector2i(x, z + 1), Vector2i(x, z),
+					c01, c00, Vector3.LEFT],
+				[Vector2i(0, 1), Vector2i(x + 1, z + 1), Vector2i(x, z + 1),
+					c11, c01, Vector3.BACK],
+				[Vector2i(0, -1), Vector2i(x, z), Vector2i(x + 1, z),
+					c00, c10, Vector3.FORWARD],
 			]:
-				var neighbor_y: float = _tile_y(terrain, pos + side[0])
-				if neighbor_y >= y:
+				var npos: Vector2i = pos + side[0]
+				var na: float
+				var nb: float
+				if terrain.is_water(npos):
+					na = _tile_y(terrain, npos)
+					nb = na
+				else:
+					var nh := terrain.height(npos)
+					var ca: Vector2i = side[1]
+					var cb: Vector2i = side[2]
+					na = _corner_y(terrain, ca.x, ca.y, nh)
+					nb = _corner_y(terrain, cb.x, cb.y, nh)
+				var ya: float = side[3]
+				var yb: float = side[4]
+				if ya <= na + 0.001 and yb <= nb + 0.001:
 					continue
-				var a: Vector3 = side[1]
-				var b: Vector3 = side[2]
+				var a: Vector2i = side[1]
+				var b: Vector2i = side[2]
 				_emit_quad(verts, normals, colors, indices,
-					[Vector3(a.x, y, a.z), Vector3(b.x, y, b.z),
-						Vector3(b.x, neighbor_y, b.z), Vector3(a.x, neighbor_y, a.z)],
-					side[3], TERRAIN_SKIRT_COLOR)
+					[Vector3(a.x, ya, a.y), Vector3(b.x, yb, b.y),
+						Vector3(b.x, nb, b.y), Vector3(a.x, na, a.y)],
+					side[5], TERRAIN_SKIRT_COLOR)
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts

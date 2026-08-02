@@ -180,6 +180,22 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
 - **Scenarios**: sandbox / tutorial (9 steps) / greenfield / inherited grid
   (20-kW relic, loses by misery untouched) / energy transition; difficulty
   scales growth/events/money. Prebuilds run BEFORE the start budget lands.
+- **REAL-DEM TERRAIN + SMOOTH RELIEF (2026-08-02, user request: "looks
+  like Minecraft")**: `Terrain.load_region(name)` swaps the noise HEIGHTS
+  for a baked real region (`game/data/terrain/<name>.json` — AWS/Mapzen
+  terrarium tiles, SRTM-derived, z12 ≈ 25 m/px = 1 game tile; fetch tool
+  `tools/terrain/fetch_region.py`, proportional level compression past 40
+  levels, `m_per_level` in the asset). Shipped: kraichgau (132 m relief),
+  schwarzwald (398 m). Serialized additively ("region" key); rivers/
+  overrides/physics (5 m/level) unchanged; scenario picker got two
+  region sandboxes. RENDERER: terrain quads now use SMOOTHED CORNERS
+  (`_corner_y`: mean of tiles within ONE level — 1-level steps render as
+  true sun-shaded slopes via computed face normals; ≥2-level cliffs keep
+  edges) with stitch quads closing cliffs AND mixed-corner seams; color
+  ramp normalized by the MAP's top level (40-level regions get the full
+  green→rock sweep, noise maps unchanged); `_ground_y` = smoothed tile
+  center so props/wires follow the slopes. `REGION_SHOT=<name>` env +
+  `--screenshot` = terrain-look probe.
 - **Environment** (2026-07-29): RIVERS derive from a second noise channel
   (`Terrain.is_water` — seed-only like heights, seed 0 = none, water only
   on valley level 0, never under forced-height rects; `force_water` is the

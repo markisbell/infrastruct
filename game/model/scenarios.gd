@@ -22,6 +22,10 @@ static func catalog() -> Array[Dictionary]:
 	return [
 		{"id": "sandbox", "name": "Sandbox",
 			"desc": "No goals, no bankruptcy — just the three networks and you."},
+		{"id": "sandbox_kraichgau", "name": "Sandbox — Kraichgau",
+			"desc": "Sandbox on REAL rolling hills (SRTM elevation, 6.4 km of Kraichgau)."},
+		{"id": "sandbox_schwarzwald", "name": "Sandbox — Schwarzwald",
+			"desc": "Sandbox in REAL small mountains (SRTM, a northern Black Forest valley — mind the cliffs)."},
 		{"id": "tutorial", "name": "Tutorial",
 			"desc": "Learn the three networks one at a time: power, heat, water."},
 		{"id": "greenfield", "name": "Greenfield",
@@ -47,6 +51,10 @@ static func start(id: String, difficulty_key: String) -> Dictionary:
 		"sandbox":
 			City.model.terrain.set_seed(19)
 			City.infinite_money = true  # no goals, no budget — just build
+		"sandbox_kraichgau", "sandbox_schwarzwald":
+			City.model.terrain.set_seed(19)  # rivers still ride the noise
+			City.model.terrain.load_region(id.trim_prefix("sandbox_"))
+			City.infinite_money = true
 		"tutorial":
 			start_money = 400_000
 		"greenfield":

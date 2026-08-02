@@ -275,6 +275,16 @@ func _take_screenshot() -> void:
 	# --hour=N picks another time (dusk/night verification shots)
 	GameClock.restore({"total_minutes": _screenshot_hour * 60.0, "speed": 0.0})
 	City.money = 100_000_000
+	if OS.get_environment("REGION_SHOT") != "":  # terrain-look probe (kept)
+		City.model.terrain.set_seed(19)
+		City.model.terrain.load_region(OS.get_environment("REGION_SHOT"))
+		view.redraw()
+		view.focus_tile(Vector2i(128, 128), 90.0)
+		await get_tree().create_timer(1.5).timeout
+		get_viewport().get_texture().get_image().save_png(_screenshot_path)
+		print("SCREENSHOT saved to ", _screenshot_path)
+		get_tree().quit(0)
+		return
 	# environment demo: seed-19 wilderness (hills, rivers, mini-forest props)
 	# around a forced flat DRY pad the fixed town layout builds on (height
 	# overrides are never water); a river bend hugs the west and south edges

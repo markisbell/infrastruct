@@ -24,6 +24,12 @@ var seed_value := 0
 var _noise := FastNoiseLite.new()
 var _river := FastNoiseLite.new()
 var _overrides := {}       # Vector2i -> int (forced heights win)
+## Baked real-DEM region (game/data/terrain/<name>.json, fetch_region.py):
+## replaces the noise HEIGHTS only — rivers/overrides/serialization work
+## unchanged ("" = noise mode; every old save and smoke is untouched).
+var region := ""
+var _region_levels := PackedInt32Array()
+var _region_size := 0
 var _water_overrides := {} # Vector2i -> bool (scenario hook; false = never water)
 
 
@@ -41,9 +47,28 @@ func set_seed(seed_arg: int) -> void:
 	_river.frequency = 0.006  # long meanders, independent of the plateau field
 
 
+func load_region(name: String) -> bool:
+	var path := "res://data/terrain/%s.json" % name
+	if not FileAccess.file_exists(path):
+		return false
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if not (parsed is Dictionary) or not (parsed as Dictionary).has("levels"):
+		return false
+	region = name
+	_region_size = int((parsed as Dictionary).get("size", 256))
+	_region_levels.clear()
+	for v: Variant in (parsed as Dictionary)["levels"]:
+		_region_levels.append(int(v))
+	return true
+
+
 func height(pos: Vector2i) -> int:
 	if _overrides.has(pos):
 		return _overrides[pos]
+	if region != "" and _region_size > 0:
+		var cx := clampi(pos.x, 0, _region_size - 1)
+		var cy := clampi(pos.y, 0, _region_size - 1)
+		return _region_levels[cy * _region_size + cx]
 	if seed_value == 0:
 		return 0
 	var n := _noise.get_noise_2d(float(pos.x), float(pos.y)) * 0.5 + 0.5
@@ -100,7 +125,8 @@ func clear_overrides() -> void:
 
 ## Cheap change detector for the renderer (rebuild the mesh only on change).
 func fingerprint() -> String:
-	return "%d|%d|%d" % [seed_value, _overrides.hash(), _water_overrides.hash()]
+	return "%d|%s|%d|%d" % [seed_value, region, _overrides.hash(),
+		_water_overrides.hash()]
 
 
 # ─── serialization (inside the WorldModel envelope) ───
@@ -113,11 +139,17 @@ func serialize() -> Dictionary:
 	for pos: Vector2i in _water_overrides:
 		water_out["%d,%d" % [pos.x, pos.y]] = _water_overrides[pos]
 	# water key is additive — old saves simply lack it (schema stays v5)
-	return {"seed": seed_value, "overrides": overrides_out, "water": water_out}
+	# region key is additive too — noise saves simply lack it
+	var out := {"seed": seed_value, "overrides": overrides_out, "water": water_out}
+	if region != "":
+		out["region"] = region
+	return out
 
 
 static func deserialize(data: Dictionary) -> Terrain:
 	var terrain := Terrain.new(int(data.get("seed", 0)))
+	if str(data.get("region", "")) != "":
+		terrain.load_region(str(data["region"]))
 	for key: String in data.get("overrides", {}):
 		var parts := key.split(",")
 		if parts.size() == 2:
@@ -132,5 +164,6 @@ static func deserialize(data: Dictionary) -> Terrain:
 
 
 func equals(other: Terrain) -> bool:
-	return seed_value == other.seed_value and _overrides == other._overrides \
+	return seed_value == other.seed_value and region == other.region \
+		and _overrides == other._overrides \
 		and _water_overrides == other._water_overrides
