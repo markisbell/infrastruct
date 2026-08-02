@@ -184,7 +184,11 @@ func _build_environment() -> void:
 	sun.shadow_enabled = true
 	sun.light_color = Color(1.0, 0.965, 0.89)  # late-morning warmth
 	sun.light_energy = 1.5
-	sun.shadow_blur = 0.6
+	sun.shadow_blur = 0.75
+	# high PCF filter quality (project setting) + normal bias against the
+	# edge sparkle the moving sun produces on the iGPU ("glimmering",
+	# user report 2026-08-02) — sharpness stays, the crawl stops
+	sun.shadow_normal_bias = 2.5
 	sun.directional_shadow_max_distance = 220.0
 	sun.directional_shadow_split_1 = 0.08
 	add_child(sun)
