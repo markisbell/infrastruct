@@ -68,6 +68,19 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   five-file bundles). Water junction `elevation_m` = 300 + 5 m/terrain level
   (+ tower height folded in). Heat slack = FIRST plant (sorted ids); water head
   preference tower > well > pump, head mirrored as the single ext_grid.
+  INLINE BOOSTERS (2026-08-02, user request): a pumping_station BRIDGING
+  two pipe-run ends splits into suction/discharge nodes joined by a
+  rtwaterflow StationSpec pump branch (`native.supply.stations` rides the
+  verbatim bundle — the backend's SupplyFile already knew stations;
+  suction faces the head, decided by pre-pump reachability, bypassed-loop
+  warns). `params.station` binds the NEW gamebridge `station` device
+  target (backend commit on gamebridge): per-step `enabled` forces
+  `sim.station_modes` on/off (blackout stops the booster; downstream
+  zones cut off), p_el couples from the SOLVED branch flow (NaN-guarded —
+  out-of-service pandapipes branches read NaN). Single-tap pumps keep
+  their source-with-head duty (pumpblackout unchanged);
+  `connection_tiles(pair_kind)` scopes the two-tap allowance to the
+  WATER layer — on power the same pump still taps its cable once.
 - **Power is 20 kV MV** (realism pass 2026-07-29): buses vn_kv 20; every
   substation is a REAL 20/0.4 kV trafo element (`trafo_fields`: catalog std
   types ≥250 kVA, explicit params below) with its own LV bus carrying the

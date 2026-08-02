@@ -67,15 +67,29 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		var entry: Dictionary = model.buildings[id]
 		# single service connection per building (user correction
 		# 2026-08-02) — same rule as power, no multi-tap exception here
-		for n: Vector2i in PowerTopology.connection_tiles(model, id, pipe):
+		for n: Vector2i in PowerTopology.connection_tiles(model, id, pipe, "pumping_station"):
 			if not tile_buildings.has(n):
 				tile_buildings[n] = []
 			if not (tile_buildings[n] as Array).has(id):
 				tile_buildings[n].append(id)
+	# INLINE boosters (user request 2026-08-02): a pumping_station with TWO
+	# pipe taps splits into two nodes (its taps) joined by a StationSpec
+	# pump branch — pressure is boosted ALONG the run. Single-tap pumps
+	# keep their source-with-head duty (implicit intake), so pumpblackout
+	# and old saves are untouched.
+	var pump_split := {}   # id -> {"a": tile (key id), "b": tile (key id#dis)}
+	for id: String in model.buildings_of_kind("pumping_station"):
+		var taps := PowerTopology.connection_tiles(model, id, pipe, "pumping_station")
+		if taps.size() == 2:
+			pump_split[id] = {"a": taps[0], "b": taps[1]}
 	var bus_tiles := {}
 	for pos: Vector2i in pipe:
 		if tile_buildings.has(pos):
-			bus_tiles[pos] = tile_buildings[pos][0]
+			var owner: String = tile_buildings[pos][0]
+			if pump_split.has(owner) and pos == pump_split[owner]["b"]:
+				bus_tiles[pos] = owner + "#dis"
+			else:
+				bus_tiles[pos] = owner
 		elif _degree(pipe, pos) >= 3:
 			bus_tiles[pos] = "j:%d,%d" % [pos.x, pos.y]
 
@@ -129,7 +143,9 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	# 3. head choice + reachability from the head
 	var source_ids: Array[String] = []
 	for kind: String in SOURCE_PRIORITY:
-		source_ids.append_array(model.buildings_of_kind(kind))
+		for sid: String in model.buildings_of_kind(kind):
+			if not pump_split.has(sid):  # an inline booster is no source
+				source_ids.append(sid)
 	has_source = not source_ids.is_empty()
 	if not has_source:
 		return
@@ -148,9 +164,34 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			if not reachable.has(neighbor):
 				reachable[neighbor] = true
 				queue.append(neighbor)
+	# station direction: suction faces the head (decided by the pre-pump
+	# reachability); then flow continues across the branch — extend the BFS
+	for id: String in pump_split:
+		var from_key: Variant = id
+		var to_key: Variant = id + "#dis"
+		if reachable.has(to_key) and not reachable.has(from_key):
+			from_key = id + "#dis"
+			to_key = id
+		elif reachable.has(to_key) and reachable.has(from_key):
+			warnings.append("booster %s is bypassed by its own main" % id)
+		pump_split[id]["from_key"] = from_key
+		pump_split[id]["to_key"] = to_key
+		for pair: Array in [[id, id + "#dis"], [id + "#dis", id]]:
+			if not adjacency.has(pair[0]):
+				adjacency[pair[0]] = []
+			adjacency[pair[0]].append(pair[1])
+		for key: Variant in [from_key, to_key]:
+			if reachable.has(key):
+				queue.append(key)
+	while not queue.is_empty():
+		var pkey: Variant = queue.pop_back()
+		for neighbor: Variant in adjacency.get(pkey, []):
+			if not reachable.has(neighbor):
+				reachable[neighbor] = true
+				queue.append(neighbor)
 	for id: String in model.buildings:
 		if _relevant(model, id):
-			connected[id] = reachable.has(id)
+			connected[id] = reachable.has(id) or reachable.has(id + "#dis")
 	for id: String in source_ids:
 		if not reachable.has(id):
 			warnings.append(("water source %s sits on a separate pipe network — "
@@ -165,10 +206,14 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		node_name[key] = name
 		var kind := "node"
 		var anchor := _junction_pos(key)
-		if key is String and not str(key).begins_with("j:"):
+		var base_id := str(key).trim_suffix("#dis")
+		if key is String and pump_split.has(base_id):
+			# booster nodes sit at their tap tiles (suction/discharge)
+			anchor = pump_split[base_id]["b"] if str(key).ends_with("#dis") 				else pump_split[base_id]["a"]
+		elif key is String and not str(key).begins_with("j:"):
 			anchor = model.buildings[key]["anchor"]
 		var elevation := BASE_ELEVATION_M + model.terrain.elevation_m(anchor)
-		if key is String and not str(key).begins_with("j:"):
+		if key is String and not str(key).begins_with("j:") 				and not pump_split.has(base_id):
 			var b_kind: String = model.buildings[key]["kind"]
 			if b_kind == "water_station":
 				kind = "consumer"
@@ -226,6 +271,23 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			devices.append({"id": id, "kind": def["device"], "node": node_name[id],
 				"params": params})
 
+	var stations_out: Array[Dictionary] = []
+	for id: String in pump_split:
+		if not (reachable.has(id) or reachable.has(id + "#dis")):
+			continue
+		var st_params: Dictionary = model.building_params(id).duplicate()
+		var st_name := "st_%s" % id
+		st_params["station"] = st_name
+		var boost := float(st_params.get("boost_bar", 2.0))
+		var rated := float(st_params.get("rated_m3_h", 15.0))
+		devices.append({"id": id, "kind": "water_pump",
+			"node": node_name[pump_split[id]["from_key"]], "params": st_params})
+		stations_out.append({
+			"from_node": node_name[pump_split[id]["from_key"]],
+			"to_node": node_name[pump_split[id]["to_key"]],
+			"name": st_name,
+			"curve": [[0.0, boost], [rated, boost * 0.6], [rated * 2.0, 0.05]],
+			"control": {"mode": "manual", "running": true}})
 	var head_is_tower: bool = model.buildings[head_id]["kind"] == "water_tower"
 	var temps: Array[float] = []
 	for i in 96:
@@ -240,7 +302,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			"pipes": {"pipes": pipes_out},
 			"consumers": {"consumers": consumers},
 			"supply": {"supplies": [{"node": node_name[head_id], "name": "head",
-				"kind": "ext_grid", "p_bar": 0.5 if head_is_tower else 4.0}]},
+				"kind": "ext_grid", "p_bar": 0.5 if head_is_tower else 4.0}],
+				"stations": stations_out},
 			"environment": {"resolution_minutes": 15, "steps": 96, "t_air_c": temps},
 		},
 		"zones": zones,

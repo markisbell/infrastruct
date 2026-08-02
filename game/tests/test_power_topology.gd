@@ -105,6 +105,35 @@ func test_water_parallel_runs_do_not_join() -> void:
 	assert_bool(topo.connected.get(station, true)).is_false()
 
 
+func test_inline_booster_station() -> void:
+	# a pumping_station bridging TWO pipe runs becomes an inline booster:
+	# a StationSpec branch suction->discharge (suction faces the head),
+	# never a head source — and the network flows THROUGH it
+	var model := WorldModel.new()
+	model.place_building("water_tower", Vector2i(0, 0))
+	for x in range(1, 6):
+		model.set_water_pipe(Vector2i(x, 0), 1)     # head-side run
+	var pump := model.place_building("pumping_station", Vector2i(6, 0))
+	for x in range(8, 15):
+		model.set_water_pipe(Vector2i(x, 0), 1)     # far-side run
+	var station := model.place_building("water_station", Vector2i(15, 0))
+	var topo := WaterTopology.build(model, {})
+	assert_bool(topo.connected.get(station, false)).is_true()
+	assert_bool(topo.connected.get(pump, false)).is_true()
+	var stations: Array = topo.doc["native"]["supply"]["stations"]
+	assert_int(stations.size()).is_equal(1)
+	assert_str(str(stations[0]["from_node"])).is_equal("wn_" + pump)
+	assert_str(str(stations[0]["to_node"])).is_equal("wn_" + pump + "#dis")
+	var pump_devices: Array = topo.doc["devices"].filter(
+		func(d: Dictionary) -> bool: return d["id"] == pump)
+	assert_int(pump_devices.size()).is_equal(1)
+	assert_str(str(pump_devices[0]["params"]["station"])) \
+		.is_equal("st_" + pump)
+	# the booster must NOT be the head — the tower is
+	assert_str(str(topo.doc["native"]["supply"]["supplies"][0]["node"])) \
+		.is_equal("wn_" + model.buildings_of_kind("water_tower")[0])
+
+
 func test_simple_town_extraction() -> void:
 	var topo := PowerTopology.build(_town(), {})
 	assert_bool(topo.has_slack).is_true()

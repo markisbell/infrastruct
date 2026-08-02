@@ -74,7 +74,7 @@ static func _closed_toward(cable: Dictionary, pos: Vector2i, d: Vector2i) -> boo
 ## exactly ONE (sorted-first) for every other plant, battery or consumer
 ## (user correction 2026-08-02: single service connection per building).
 static func connection_tiles(model: WorldModel, id: String,
-		cable: Dictionary) -> Array[Vector2i]:
+		cable: Dictionary, pair_kind := "") -> Array[Vector2i]:
 	var entry: Dictionary = model.buildings[id]
 	var adjacent := {}
 	for tile: Vector2i in BuildingDefs.footprint(entry["kind"], entry["anchor"]):
@@ -85,8 +85,14 @@ static func connection_tiles(model: WorldModel, id: String,
 	var out: Array[Vector2i] = []
 	out.assign(adjacent.keys())
 	out.sort()
-	if entry["kind"] != "grid_connection" and out.size() > 1:
-		out.resize(1)
+	if entry["kind"] == "grid_connection":
+		return out
+	# only the layer that ASKS for it may pair-tap (WaterTopology passes
+	# pair_kind="pumping_station" for inline boosters — on the POWER layer
+	# the same pump still taps its cable exactly once)
+	var cap := 2 if (pair_kind != "" and entry["kind"] == pair_kind) else 1
+	if out.size() > cap:
+		out.resize(cap)
 	return out
 
 

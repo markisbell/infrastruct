@@ -119,7 +119,7 @@ func _build_items() -> Array:
 				"desc": "Gravity well field, no power needed — droughts shrink its yield. Near a river: +50% yield (richer aquifer)."},
 			{"tool": CityView.Tool.PUMP, "label": "Pumping station", "mono": "Pu", "key": "P",
 				"kind": "pumping_station",
-				"desc": "High yield and pressure, needs a cable: a blackout here stops the water."},
+				"desc": "High yield and pressure, needs a cable: a blackout here stops the water. Bridge two pipe ends with it to BOOST pressure inline along the run."},
 			{"tool": CityView.Tool.WATER_TOWER, "label": "Water tower", "mono": "Tw", "key": "O",
 				"kind": "water_tower",
 				"desc": "Pressure head + 200 m³ buffer. Rides through pump outages; taller = more bar."},

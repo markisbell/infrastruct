@@ -970,7 +970,8 @@ func _network_taps_here(building_pos: Vector2i, network: String,
 	var id: String = City.model.building_tiles.get(building_pos, "")
 	var layer: Dictionary = City.model.heat_pipes if network == "heat" \
 		else City.model.water_pipes
-	return PowerTopology.connection_tiles(City.model, id, layer).has(pipe_pos)
+	return PowerTopology.connection_tiles(City.model, id, layer,
+		"pumping_station" if network == "water" else "").has(pipe_pos)
 
 
 func _electrical_building_at(pos: Vector2i) -> bool:
