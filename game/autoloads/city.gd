@@ -596,16 +596,16 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 	if network == "heat":
 		var temp := float(weather.sample(t)["temp_c"])
 		for zone_id: String in heat_topo.zones_info:
-			out[zone_id] = {"value": snappedf(DemandModel.heat_zone_demand_kw(
-				heat_topo.zones_info[zone_id]["houses"], t, temp), 0.1)}
+			out[zone_id] = {"value": snappedf(DemandModel.heat_zone_sum_kw(
+				heat_topo.zones_info[zone_id]["house_tiles"], t, temp), 0.1)}
 		return out
 	if network == "water":
 		var temp_w := float(weather.sample(t)["temp_c"])
 		for zone_id: String in water_topo.zones_info:
 			# household demand + any hydrant/leak draw (fire, burst events):
 			# the network solves the sag, PDD weakens the neighbors
-			out[zone_id] = {"value": snappedf(DemandModel.water_zone_demand_m3h(
-				water_topo.zones_info[zone_id]["houses"], t, temp_w)
+			out[zone_id] = {"value": snappedf(DemandModel.water_zone_sum_m3h(
+				water_topo.zones_info[zone_id]["house_tiles"], t, temp_w)
 				+ event_system.extra_water_demand_m3h(zone_id, t), 0.001)}
 		return out
 	for zone_id: String in topo.zones_info:
@@ -616,8 +616,8 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 		if tripped_substations.has(topo.zones_info[zone_id]["sub"]):
 			out[zone_id] = {"value": 0.0}
 			continue
-		out[zone_id] = {"value": DemandModel.zone_demand_kw(
-			topo.zones_info[zone_id]["houses"], t)}
+		out[zone_id] = {"value": DemandModel.zone_sum_kw(
+			topo.zones_info[zone_id]["house_tiles"], t)}
 	return out
 
 
@@ -633,7 +633,7 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 		if not bool(topo.zones_info[zone_id].get("connected", true)) \
 				or tripped_substations.has(topo.zones_info[zone_id]["sub"]):
 			continue
-		total_demand += DemandModel.zone_demand_kw(topo.zones_info[zone_id]["houses"], t)
+		total_demand += DemandModel.zone_sum_kw(topo.zones_info[zone_id]["house_tiles"], t)
 	var out := {}
 	var renewable := 0.0
 	var n_batteries := 0
@@ -701,8 +701,8 @@ func _heat_setpoints(t: int) -> Dictionary:
 	var temp := float(weather.sample(t)["temp_c"])
 	var total_demand := 0.0
 	for zone_id: String in heat_topo.zones_info:
-		total_demand += DemandModel.heat_zone_demand_kw(
-			heat_topo.zones_info[zone_id]["houses"], t, temp)
+		total_demand += DemandModel.heat_zone_sum_kw(
+			heat_topo.zones_info[zone_id]["house_tiles"], t, temp)
 	for device: Dictionary in heat_topo.doc.get("devices", []):
 		var def_kind: String = device["kind"]
 		var down := event_system.is_down(device["id"], t)
@@ -868,8 +868,8 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		if zone_supplied.get(zone_id, false):
 			# bill only the net IMPORT: at sunny noon the zone's rooftop PV
 			# exports (negative net load) and nothing is delivered to sell
-			income += maxf(0.0, DemandModel.zone_demand_kw(
-				topo.zones_info[zone_id]["houses"], t)) * STEP_H * TARIFF_ELEC_KWH
+			income += maxf(0.0, DemandModel.zone_sum_kw(
+				topo.zones_info[zone_id]["house_tiles"], t)) * STEP_H * TARIFF_ELEC_KWH
 	if income > 0.0:
 		_econ_apply("income_elec", income)
 	for slack_id: String in model.buildings_of_kind("grid_connection"):
@@ -891,8 +891,8 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		if not zone_result.is_empty():
 			_telemetry_put("v:" + zone_id, t,
 				float(zone_result.get("detail", {}).get("v_pu", NAN)))
-		_telemetry_put("d:" + zone_id, t, DemandModel.zone_demand_kw(
-			topo.zones_info[zone_id]["houses"], t))
+		_telemetry_put("d:" + zone_id, t, DemandModel.zone_sum_kw(
+			topo.zones_info[zone_id]["house_tiles"], t))
 	# district trafo loading comes SOLVED from the contract T-edges
 	for edge_id: String in topo.trafo_subs:
 		var entry: Dictionary = result.get("edges", {}).get(edge_id, {})
@@ -977,8 +977,8 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 	# network total (what a pipe click shows — no per-pipe wire data)
 	var net_heat := 0.0
 	for zone_id: String in heat_topo.zones_info:
-		net_heat += DemandModel.heat_zone_demand_kw(
-			heat_topo.zones_info[zone_id]["houses"], t, temp)
+		net_heat += DemandModel.heat_zone_sum_kw(
+			heat_topo.zones_info[zone_id]["house_tiles"], t, temp)
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
 		if not zone_result.is_empty():
 			_telemetry_put("t:" + zone_id, t,
@@ -995,8 +995,8 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 	var income := 0.0
 	for zone_id: String in heat_topo.zones_info:
 		if heat_zone_supplied.get(zone_id, false):
-			income += DemandModel.heat_zone_demand_kw(
-				heat_topo.zones_info[zone_id]["houses"], t, temp) \
+			income += DemandModel.heat_zone_sum_kw(
+				heat_topo.zones_info[zone_id]["house_tiles"], t, temp) \
 				* STEP_H * TARIFF_HEAT_KWH
 	if income > 0.0:
 		_econ_apply("income_heat", income)
@@ -1071,8 +1071,8 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 	var temp_net := float(weather.sample(t)["temp_c"])
 	var net_water := 0.0
 	for zone_id: String in water_topo.zones_info:
-		net_water += DemandModel.water_zone_demand_m3h(
-			water_topo.zones_info[zone_id]["houses"], t, temp_net)
+		net_water += DemandModel.water_zone_sum_m3h(
+			water_topo.zones_info[zone_id]["house_tiles"], t, temp_net)
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
 		if not zone_result.is_empty():
 			_telemetry_put("pb:" + zone_id, t,
@@ -1094,8 +1094,8 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 			.get(zone_id, {}).get("supplied", 0.0)), 0.0, 1.0)
 		if result.get("status", "failed") == "failed":
 			fraction = 0.0
-		income += DemandModel.water_zone_demand_m3h(
-			water_topo.zones_info[zone_id]["houses"], t, temp_w) \
+		income += DemandModel.water_zone_sum_m3h(
+			water_topo.zones_info[zone_id]["house_tiles"], t, temp_w) \
 			* fraction * STEP_H * TARIFF_WATER_M3
 	if income > 0.0:
 		_econ_apply("income_water", income)

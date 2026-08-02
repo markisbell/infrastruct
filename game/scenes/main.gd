@@ -1220,7 +1220,7 @@ func _smoke_drought() -> void:
 	City.weather.force_drought(0, 100_000, 1.0)  # healthy aquifer first
 	# tower head + well feed: well rated small via override so the balance
 	# tips when the drought hits (demand ~0.5 m³/h at 24 houses)
-	City.place_building("water_tower", Vector2i(8, 8), 0, {"volume_m3": 0.8})
+	City.place_building("water_tower", Vector2i(8, 8), 0, {"volume_m3": 0.5})
 	for x in range(9, 21):
 		City.build_water_pipe(Vector2i(x, 8))
 	City.place_building("well", Vector2i(12, 6), 0, {"rated_m3_h": 1.5})
@@ -1247,7 +1247,8 @@ func _smoke_drought() -> void:
 	var well_q_wet := float(City.last_water_result.get("devices", {})
 		.get(well_id, {}).get("detail", {}).get("q_m3h", -1.0))
 	City.weather.force_drought(0, 100_000, 0.1)  # aquifer collapses
-	await _run_steps(24, 300.0)                  # 6 h of net drain
+	await _run_steps(36, 360.0)                  # 9 h of net drain (sampled
+		# household mixes vary — the window must empty the tower for ANY draw)
 	var soc_dry := float(City.last_water_result.get("devices", {})
 		.get(tower_id, {}).get("soc", -1.0))
 	var supplied_dry := _water_supplied(zone_id)
@@ -1255,9 +1256,12 @@ func _smoke_drought() -> void:
 		.get(well_id, {}).get("detail", {}).get("q_m3h", -1.0))
 	var report := {
 		# well_q_* stay diagnostic: full-tank throttling is backend machinery
+		# the DRY PHASE is the assertion (sustained outage minutes) — the
+		# final-instant supplied flag flickers under sampled demand once
+		# the near-empty tower trickle momentarily covers a low quarter
 		"ok": supplied_wet >= 0.99 and soc_wet > 0.3
-			and soc_dry < soc_wet - 0.1 and supplied_dry < 0.99
-			and City.total_water_outage_minutes() > 0,
+			and soc_dry < soc_wet - 0.1
+			and City.total_water_outage_minutes() >= 30,
 		"soc_wet": snappedf(soc_wet, 0.01), "soc_dry": snappedf(soc_dry, 0.01),
 		"supplied_wet": snappedf(supplied_wet, 0.01),
 		"supplied_dry": snappedf(supplied_dry, 0.01),
@@ -1441,17 +1445,17 @@ func _smoke_yearcurves() -> void:
 	City.power_result.connect(func(t: int, result: Dictionary) -> void:
 		var elec := 0.0
 		for zone_id: String in City.topo.zones_info:
-			elec += DemandModel.zone_demand_kw(
-				City.topo.zones_info[zone_id]["houses"], t)
+			elec += DemandModel.zone_sum_kw(
+				City.topo.zones_info[zone_id]["house_tiles"], t)
 		var temp := float(City.weather.sample(t)["temp_c"])
 		var heat := 0.0
 		for zone_id: String in City.heat_topo.zones_info:
-			heat += DemandModel.heat_zone_demand_kw(
-				City.heat_topo.zones_info[zone_id]["houses"], t, temp)
+			heat += DemandModel.heat_zone_sum_kw(
+				City.heat_topo.zones_info[zone_id]["house_tiles"], t, temp)
 		var water := 0.0
 		for zone_id: String in City.water_topo.zones_info:
-			water += DemandModel.water_zone_demand_m3h(
-				City.water_topo.zones_info[zone_id]["houses"], t, temp)
+			water += DemandModel.water_zone_sum_m3h(
+				City.water_topo.zones_info[zone_id]["house_tiles"], t, temp)
 		var import_kw := float(result.get("devices", {})
 			.get(slack_id, {}).get("output_kw", 0.0))
 		rows.append([t, snappedf(elec, 0.01), snappedf(heat, 0.01),
@@ -1962,11 +1966,11 @@ func _smoke_maintenance() -> void:
 		return
 	City.reset_for_scenario(42)
 	City.growth_enabled = false
-	# evening import (30 houses incl. 22-kW EV charging peaks ~141 kW since
-	# the LPG demand rework) crosses 80% of 160 kW well before the trafo
-	# trips — the signal precedes the failure, and the 110/20 kV interface
-	# itself never trips in this smoke (grid trips at 100% sustained)
-	City.grid_capacity_override = 160.0
+	# evening import (30 SAMPLED households incl. their concrete 22-kW EV
+	# blocks — physics tier) must cross 80% of 140 kW for the warning while
+	# staying under 140 so the 110/20 kV interface itself never trips
+	# (grid trips at 100% sustained)
+	City.grid_capacity_override = 140.0
 	City.place_building("grid_connection", Vector2i(6, 4))
 	for x in range(8, 33):
 		City.build_cable(Vector2i(x, 5))

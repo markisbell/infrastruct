@@ -199,7 +199,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			continue
 		var zone_id := "wz_" + sub_id
 		zones.append({"id": zone_id, "consumer": zone_id})
-		zones_info[zone_id] = {"sub": sub_id, "houses": 0,
+		zones_info[zone_id] = {"sub": sub_id, "houses": 0, "house_tiles": [],
 			"center": model.buildings[sub_id]["anchor"]}
 		# mdot placeholder (Field gt=0) — the per-step zone_demand rules
 		consumers.append({"node": node_name[sub_id], "name": zone_id,
@@ -261,6 +261,7 @@ func _assign_houses(model: WorldModel) -> void:
 		if best_zone != "":
 			house_zone[pos] = best_zone
 			zones_info[best_zone]["houses"] += 1
+			zones_info[best_zone]["house_tiles"].append(pos)
 
 
 static func _degree(pipe: Dictionary, pos: Vector2i) -> int:

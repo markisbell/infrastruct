@@ -220,10 +220,16 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   UNsmeared shapes + level (`pack.elec_arch`), EV or not with a CONCRETE
   22-kW charging block at a sampled arrival, PV size 5–15 kWp + roof
   facing (via `pv_park_availability`), DHW/water volume scale
-  (`pack.dhw_arch_scale`). DISPLAY TIER: the zone boundary stays the
-  diversified expectation — samples average back to it but don't sum
-  exactly; the PHYSICS tier (zones summing sampled households) is the
-  designed next step if wanted. Buildings show their
+  (`pack.dhw_arch_scale`). PHYSICS TIER (user decision, same
+  day): zone boundaries on ALL THREE networks now SUM their sampled
+  households (`zone_sum_kw`/`heat_zone_sum_kw`/`water_zone_sum_m3h` over
+  `zones_info[...]["house_tiles"]`, profile cache in DemandModel) — the
+  transformer sees real EV coincidence, not the smooth mean. The
+  *_demand_* expectation functions remain for reference/tests/fallbacks.
+  Smokes recalibrated for sampled variance: maintenance grid override
+  140 kW, drought tower 0.5 m³ + 9 h window + dry-phase (not end-instant)
+  assertion — calibrated smokes must assert WINDOW properties, samples
+  flicker at instants. Buildings show their
   quantity (trafo %, import kW, SoC %, °C, bar, m³/h); power lines show
   per-segment loading (contract edges, telemetry keyed by the segment's MIDDLE
   tile — L-indices renumber on rebuild); heat/water pipes show network totals

@@ -115,6 +115,21 @@ func test_house_ev_block_is_full_charger_power() -> void:
 	assert_float(plain_max).is_equal_approx(0.0, 0.001)
 
 
+func test_zone_sum_matches_expectation_at_scale() -> void:
+	# physics tier: many sampled households must average back to the
+	# diversified expectation the balancing was designed around
+	var tiles: Array = []
+	for x in 20:
+		for y in 20:
+			tiles.append(Vector2i(x + 100, y + 100))
+	for hour: float in [3.0, 12.5, 19.0]:
+		var t := 301 * 96 + int(hour * 4.0)
+		var summed := DemandModel.zone_sum_kw(tiles, t)
+		var expected := DemandModel.zone_demand_kw(tiles.size(), t)
+		assert_float(summed).is_between(expected - absf(expected) * 0.2 - 8.0,
+			expected + absf(expected) * 0.2 + 8.0)
+
+
 func test_water_summer_exceeds_winter() -> void:
 	# same clock hour, seasonal swing + hot-day surcharge
 	var summer := DemandModel.water_zone_demand_m3h(10, _t(133, 11.0), 28.0)

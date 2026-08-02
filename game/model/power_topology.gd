@@ -235,6 +235,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		var zone_id := "z_" + sub_id
 		var is_conn: bool = connected.get(sub_id, false)
 		zones_info[zone_id] = {"sub": sub_id, "houses": 0, "bus": "",
+			"house_tiles": [],
 			"connected": is_conn, "center": model.buildings[sub_id]["anchor"]}
 		if not is_conn:
 			continue
@@ -307,6 +308,7 @@ func _assign_houses(model: WorldModel) -> void:
 		if best_zone != "":
 			house_zone[pos] = best_zone
 			zones_info[best_zone]["houses"] += 1
+			zones_info[best_zone]["house_tiles"].append(pos)
 
 
 static func _degree(cable: Dictionary, pos: Vector2i) -> int:

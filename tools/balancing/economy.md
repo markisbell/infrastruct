@@ -24,13 +24,18 @@ constants and the *why*; change a constant → rerun the smoke → commit both.
 | substation `rating_kva` | 630 kVA | Ortsnetzstation (user correction; modeled as a REAL 20/0.4 kV pandapower trafo, loading solved). A 150-house zone incl. 50 % EV charging (22-kW wallboxes) peaks near 112 % (LPG rework 2026-08-01) — overload pressure is REAL at full build-out (trip only past 120 %), pushing toward a second station or local generation. Override per building via params for scenarios (below 250 kVA the element gets explicit physical parameters). |
 | household composition | PV 40 % × 5–15 kWp (mean 10) · EV 50 % × 22 kW (1.1 h/session, ~24 kWh) | Zone demand = LPG household base (rtpowerflow `lpg_library` shapes, diversity-smeared, 0.58 kW/house mean peak-calibrated to ~1.8 kW winter evenings) + diversified EV home charging (gaussian-arrival shapes) − rooftop PV on REAL measured rtpowerflow day shapes. Net load goes NEGATIVE at sunny noon (backfeed, signed on the wire); billing books only the positive net import. |
 
-## Measured result (2026-08-01, LPG demand rework)
+## Measured result (2026-08-02, per-house physics tier)
+
+Zones now SUM their sampled households (LPG archetypes, concrete 22-kW EV
+blocks, per-house PV) instead of billing the diversified expectation — the
+reference town's particular residents bill slightly differently than the
+statistical mean:
 
 | Window | Income | Costs | Net |
 |---|---|---|---|
-| Winter, 2 days | ≈ €982 (el 389 · heat 347 · feed-in 196 · water 31 · base 19) | ≈ €680 (fuel 309 · upkeep 334 · grid 38) | **+€302** |
-| Summer, 2 days | ≈ €1 025 (feed-in 593 · el 302 · heat 74 · water 37 · base 19) | ≈ €499 (fuel 137 · upkeep 334 · grid 28) | **+€526** |
-| Blackout day | heat/water still sell; **electricity books €0** | fuel + upkeep keep running | ≈ −€49 |
+| Winter, 2 days | ≈ €961 (el 362 · heat 350 · feed-in 198 · water 32 · base 19) | ≈ €679 (fuel 307 · upkeep 334 · grid 38) | **+€283** |
+| Summer, 2 days | ≈ €1 019 (feed-in 597 · el 288 · heat 77 · water 38 · base 19) | ≈ €496 (fuel 134 · upkeep 334 · grid 28) | **+€524** |
+| Blackout day | heat/water still sell; **electricity books €0** | fuel + upkeep keep running | ≈ −€47 |
 
 The LPG rework traded base-load electricity income (0.58 kW/house mean vs
 the inflated H0 1.05 at the same evening peak) for a bigger EV fleet

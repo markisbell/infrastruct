@@ -285,6 +285,44 @@ static func house_water_m3h(profile: Dictionary, t: int, temp_c: float) -> float
 	return water_zone_demand_m3h(1, t, temp_c) * float(profile.get("dhw_scale", 1.0))
 
 
+## Profiles are deterministic per tile — build each once, keep forever.
+static var _profile_cache := {}
+
+
+static func profile_cached(pos: Vector2i) -> Dictionary:
+	if not _profile_cache.has(pos):
+		_profile_cache[pos] = house_profile(pos)
+	return _profile_cache[pos]
+
+
+# ─── PHYSICS TIER (user decision 2026-08-02): a zone's boundary demand is
+# the SUM of its actual sampled households — the transformer sees real
+# coincidence (five wallboxes overlapping tonight, two tomorrow), not the
+# smooth expectation. The *_demand_* expectation functions above remain
+# for reference displays, tests and pack-less fallbacks. ───
+
+static func zone_sum_kw(house_tiles: Array, t: int) -> float:
+	var total := 0.0
+	for pos: Vector2i in house_tiles:
+		var p := profile_cached(pos)
+		total += house_base_kw(p, t) + house_ev_kw(p, t) - house_pv_kw(p, t)
+	return total
+
+
+static func heat_zone_sum_kw(house_tiles: Array, t: int, temp_c: float) -> float:
+	var total := 0.0
+	for pos: Vector2i in house_tiles:
+		total += house_heat_kw(profile_cached(pos), t, temp_c)
+	return total
+
+
+static func water_zone_sum_m3h(house_tiles: Array, t: int, temp_c: float) -> float:
+	var total := 0.0
+	for pos: Vector2i in house_tiles:
+		total += house_water_m3h(profile_cached(pos), t, temp_c)
+	return total
+
+
 # ─── water: archetype shape x weekend volume x seasonal swing (peak
 # mid-July = game day 135) x hot-day irrigation surcharge ───
 

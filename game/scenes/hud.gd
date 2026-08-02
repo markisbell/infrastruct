@@ -1016,8 +1016,8 @@ func _select_tool(tool: CityView.Tool) -> void:
 func _refresh() -> void:
 	var demand := 0.0
 	for zone_id: String in City.topo.zones_info:
-		demand += DemandModel.zone_demand_kw(
-			City.topo.zones_info[zone_id]["houses"], City.current_t)
+		demand += DemandModel.zone_sum_kw(
+			City.topo.zones_info[zone_id]["house_tiles"], City.current_t)
 	var houses := City.model.houses.size()
 	_status.text = "Day %d %s (%s, %.0f°C) · %s · €%s · Happy %.0f%% · %d houses · %.0f kW el · Outage %d min el / %d min heat / %d min water%s" % [
 		GameClock.day(), GameClock.time_of_day_string(), GameClock.season_name(),
