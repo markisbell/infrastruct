@@ -6,8 +6,9 @@ extends RefCounted
 ## rtwaterflow's W 410 archetype shapes), composed by
 ## season x day kind at native 15-min resolution. Space heating stays the
 ## live physics formula (weather-driven — that IS its seasonality); DHW
-## keeps its VDI-style day shape (the heat acceptance scenarios are
-## temperature-calibrated). v1 curves remain as the pack-less fallback.
+## follows LPG warm-water day shapes (2026-08-02: the same simulated
+## households as the electricity curves). v1 curves and the VDI-style DHW
+## staircase remain as the pack-less fallbacks.
 
 const STEPS_PER_DAY := 96
 const DAYS_PER_YEAR := 360          # GameClock's year
@@ -165,15 +166,24 @@ const HOUSE_HEAT_DESIGN_KW := 4.0   # SH design load per house at -14 °C
 const HOUSE_DHW_KW := 0.25          # diversified DHW average per house
 
 
+## Expected DHW draw factor (mean ~1.0 over the week) — LPG warm-water day
+## shapes via the pack (the same simulated households as the electricity
+## curves); the VDI-style staircase stays as the pack-less fallback.
+static func dhw_factor(t: int) -> float:
+	var pack := _get_pack()
+	if pack.has("dhw"):
+		return float(pack["dhw"][day_kind(t)][t % STEPS_PER_DAY])
+	var dhw_hour := ((t * 15) % 1440) / 60
+	return 1.8 if (dhw_hour >= 6 and dhw_hour < 9) \
+		else (1.5 if (dhw_hour >= 18 and dhw_hour < 21) else 0.7)
+
+
 static func heat_zone_demand_kw(n_houses: int, t: int, temp_c: float) -> float:
 	var sh_factor := clampf((16.0 - temp_c) / 30.0, 0.0, 1.15)
 	var minute := (t * 15) % 1440
 	var night_setback := 0.82 if (minute < 300 or minute >= 1380) else 1.0
-	var dhw_hour := (minute / 60) % 24
-	var dhw_factor := 1.8 if (dhw_hour >= 6 and dhw_hour < 9) \
-		else (1.5 if (dhw_hour >= 18 and dhw_hour < 21) else 0.7)
 	return n_houses * (HOUSE_HEAT_DESIGN_KW * sh_factor * night_setback
-		+ HOUSE_DHW_KW * dhw_factor)
+		+ HOUSE_DHW_KW * dhw_factor(t))
 
 
 # ─── water: archetype shape x weekend volume x seasonal swing (peak

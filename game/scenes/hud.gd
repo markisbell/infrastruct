@@ -362,6 +362,7 @@ func _make_budget_section(box: VBoxContainer) -> void:
 var _inspector: PanelContainer
 var _inspector_title: Label
 var _inspector_graph: ProfileGraph
+var _inspector_graph2: ProfileGraph  # optional second axis (per-house water)
 var _inspector_live: Label
 
 
@@ -443,6 +444,10 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 			var net_prev: Array[float] = []
 			var consumption: Array[float] = []
 			var pv: Array[float] = []
+			var heat: Array[float] = []
+			var heat_prev: Array[float] = []
+			var water_l: Array[float] = []
+			var water_l_prev: Array[float] = []
 			for i in 96:
 				var t0 := day * 96 + i
 				var t1 := maxi(day - 1, 0) * 96 + i
@@ -456,6 +461,16 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 				net_prev.append(DemandModel.HOUSE_MEAN_KW * DemandModel.house_factor(t1)
 					+ DemandModel.EV_SHARE * DemandModel.EV_CHARGER_KW * DemandModel.ev_factor(t1)
 					- DemandModel.PV_SHARE * DemandModel.PV_KWP_MEAN * DemandModel.pv_availability(t1))
+				# heat (SH physics + LPG DHW shape) and water follow the
+				# seeded weather — yesterday's curves use yesterday's temps
+				heat.append(DemandModel.heat_zone_demand_kw(
+					1, t0, City.weather.temp_c(t0)))
+				heat_prev.append(DemandModel.heat_zone_demand_kw(
+					1, t1, City.weather.temp_c(t1)))
+				water_l.append(1000.0 * DemandModel.water_zone_demand_m3h(
+					1, t0, City.weather.temp_c(t0)))
+				water_l_prev.append(1000.0 * DemandModel.water_zone_demand_m3h(
+					1, t1, City.weather.temp_c(t1)))
 			var zone: String = City.topo.house_zone.get(pos, "")
 			_show_config({"title": "House (%d, %d)" % [pos.x, pos.y],
 				"unit": "kW", "dec": 2, "base_zero": false,
@@ -467,7 +482,15 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 						"values": consumption},
 					{"label": "PV infeed", "color": Color(0.4, 0.8, 0.45),
 						"values": pv},
-				]}, zone if zone != "" else "no substation coverage")
+					{"label": "Heat", "color": Color(0.9, 0.35, 0.25),
+						"values": heat, "values_prev": heat_prev},
+				],
+				"secondary": {"unit": "L/h", "dec": 1, "base_zero": true,
+					"y": "Water [L/h]", "limits": [],
+					"series": [{"label": "Water",
+						"color": Color(0.25, 0.75, 0.5),
+						"values": water_l, "values_prev": water_l_prev}]},
+			}, zone if zone != "" else "no substation coverage")
 		"cable":
 			var edge := City.topo.line_id_at(pos)
 			if edge == "":
@@ -530,6 +553,9 @@ func _show_config(config: Dictionary, subtitle: String) -> void:
 		header.add_child(close)
 		_inspector_graph = ProfileGraph.new()
 		box.add_child(_inspector_graph)
+		_inspector_graph2 = ProfileGraph.new()
+		_inspector_graph2.visible = false
+		box.add_child(_inspector_graph2)
 		_inspector_live = Label.new()
 		_inspector_live.add_theme_font_size_override("font_size", 11)
 		_inspector_live.modulate = Color(1, 1, 1, 0.7)
@@ -538,7 +564,8 @@ func _show_config(config: Dictionary, subtitle: String) -> void:
 				City.water_result]:
 			network_signal.connect(func(_t: int, _r: Dictionary) -> void:
 				if _inspector.visible:
-					_inspector_graph.queue_redraw())
+					_inspector_graph.queue_redraw()
+					_inspector_graph2.queue_redraw())
 	_inspector_title.text = "%s   (%s)" % [config["title"], subtitle]
 	_inspector_live.text = "Today opaque · yesterday faded · dashed = limit"
 	var series_typed: Array[Dictionary] = []
@@ -547,6 +574,15 @@ func _show_config(config: Dictionary, subtitle: String) -> void:
 	limits_typed.assign(config["limits"])
 	_inspector_graph.setup(series_typed, config["unit"], config["dec"],
 		limits_typed, config["base_zero"], config["y"])
+	var secondary: Dictionary = config.get("secondary", {})
+	_inspector_graph2.visible = not secondary.is_empty()
+	if not secondary.is_empty():
+		var series2: Array[Dictionary] = []
+		series2.assign(secondary["series"])
+		var limits2: Array[Dictionary] = []
+		limits2.assign(secondary["limits"])
+		_inspector_graph2.setup(series2, secondary["unit"], secondary["dec"],
+			limits2, secondary["base_zero"], secondary["y"])
 	_inspector.visible = true
 
 

@@ -60,7 +60,22 @@ func test_water_summer_exceeds_winter() -> void:
 
 
 func test_heat_formula_unchanged() -> void:
-	# Phase 4 calibration pin: design cold, 12:00 (no setback, dhw 0.7)
-	var expected := 10.0 * (4.0 * 1.0 * 1.0 + 0.25 * 0.7)
+	# Phase 4 calibration pin on the SPACE-HEATING part: design cold, 12:00
+	# (no setback). DHW rides on top via the pack's LPG warm-water shape.
+	var expected := 10.0 * (4.0 * 1.0 * 1.0
+		+ 0.25 * DemandModel.dhw_factor(_t(301, 12.0)))
 	assert_float(DemandModel.heat_zone_demand_kw(10, _t(301, 12.0), -14.0)) \
 		.is_equal_approx(expected, 0.001)
+
+
+func test_dhw_shape_sane() -> void:
+	# LPG warm-water shape: composed weekly mean 1.0 (HOUSE_DHW_KW keeps
+	# its mean-kW meaning), mornings busier than deep night
+	var acc := 0.0
+	for day: int in [301, 306, 307]:  # workday, saturday, sunday
+		for q in STEPS:
+			acc += DemandModel.dhw_factor(day * STEPS + q) \
+				* (5.0 if day == 301 else 1.0)
+	assert_float(acc / (7.0 * STEPS)).is_between(0.93, 1.07)
+	assert_float(DemandModel.dhw_factor(_t(301, 7.5))) \
+		.is_greater(DemandModel.dhw_factor(_t(301, 3.0)) * 1.5)

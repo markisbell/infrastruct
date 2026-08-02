@@ -216,8 +216,42 @@ def gen_ev() -> None:
     _save_pack(pack)
 
 
+def gen_dhw() -> None:
+    """Domestic-hot-water day shapes from the LPG warm-water library
+    (tools/profiles/lpg_dhw_library.json, see gen_lpg_dhw.py) — the same 8
+    CHR households that drive the electricity shapes, so the shower and
+    the kettle belong to the same simulated person. Equal-weight mix,
+    the elec pass's 30-min diversity smear, composed weekly mean 1.0
+    (the game's HOUSE_DHW_KW keeps its mean-kW contract meaning)."""
+    import numpy as np
+
+    lib = json.loads(
+        (Path(__file__).resolve().parent / "lpg_dhw_library.json")
+        .read_text(encoding="utf-8"))
+    ticks96 = np.arange(96)
+    lag = np.minimum(ticks96, 96 - ticks96)
+    kernel = np.exp(-0.5 * (lag / 2.0) ** 2)
+    kernel /= kernel.sum()
+    shapes = {}
+    for kind in DAY_KINDS:
+        mix = np.mean([arch[kind] for arch in lib["archetypes"].values()], axis=0)
+        shapes[kind] = np.real(np.fft.ifft(np.fft.fft(mix) * np.fft.fft(kernel)))
+    week_mean = sum(shapes[k].mean() * w
+                    for k, w in (("workday", 5 / 7), ("saturday", 1 / 7),
+                                 ("sunday", 1 / 7)))
+    pack = _load_pack()
+    pack["dhw"] = {kind: [round(float(x / week_mean), 4) for x in curve]
+                   for kind, curve in shapes.items()}
+    pack["meta"]["dhw_source"] = (
+        "%s (%d archetypes, equal-weight mix, 30-min diversity smear, "
+        "holidays excluded from workdays)" % (
+            lib["source"], len(lib["archetypes"])))
+    _save_pack(pack)
+
+
 if __name__ == "__main__":
-    commands = {"elec": gen_elec, "water": gen_water, "pv": gen_pv, "ev": gen_ev}
+    commands = {"elec": gen_elec, "water": gen_water, "pv": gen_pv,
+                "ev": gen_ev, "dhw": gen_dhw}
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
-        sys.exit("usage: gen_profiles.py elec|water|pv|ev")
+        sys.exit("usage: gen_profiles.py elec|water|pv|ev|dhw")
     commands[sys.argv[1]]()

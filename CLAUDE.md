@@ -107,7 +107,14 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   ~18:45) − rooftop PV (40 % × 5–15 kWp fleet, mean 10 used in the
   composition, on REAL measured rtpowerflow day
   shapes, seasonal-scaled). A full 150-house zone incl. 50 % EV now peaks
-  ~112 % of its 630 kVA station — tense by design, trips only past 120 %. Negative at sunny noon = export. Solar parks
+  ~112 % of its 630 kVA station — tense by design, trips only past 120 %.
+  HEAT DHW (2026-08-02): the DHW day shape comes from LPG WARM-WATER runs
+  of the SAME 8 households (committed cache
+  `tools/profiles/lpg_dhw_library.json`, regeneration recipe in
+  `gen_lpg_dhw.py` — pylpg, year 2023, seed 7, holidays excluded from
+  workdays; morning shower peak ~4.9× mean vs the old 1.8 VDI staircase,
+  `HOUSE_DHW_KW` 0.25 mean unchanged, staircase stays the pack-less
+  fallback via `DemandModel.dhw_factor`). Negative at sunny noon = export. Solar parks
   dispatch from the same `DemandModel.pv_availability`; billing books only
   positive net import. **WEATHER-COUPLED PV (2026-07-31)**: WHICH measured
   day a game day gets follows `WeatherSystem.clearness_day` (the seeded
@@ -184,7 +191,11 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   too (user request 2026-07-31): net import / consumption / pv infeed as the
   DIVERSIFIED per-house expectation straight from DemandModel (no solved
   per-house telemetry exists — ProfileGraph series accept direct
-  `values`/`values_prev` arrays besides telemetry `key`s for exactly this). Buildings show their
+  `values`/`values_prev` arrays besides telemetry `key`s for exactly this);
+  since 2026-08-02 the house panel also carries a HEAT series (SH physics
+  + LPG DHW, weather-driven incl. yesterday's temps) in the kW graph and a
+  SECOND ProfileGraph for water in L/h (`_show_config` optional
+  `secondary` sub-config — units must not share an axis). Buildings show their
   quantity (trafo %, import kW, SoC %, °C, bar, m³/h); power lines show
   per-segment loading (contract edges, telemetry keyed by the segment's MIDDLE
   tile — L-indices renumber on rebuild); heat/water pipes show network totals
