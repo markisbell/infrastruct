@@ -550,14 +550,13 @@ func _diff(nodes: Dictionary, source: Dictionary, maker: Callable) -> void:
 # ─── terrain (stepped plateaus, one static ArrayMesh, rebuilt on change) ───
 
 func _ground_y(pos: Vector2i) -> float:
-	var terrain: Terrain = City.model.terrain
-	if terrain.is_water(pos):
-		return terrain.visual_y(pos)
-	var h := terrain.height(pos)
-	return (_corner_y(terrain, pos.x, pos.y, h)
-		+ _corner_y(terrain, pos.x + 1, pos.y, h)
-		+ _corner_y(terrain, pos.x + 1, pos.y + 1, h)
-		+ _corner_y(terrain, pos.x, pos.y + 1, h)) / 4.0
+	# plain LEVEL height (one noise call): corners are CAPPED at the tile
+	# level below, so the terrain never rises above its plateau — models
+	# placed here can never be clipped, and construction joins like it
+	# always did (the smoothed _ground_y variant cost ~16 noise calls per
+	# call in every renderer hot path AND shattered road runs into
+	# stepped slabs — user report 2026-08-02)
+	return City.model.terrain.visual_y(pos)
 
 
 ## Smoothed corner height (the anti-Minecraft pass, user request
@@ -574,7 +573,12 @@ static func _corner_y(terrain: Terrain, x: int, z: int, ref_level: int) -> float
 		if absi(lvl - ref_level) <= 1:
 			total += lvl * Terrain.VISUAL_STEP
 			n += 1
-	return total / n if n > 0 else ref_level * Terrain.VISUAL_STEP
+	if n == 0:
+		return ref_level * Terrain.VISUAL_STEP
+	# CAP at the tile's own plateau: slopes descend from the UPPER terrace
+	# only (rounded tops, crisp lips) — the surface never exceeds a tile's
+	# level, so roads/buildings/props at level height always sit clean
+	return minf(total / n, ref_level * Terrain.VISUAL_STEP)
 
 
 static func _face_normal(q: Array) -> Vector3:
