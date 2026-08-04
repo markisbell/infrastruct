@@ -103,7 +103,21 @@ Plus: collapse the `_register_async` per-network triplication into one
 NetSync struct (stays in the autoload). City keeps async
 register/reset, signal plumbing, cross-autoload glue (~900 LOC left).
 
-## Phase 3 — main.gd: smokes become a framework (~3 days, mechanical)
+## Phase 3 — main.gd: smokes become a framework — DONE 2026-08-04
+
+Landed: game/smokes/<name>.gd per smoke over class_name SmokeBase
+(waits, _run_steps, _fail, reference towns, result readers, _econ_delta);
+main.gd 2402 -> ~535 lines (mode dispatch + boot + bench + visual
+probes); registry dispatch with CLI byte-identical (cosim-kill = the
+cosim file with kill_mode set via the registry; --seed forwarded with
+set(), a silent no-op on smokes without the property). SmokeBase gained
+the opt-in check()/failed_checks()/verdict() per-assertion reporting
+(existing smokes keep their verbatim verdicts — migrate opportunistically
+when a smoke is next touched) and _repo_file() with INFRA_OUT_DIR
+override for the two dev-only CSV writes. Verified: GdUnit 163/163, full
+battery 21/21. One extraction miss (economy's _econ_net) was caught by
+the battery and fixed — when moving function groups, grep the moved
+bodies for helper CALLS not in the move spec.
 
 - `game/smokes/smoke_base.gd`: `_run_steps`, fresh-scenario pattern,
   forced-weather helpers, deadline polling — plus **named per-assertion

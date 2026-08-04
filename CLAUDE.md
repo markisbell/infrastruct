@@ -35,8 +35,10 @@ game/                    Godot project (open with .tools/godot/*.exe --path game
   autoloads/  GameClock · SidecarManager · CosimBridge · Orchestrator · City · SaveGame
   model/      world_model (SoT) · terrain · building_defs · demand · weather ·
               power/heat/water_topology · event_system · scenarios
-  scenes/     main (modes+smokes) · city_view (3D) · hud (palette/panels) ·
-              profile_graph · debug_panel
+  scenes/     main (mode dispatch + visual probes) · city_view (3D) ·
+              hud (palette/panels) · profile_graph · debug_panel
+  smokes/     one file per acceptance smoke over SmokeBase (shared waits,
+              _run_steps, reference towns; --smoke CLI frozen)
   tests/      GdUnit suites (res://tests, 98 green)
 backends/    three submodules pinned to their gamebridge branches
 docs/        contract/v1.md + schemas · adr/001-005 · screenshots/
@@ -507,7 +509,17 @@ so hud/smokes/envelope see the old names. Suites: test_telemetry_rings,
 test_satisfaction, test_economy, test_protection, test_dispatch,
 test_capacity_growth, test_cosim_guards. GdUnit 163/163; full smoke
 battery (19 + both e2e wrappers) + contract suite re-verified green
-after the extraction; economy CSV numerically pure.
+after the extraction; economy CSV numerically pure. Phase 3 DONE (same
+day): the ~19 inline smokes moved to game/smokes/<name>.gd over
+class_name SmokeBase (main.gd 2402 -> ~535 lines, registry dispatch,
+CLI byte-identical; cosim.gd serves cosim + cosim-kill via a
+registry-set kill_mode, playtest gets --seed forwarded via set());
+SmokeBase adds opt-in per-assertion check()/verdict() reporting and
+_repo_file() (INFRA_OUT_DIR override) for the two dev-only CSV writes.
+Full battery re-verified 21/21 after the move (one extraction miss —
+economy's _econ_net helper — caught by the battery, moved, re-green;
+lesson: when moving function groups, grep the moved bodies for CALLS
+to helpers not in the move spec).
 
 Releases on GitHub: v0.8.0 + v0.8.1 (verified Windows installers) and
 v0.8.2 (the Linux tarball, built + verified from a fresh extraction; a
