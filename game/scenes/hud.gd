@@ -177,6 +177,7 @@ func _ready() -> void:
 	_make_breakdown()
 	view.building_clicked.connect(_open_inspector)
 	view.tile_infra_clicked.connect(_open_tile_inspector)
+	view.empty_clicked.connect(_close_inspector)
 
 	City.state_changed.connect(_refresh)
 	City.event_logged.connect(_on_event)
@@ -370,6 +371,26 @@ var _inspector_title: Label
 var _inspector_graph: ProfileGraph
 var _inspector_graph2: ProfileGraph  # optional second axis (per-house water)
 var _inspector_live: Label
+var _inspector_key := ""  # what's open — re-clicking the same element toggles
+
+
+## The panel is a popup at the element now, so it dismisses like one:
+## ✕, Esc, click-away on empty ground, or re-click of the same element
+## (user report 2026-08-04: with every town tile inspectable, a panel
+## that only the small ✕ could close felt impossible to get rid of).
+func _close_inspector() -> void:
+	if _inspector != null:
+		_inspector.visible = false
+
+
+## True (and closes) when this element's panel is already open — the
+## callers early-return so the click acts as a toggle.
+func _inspector_toggled_off(key: String) -> bool:
+	if _inspector != null and _inspector.visible and _inspector_key == key:
+		_inspector.visible = false
+		return true
+	_inspector_key = key
+	return false
 
 
 ## Screen-true compass (user request 2026-08-02): letters are PROJECTED
@@ -481,6 +502,9 @@ func _inspector_config(kind: String, id: String) -> Dictionary:
 ## 1.1 edges); heat/water pipes have no per-pipe wire data, so they open
 ## the network-total graph — honest about what the solver reports.
 func _open_tile_inspector(category: String, pos: Vector2i) -> void:
+	if _inspector_toggled_off("%s %s" % [category, pos]):
+		return
+	var anchor := view.tiles_screen_rect([pos])
 	match category:
 		"house":
 			# THE sampled household on this lot (per-house individuality,
@@ -547,7 +571,8 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 					"series": [{"label": "Water",
 						"color": Color(0.25, 0.75, 0.5),
 						"values": water_l, "values_prev": water_l_prev}]},
-			}, tags if zone != "" else tags + " · no substation coverage")
+			}, tags if zone != "" else tags + " · no substation coverage",
+				anchor)
 		"cable":
 			var edge := City.topo.line_id_at(pos)
 			if edge == "":
@@ -560,22 +585,24 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 				"limits": [{"value": 100.0, "label": "rating",
 					"color": Color(0.95, 0.3, 0.25)}],
 				"series": [{"key": City.topo.line_key(edge), "label": "Loading",
-					"color": Color(0.31, 0.76, 0.97)}]}, edge)
+					"color": Color(0.31, 0.76, 0.97)}]}, edge, anchor)
 		"heat_pipe":
 			_show_config({"title": "District heating network", "unit": "kW",
 				"dec": 0, "base_zero": true, "y": "Total heat load [kW]",
 				"limits": [],
 				"series": [{"key": "net:heat", "label": "Heat load",
-					"color": Color(0.9, 0.35, 0.25)}]}, "all zones")
+					"color": Color(0.9, 0.35, 0.25)}]}, "all zones", anchor)
 		"water_pipe":
 			_show_config({"title": "Water network", "unit": "m³/h", "dec": 2,
 				"base_zero": true, "y": "Total demand [m³/h]", "limits": [],
 				"series": [{"key": "net:water", "label": "Demand",
-					"color": Color(0.25, 0.75, 0.5)}]}, "all zones")
+					"color": Color(0.25, 0.75, 0.5)}]}, "all zones", anchor)
 
 
 func _open_inspector(id: String) -> void:
 	if not City.model.buildings.has(id):
+		return
+	if _inspector_toggled_off(id):
 		return
 	var kind: String = City.model.buildings[id]["kind"]
 	var config := _inspector_config(kind, id)
@@ -585,15 +612,18 @@ func _open_inspector(id: String) -> void:
 	if kind == "solar_park":
 		subtitle += " · facing " + DemandModel.PV_ROT_FACING[
 			int(City.model.buildings[id].get("rot", 0)) % 4]
-	_show_config(config, subtitle)
+	var tiles: Array = []  # full footprint, rotation included
+	for tile: Vector2i in City.model.building_tiles:
+		if City.model.building_tiles[tile] == id:
+			tiles.append(tile)
+	if tiles.is_empty():
+		tiles.append(City.model.buildings[id]["anchor"])
+	_show_config(config, subtitle, view.tiles_screen_rect(tiles))
 
 
-func _show_config(config: Dictionary, subtitle: String) -> void:
+func _show_config(config: Dictionary, subtitle: String, anchor: Rect2) -> void:
 	if _inspector == null:
-		_inspector = PanelContainer.new()
-		_inspector.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-		_inspector.offset_top = 320.0
-		_inspector.offset_left = -430.0
+		_inspector = PanelContainer.new()  # positioned per click, see below
 		var style := StyleBoxFlat.new()  # opaque: the event feed sits above
 		style.bg_color = Color(0.08, 0.1, 0.13, 0.97)
 		style.set_corner_radius_all(6)
@@ -645,6 +675,17 @@ func _show_config(config: Dictionary, subtitle: String) -> void:
 		_inspector_graph2.setup(series2, secondary["unit"], secondary["dec"],
 			limits2, secondary["base_zero"], secondary["y"])
 	_inspector.visible = true
+	# pop up at the clicked element's top-right like a callout (user request
+	# 2026-08-04 — the fixed right-edge dock sat far from the element),
+	# clamped on screen; min y clears the status bar
+	_inspector.reset_size()  # shrink back after a taller house panel
+	var panel_size := _inspector.get_combined_minimum_size()
+	var vp := get_viewport().get_visible_rect().size
+	var panel_pos := Vector2(anchor.end.x + 10.0,
+		anchor.position.y - panel_size.y - 10.0)
+	panel_pos.x = clampf(panel_pos.x, 8.0, maxf(vp.x - panel_size.x - 8.0, 8.0))
+	panel_pos.y = clampf(panel_pos.y, 48.0, maxf(vp.y - panel_size.y - 8.0, 48.0))
+	_inspector.position = panel_pos
 
 
 # ─── save / load (envelope v3): four slots with day/time/house labels ───
@@ -1055,6 +1096,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var key: InputEventKey = event
 	if key.keycode == KEY_ESCAPE:
 		_select_tool(CityView.Tool.NONE)  # back to inspect mode
+		_close_inspector()
 	elif TOOL_KEYS.has(key.keycode):
 		_select_tool(TOOL_KEYS[key.keycode])
 	elif key.keycode == KEY_TAB:

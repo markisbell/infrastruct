@@ -28,6 +28,8 @@ const KENNEY := "res://assets/kenney/"
 signal building_clicked(id: String)
 ## Same for line/pipe tiles: category is "cable" | "heat_pipe" | "water_pipe".
 signal tile_infra_clicked(category: String, pos: Vector2i)
+## No-tool click on a tile with nothing inspectable — click-away dismiss.
+signal empty_clicked
 
 ## Network color language (user direction): heat = red/blue double pipe
 ## (forward/return — physically honest, the backend models both sides);
@@ -2696,6 +2698,8 @@ func _apply_tool(pos: Vector2i) -> void:
 				tile_infra_clicked.emit("heat_pipe", pos)
 			elif City.model.water_pipes.has(pos):
 				tile_infra_clicked.emit("water_pipe", pos)
+			else:
+				empty_clicked.emit()
 			_painting = false
 		Tool.ROAD:
 			City.build_road(pos)
@@ -2748,6 +2752,25 @@ func mouse_tile() -> Vector2i:
 
 func _center(pos: Vector2i) -> Vector3:
 	return Vector3(pos.x + 0.5, _ground_y(pos), pos.y + 0.5)
+
+
+## Screen-space bounding box of a set of tiles (ground corners through the
+## live camera) — the HUD pops the inspector at the clicked element's
+## top-right corner (user request 2026-08-04: graphs next to the element,
+## not docked at the screen edge).
+func tiles_screen_rect(tiles: Array) -> Rect2:
+	var rect := Rect2()
+	var first := true
+	for pos: Vector2i in tiles:
+		var y := _ground_y(pos)
+		for corner: Vector3 in [Vector3(pos.x, y, pos.y),
+				Vector3(pos.x + 1.0, y, pos.y),
+				Vector3(pos.x, y, pos.y + 1.0),
+				Vector3(pos.x + 1.0, y, pos.y + 1.0)]:
+			var point := camera.unproject_position(corner)
+			rect = Rect2(point, Vector2.ZERO) if first else rect.expand(point)
+			first = false
+	return rect
 
 
 var _material_cache := {}
