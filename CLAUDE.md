@@ -519,7 +519,15 @@ _repo_file() (INFRA_OUT_DIR override) for the two dev-only CSV writes.
 Full battery re-verified 21/21 after the move (one extraction miss —
 economy's _econ_net helper — caught by the battery, moved, re-green;
 lesson: when moving function groups, grep the moved bodies for CALLS
-to helpers not in the move spec).
+to helpers not in the move spec). Phase 4 DONE (same day):
+Orchestrator gained bridge_override/health_override/reset_for_test
+seams (in-process fakes bypass wire float coercion — the Python
+contract suite stays the wire authority); FakeCosimBridge +
+FakeSidecarHealth under game/tests/fakes/; test_orchestrator.gd (9
+cases: lag, wire-t resync, missed/skipped accounting, coupling,
+recovery, error frames, failed escalation) + test_sidecar_launch.gd (4
+cases over the new static build_launch_command/translate_python_path —
+both OS branches testable on Linux). GdUnit 176/176.
 
 Releases on GitHub: v0.8.0 + v0.8.1 (verified Windows installers) and
 v0.8.2 (the Linux tarball, built + verified from a fresh extraction; a

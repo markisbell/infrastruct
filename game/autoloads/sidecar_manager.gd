@@ -107,33 +107,47 @@ func _start(id: String) -> void:
 	# port in the log name: parallel instances (live game + stress run) must
 	# never interleave in one file
 	var log_path := log_dir.path_join("%s_%d.log" % [id, port_of(id)])
-	# dev: venv python -m module; installed build: a PyInstaller-frozen exe
-	var run := '"%s"' % repo_root.path_join(cfg["exe"]) if cfg.has("exe") \
-		else '"%s" -m %s' % [_python_path(cfg["python"]), cfg["module"]]
-	var pid: int
-	if OS.get_name() == "Windows":
-		var parts: Array[String] = ['cd /d "%s"' % repo_root.path_join(cfg["cwd"])]
-		for key: String in cfg.get("env", {}):
-			parts.append('set "%s=%s"' % [key, cfg["env"][key]])
-		parts.append('%s >> "%s" 2>&1' % [run, log_path])
-		pid = OS.create_process("cmd.exe", ["/c", " && ".join(parts)])
-	else:
-		var parts: Array[String] = ['cd "%s"' % repo_root.path_join(cfg["cwd"])]
-		for key: String in cfg.get("env", {}):
-			parts.append('export %s="%s"' % [key, cfg["env"][key]])
-		# exec: the shell is replaced by the backend, so pid == backend pid
-		parts.append('exec %s >> "%s" 2>&1' % [run, log_path])
-		pid = OS.create_process("sh", ["-c", " && ".join(parts)])
+	var command := build_launch_command(OS.get_name(), repo_root, cfg, log_path)
+	var args: Array = command["args"]
+	var pid := OS.create_process(command["exe"], PackedStringArray(args))
 	s["pid"] = pid
 	s["started_at"] = Time.get_ticks_msec() / 1000.0
 	_set_state(id, State.STARTING if pid > 0 else State.DOWN)
 
 
-func _python_path(rel: String) -> String:
-	# sidecars.json carries the Windows venv layout; translate on POSIX
-	if OS.get_name() != "Windows" and rel.contains("/Scripts/"):
+## Pure launch-command builder (Phase-4 refactor plan): {exe, args} for
+## OS.create_process, parameterized on os_name so BOTH branches are
+## testable on either platform. POSIX runs through `exec` so the spawned
+## pid IS the backend (plain kill suffices); Windows kills the tree.
+static func build_launch_command(os_name: String, root: String,
+		cfg: Dictionary, log_path: String) -> Dictionary:
+	# dev: venv python -m module; installed build: a PyInstaller-frozen exe
+	var run := '"%s"' % root.path_join(cfg["exe"]) if cfg.has("exe") \
+		else '"%s" -m %s' % [
+			translate_python_path(os_name, root, cfg["python"]), cfg["module"]]
+	if os_name == "Windows":
+		var win_parts: Array[String] = ['cd /d "%s"' % root.path_join(cfg["cwd"])]
+		for key: String in cfg.get("env", {}):
+			win_parts.append('set "%s=%s"' % [key, cfg["env"][key]])
+		win_parts.append('%s >> "%s" 2>&1' % [run, log_path])
+		return {"exe": "cmd.exe", "args": ["/c", " && ".join(win_parts)]}
+	var parts: Array[String] = ['cd "%s"' % root.path_join(cfg["cwd"])]
+	for key: String in cfg.get("env", {}):
+		parts.append('export %s="%s"' % [key, cfg["env"][key]])
+	# exec: the shell is replaced by the backend, so pid == backend pid
+	parts.append('exec %s >> "%s" 2>&1' % [run, log_path])
+	return {"exe": "sh", "args": ["-c", " && ".join(parts)]}
+
+
+## sidecars.json carries the Windows venv layout; translate on POSIX.
+## NEVER resolve()/follow the interpreter symlink: uv-venv pythons link
+## to the base interpreter and following them escapes the venv (spawns
+## with NO deps — cost a debugging loop on the Linux port).
+static func translate_python_path(os_name: String, root: String,
+		rel: String) -> String:
+	if os_name != "Windows" and rel.contains("/Scripts/"):
 		rel = rel.replace("/Scripts/", "/bin/").trim_suffix(".exe")
-	return repo_root.path_join(rel)
+	return root.path_join(rel)
 
 
 func _kill(id: String) -> void:

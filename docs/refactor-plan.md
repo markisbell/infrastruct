@@ -130,7 +130,24 @@ bodies for helper CALLS not in the move spec.
   in yearcurves + economy) with explicit paths — they break in exports.
 - main.gd lands ~600 LOC (mode dispatch + visual probes).
 
-## Phase 4 — orchestration test rig (~3 days)
+## Phase 4 — orchestration test rig — DONE 2026-08-04
+
+Landed: bridge_override/health_override seams + reset_for_test on
+Orchestrator (duck-typed via _bridge()/_healthy(); production leaves
+them null); game/tests/fakes/fake_cosim_bridge.gd (scripted,
+request-recording, hold_frames suspends a step across sim steps) +
+fake_sidecar_health.gd; test_orchestrator.gd pins one-step lag, wire-t
+resync (boundary at GAME t, wire at last_t+1), missed-step counting,
+coupling summing (incl. never routing a net's own output back),
+down-skip latching, recovery (re-handshake + reset + resume wire),
+error-frame non-storage, failed escalation at 3. SidecarManager's spawn
+became static build_launch_command(os_name, ...) +
+translate_python_path — both OS branches unit-tested on Linux
+(test_sidecar_launch.gd pins the exec-pid trick, the cmd.exe tree
+shape, and the never-resolve-venv-symlink lesson). Caveat documented in
+the seam: in-process fakes bypass wire float coercion — the Python
+contract suite stays the wire authority. Verified: GdUnit 176/176 +
+sidecars/cosim smokes + resilience wrapper green against real backends.
 
 - 12-LOC bridge-injection seam in Orchestrator + a scripted,
   request-recording `FakeCosimBridge` → new `test_orchestrator.gd`:

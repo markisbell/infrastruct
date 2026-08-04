@@ -27,6 +27,33 @@ var networks := {}  # id -> {topology, in_flight, last_result, last_t, missed, c
 var running := false
 var stats := {"dispatched": 0, "completed": 0, "missed": 0, "skipped_down": 0}
 
+## Test seams (Phase-4 refactor plan): a suite injects FakeCosimBridge /
+## a fake health source and drives _on_sim_step directly — the scheduler
+## rules become testable without sockets. Production leaves both null.
+## CAVEAT: an in-process fake bypasses the JSON wire float coercion; the
+## Python contract suite stays the wire authority — these seams test
+## ORCHESTRATION logic only.
+var bridge_override: Object = null
+var health_override: Object = null  # duck-type: state_of(id) -> State
+
+
+func _bridge() -> Object:
+	return bridge_override if bridge_override != null else CosimBridge
+
+
+func _healthy(id: String) -> bool:
+	if health_override != null:
+		return health_override.state_of(id) == SidecarManager.State.HEALTHY
+	return SidecarManager.state_of(id) == SidecarManager.State.HEALTHY
+
+
+func reset_for_test() -> void:
+	networks.clear()
+	stats = {"dispatched": 0, "completed": 0, "missed": 0, "skipped_down": 0}
+	running = false
+	bridge_override = null
+	health_override = null
+
 
 func _ready() -> void:
 	GameClock.sim_step.connect(_on_sim_step)
@@ -40,7 +67,7 @@ func register(id: String, topology: Dictionary) -> bool:
 		"last_t": -1, "missed": 0, "consecutive_failed": 0,
 		"needs_reset": false, "down_since_t": -1, "resetting": true,
 	}
-	var response := await CosimBridge.net_reset(id, topology)
+	var response: Dictionary = await _bridge().net_reset(id, topology)
 	var ok: bool = response.get("_status", 0) == 200 and response.get("ok", false)
 	networks[id]["resetting"] = false
 	if not ok:
@@ -72,7 +99,7 @@ func _dispatch(id: String, t: int) -> void:
 	var net: Dictionary = networks[id]
 	if net.get("resetting", false):
 		return  # quiet skip: an ordinary re-register is in flight
-	if SidecarManager.state_of(id) != SidecarManager.State.HEALTHY or net["needs_reset"]:
+	if not _healthy(id) or net["needs_reset"]:
 		stats["skipped_down"] += 1
 		if net["down_since_t"] < 0:
 			net["down_since_t"] = t
@@ -102,7 +129,7 @@ func _step_async(id: String, t: int) -> void:
 		"device_setpoints": boundary_provider.get_device_setpoints(id, t) if boundary_provider else {},
 		"coupling_in": _coupling_for(id),
 	}
-	var result := await CosimBridge.step(id, request)
+	var result: Dictionary = await _bridge().step(id, request)
 	net["in_flight"] = false
 	if result.get("_status", 0) != 200:
 		# transport failure — health polling will flag DOWN; don't corrupt state
@@ -161,17 +188,17 @@ func _on_sidecar_state(id: String, state: SidecarManager.State) -> void:
 	if state == SidecarManager.State.DOWN or state == SidecarManager.State.RESTARTING:
 		net["needs_reset"] = true
 		net["in_flight"] = false
-		CosimBridge.drop(id)
+		_bridge().drop(id)
 	elif state == SidecarManager.State.HEALTHY and net["needs_reset"]:
 		_recover(id)
 
 
 func _recover(id: String) -> void:
 	var net: Dictionary = networks[id]
-	if not await CosimBridge.handshake(id):
+	if not await _bridge().handshake(id):
 		supply_event.emit(id, "handshake_failed", "critical", {})
 		return
-	var response := await CosimBridge.net_reset(id, net["topology"])
+	var response: Dictionary = await _bridge().net_reset(id, net["topology"])
 	if response.get("_status", 0) == 200 and response.get("ok", false):
 		net["needs_reset"] = false
 		var gap_start: int = net["down_since_t"]
