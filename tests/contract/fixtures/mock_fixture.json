@@ -45,5 +45,6 @@
     "kind": "generator",
     "node": "b2",
     "params": {"p_max_kw": 50}
-  }
+  },
+  "signed_demand_probe": {"zone": "z0", "value": -50.0, "slack_id": "slack", "min_import_drop": 150.0}
 }

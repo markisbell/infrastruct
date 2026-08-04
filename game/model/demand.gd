@@ -25,6 +25,25 @@ static var _pack := {}
 static var _pack_state := 0  # 0 = unloaded, 1 = loaded, -1 = missing
 
 
+## Test seam (Phase-1 refactor plan): clear every static cache so suites
+## can't leak weather/profile state into each other. Production never calls
+## this — City re-injects `weather` explicitly on reset/restore instead.
+static func reset_caches() -> void:
+	weather = null
+	_pv_order.clear()
+	_profile_cache = {}
+	_pack = {}
+	_pack_state = 0
+
+
+## Test seam: force a specific pack (or {} + state -1 to exercise the
+## pack-less fallback branches) without touching the shipped
+## residential_pack.json. Pass state 0 to return to lazy loading.
+static func set_pack_override(pack: Dictionary, state: int = 1) -> void:
+	_pack = pack
+	_pack_state = state
+
+
 static func _get_pack() -> Dictionary:
 	if _pack_state == 0:
 		_pack_state = -1

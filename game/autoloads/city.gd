@@ -13,24 +13,14 @@ signal heat_result(t: int, result: Dictionary)
 signal water_result(t: int, result: Dictionary)
 
 const START_MONEY := 500_000
-const GROWTH_HAPPINESS_MIN := 60.0
 
-# ─── economy (Phase 7 task 1; rationale in tools/balancing/economy.md) ───
-const TARIFF_ELEC_KWH := 0.35     # income per kWh actually delivered
-const TARIFF_HEAT_KWH := 0.16
-const TARIFF_WATER_M3 := 3.0
-const BASE_FEE_HOUSE_DAY := 0.4   # Grundgebühr per connected household
-const FUEL_PRICE_KWH := 0.09      # gas, per kWh fuel
-const GRID_IMPORT_KWH := 0.22     # wholesale purchase at the slack
-const GRID_FEEDIN_KWH := 0.06     # feed-in revenue for exports
-const GAS_PLANT_ETA := 0.40
-const CHP_ETA_TOTAL := 0.88
-const LOAN_RATE_DAY := 0.0005     # ~18 % p.a., charged daily on the balance
-const STEP_H := 0.25              # 15-min step in hours
-const TRIP_STREAK := 3            # consecutive critical overloads before a line trips
-const GRID_TRIP_STREAK := 2       # consecutive capacity busts before the slack trips
-const TRAFO_TRIP_STREAK := 4      # 1 h of solved trafo loading above 120 %
-const PEAK_SHAVE_ALPHA := 1.0 / 96.0  # ~one-day EMA horizon (battery threshold)
+# ─── economy: rates + books live in EconomyBooks (Phase-2 extraction;
+# rationale in tools/balancing/economy.md) ───
+const STEP_H := EconomyBooks.STEP_H  # smokes/handlers still read City.STEP_H
+# trip streaks: rules + values live in ProtectionSystem (Phase-2 extraction)
+const TRIP_STREAK := ProtectionSystem.TRIP_STREAK
+const GRID_TRIP_STREAK := ProtectionSystem.GRID_TRIP_STREAK
+const TRAFO_TRIP_STREAK := ProtectionSystem.TRAFO_TRIP_STREAK
 const REPAIR_STEPS := 8           # 2 in-game hours (crew work time)
 const CREW_COST := 1_500          # dispatching a maintenance crew
 ## tripped_* value convention: AWAITING_CREW means the element stays dead
@@ -46,11 +36,14 @@ var model := WorldModel.new()
 var weather := WeatherSystem.new(42)
 var money := START_MONEY
 var happiness := 100.0
-## Happiness v2 (Phase 6): per-network satisfaction 0..100 with MEMORY —
-## outages hit fast, trust recovers slowly (~weeks of clean supply for a
-## bad blackout). happiness = weighted blend; water weighs heaviest, heat
-## by season (a January heat outage is a catastrophe, a July one a shrug).
-var satisfaction := {"power": 100.0, "heat": 100.0, "water": 100.0}
+## Happiness v2 rules live in SatisfactionModel (Phase-2 extraction);
+## City.satisfaction stays the back-compat view (hud bars, smokes, saves).
+var satisfaction_model := SatisfactionModel.new()
+var satisfaction: Dictionary:
+	get:
+		return satisfaction_model.values
+	set(value):
+		satisfaction_model.values = value
 var outage_minutes := {}          # zone_id -> minutes
 var events: Array[Dictionary] = []
 
@@ -64,28 +57,16 @@ var grid_trip_until := -1
 ## percent, pos: Vector2i, text}. Rebuilt each step from the solved state.
 var capacity_warnings := {}
 
-## Element telemetry for the click-inspector graphs (rtpowerflow's daily
-## profile convention): per key, TODAY's 96 step slots fill as solved, and
-## YESTERDAY's completed day renders as the faded reference curve.
-## key -> {"day": int, "today": Array[96], "yesterday": Array[96]} (NAN = no
-## sample). Keys: dev:<id> kW · soc:<id> % · q:<id> m³/h · v:<zone> pu ·
-## d:<zone> kW · t:<zone> °C · pb:<zone> bar · trafo:<sub_id> %.
-var telemetry := {}
+## Element telemetry rings (see TelemetryRings — extracted, Phase-2 plan).
+var telemetry_rings := TelemetryRings.new()
+## Back-compat view: ProfileGraph and the suites index City.telemetry.
+var telemetry: Dictionary:
+	get:
+		return telemetry_rings.rings
 
 
 func _telemetry_put(key: String, t: int, value: float) -> void:
-	var day := t / 96
-	var entry: Dictionary = telemetry.get(key, {})
-	if entry.is_empty() or int(entry["day"]) != day:
-		var blank := []
-		blank.resize(96)
-		blank.fill(NAN)
-		entry = {"day": day,
-			"yesterday": entry.get("today", blank.duplicate()) if not entry.is_empty()
-				and int(entry.get("day", -99)) == day - 1 else blank.duplicate(),
-			"today": blank.duplicate()}
-		telemetry[key] = entry
-	entry["today"][t % 96] = value
+	telemetry_rings.put(key, t, value)
 var zone_supplied := {}           # power zone_id -> bool (latest step)
 var heat_zone_supplied := {}      # heat zone_id -> bool (latest step)
 var heat_outage_minutes := {}     # heat zone_id -> minutes cold
@@ -95,10 +76,58 @@ var last_result := {}
 var last_heat_result := {}
 var last_water_result := {}
 var current_t := 0
-var heat_registered := false
-var water_registered := false
-var _last_heat_doc_json := ""
-var _last_water_doc_json := ""
+## One network's registration bookkeeping (NetSync — the Phase-2 collapse
+## of the _register_async triplication): registered flag + the doc-json
+## cache that makes re-registration idempotent.
+class NetSync:
+	var network: String
+	var registered := false
+	var last_doc_json := ""
+
+	func _init(net: String) -> void:
+		network = net
+
+	## One register pass: an unchanged doc that is already registered is a
+	## no-op; a source-less/empty doc deregisters.
+	func sync(city: Node, has_source: bool, doc: Dictionary) -> bool:
+		if not has_source or doc.is_empty():
+			registered = false
+			last_doc_json = ""
+			return false
+		var doc_json := JSON.stringify(doc)
+		if doc_json != last_doc_json or not registered:
+			if await city._register_network(network, doc):
+				registered = true
+				last_doc_json = doc_json
+			else:
+				registered = false
+		return registered
+
+
+var _sync_heat := NetSync.new("heat")
+var _sync_water := NetSync.new("water")
+## Back-compat views — smokes read the flags and force re-registration by
+## blanking the json cache.
+var heat_registered: bool:
+	get:
+		return _sync_heat.registered
+	set(value):
+		_sync_heat.registered = value
+var water_registered: bool:
+	get:
+		return _sync_water.registered
+	set(value):
+		_sync_water.registered = value
+var _last_heat_doc_json: String:
+	get:
+		return _sync_heat.last_doc_json
+	set(value):
+		_sync_heat.last_doc_json = value
+var _last_water_doc_json: String:
+	get:
+		return _sync_water.last_doc_json
+	set(value):
+		_sync_water.last_doc_json = value
 
 ## Scenario hook: overrides the grid connection's capacity_kw when > 0.
 var grid_capacity_override := -1.0
@@ -113,33 +142,60 @@ var event_system := EventSystem.new(42)
 ## Random events roll only when enabled (sandbox + scenarios; acceptance
 ## smokes stay deterministic and script events explicitly).
 var events_enabled := false
-var loans := 0.0
-## Daily cash-flow breakdown (today accumulates, yesterday is the closed
-## day the budget panel shows).
-var econ_today := {}
-var econ_yesterday := {}
-var econ_total := {}              # cumulative since scenario start (balancing)
-var _cash_frac := 0.0
-var _econ_day := -1
+## Books + loans live in EconomyBooks; these views keep the hud, smokes
+## and save envelope reading/writing the same names.
+var econ_books := EconomyBooks.new()
+var loans: float:
+	get:
+		return econ_books.loans
+	set(value):
+		econ_books.loans = value
+var econ_today: Dictionary:
+	get:
+		return econ_books.today
+	set(value):
+		econ_books.today = value
+var econ_yesterday: Dictionary:
+	get:
+		return econ_books.yesterday
+	set(value):
+		econ_books.yesterday = value
+var econ_total: Dictionary:
+	get:
+		return econ_books.total
+	set(value):
+		econ_books.total = value
 ## Difficulty knobs (Phase 7 task 4), set by the scenario picker.
 var difficulty := {"growth_scale": 1.0, "event_scale": 1.0, "money_scale": 1.0}
 ## The scenario runner's state (id, start_day, streaks, done) — owned here
 ## so saves carry it; the main scene reads/writes it.
 var scenario_state := {}
 
-var _line_streak := {}
-var _slack_streak := 0
-var _peak_ema := 0.0              # battery peak-shave threshold (net-load EMA)
-var _peak_ema_t := -1
+## Trip streaks live in ProtectionSystem (Phase-2 extraction).
+var protection := ProtectionSystem.new()
+## Deduped topology warnings (Phase 1: was node metadata, leaked across
+## scenario resets).
+var _topo_warned := {}
+## Dispatch rules incl. the battery peak-shave EMA (Phase-2 extraction).
+var dispatch := DispatchPolicy.new()
 ## Last known SoC per storage device (battery/heat storage/water tower,
 ## 0..1) — replayed into the docs at registration so topology resets and
 ## save/load never silently recharge the fleet (Phase 8).
 var device_soc := {}
 var _topo_dirty := true
 var _topo_timer := 0.0
-var _last_doc_json := ""
+var _sync_power := NetSync.new("power")
+var _last_doc_json: String:
+	get:
+		return _sync_power.last_doc_json
+	set(value):
+		_sync_power.last_doc_json = value
 var _syncing := false
-var registered := false
+var registered: bool:
+	get:
+		return _sync_power.registered
+	set(value):
+		_sync_power.registered = value
 
 
 func _ready() -> void:
@@ -460,12 +516,10 @@ func _sync_topology() -> void:
 		_inject_soc(doc)
 	# surface builder warnings (island networks etc.) — they were silent,
 	# which made "why is my second network dead?" undebuggable in play
-	var warned: Dictionary = get_meta("topo_warned", {})
 	for warning: String in (topo.warnings + heat_topo.warnings + water_topo.warnings):
-		if not warned.has(warning):
-			warned[warning] = true
+		if not _topo_warned.has(warning):
+			_topo_warned[warning] = true
 			log_event("topology", "warning", warning)
-	set_meta("topo_warned", warned)
 	_syncing = true
 	_register_async()
 
@@ -485,30 +539,9 @@ func _track_soc(result: Dictionary) -> void:
 
 
 func _register_async() -> void:
-	# power
-	if not topo.has_slack or topo.doc.is_empty():
-		registered = false
-		_last_doc_json = ""
-	else:
-		var doc_json := JSON.stringify(topo.doc)
-		if doc_json != _last_doc_json or not registered:
-			if await _register_network("power", topo.doc):
-				registered = true
-				_last_doc_json = doc_json
-			else:
-				registered = false
+	await _sync_power.sync(self, topo.has_slack, topo.doc)
 	# heat (independent of power failures)
-	if not heat_topo.has_plant or heat_topo.doc.is_empty():
-		heat_registered = false
-		_last_heat_doc_json = ""
-	else:
-		var heat_json := JSON.stringify(heat_topo.doc)
-		if heat_json != _last_heat_doc_json or not heat_registered:
-			if await _register_network("heat", heat_topo.doc):
-				heat_registered = true
-				_last_heat_doc_json = heat_json
-			else:
-				heat_registered = false
+	await _sync_heat.sync(self, heat_topo.has_plant, heat_topo.doc)
 	# a rejected heat network is invisible misery (the solver never steps):
 	# pin a persistent marker on the slack plant until registration succeeds
 	if not heat_topo.doc.is_empty() and not heat_registered:
@@ -523,17 +556,7 @@ func _register_async() -> void:
 	else:
 		capacity_warnings.erase("hz_offline")
 	# water (independent of both)
-	if not water_topo.has_source or water_topo.doc.is_empty():
-		water_registered = false
-		_last_water_doc_json = ""
-	else:
-		var water_json := JSON.stringify(water_topo.doc)
-		if water_json != _last_water_doc_json or not water_registered:
-			if await _register_network("water", water_topo.doc):
-				water_registered = true
-				_last_water_doc_json = water_json
-			else:
-				water_registered = false
+	await _sync_water.sync(self, water_topo.has_source, water_topo.doc)
 	if registered or heat_registered or water_registered:
 		Orchestrator.start()
 	_syncing = false
@@ -659,27 +682,20 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 			"battery":
 				if not down:
 					n_batteries += 1
-	# batteries ALWAYS peak-shave (user direction): discharge the net load
-	# above its slow-moving average, recharge below it — flattening what the
-	# grid connection sees instead of bridging only after gas dispatch
-	if _peak_ema_t != t:
-		_peak_ema = total_demand if _peak_ema_t < 0 \
-			else lerpf(_peak_ema, total_demand, PEAK_SHAVE_ALPHA)
-		_peak_ema_t = t
-	var shave := (total_demand - _peak_ema) / maxf(float(n_batteries), 1.0)
+	var shave := dispatch.battery_shave_kw(t, total_demand, n_batteries)
 	var residual := total_demand - renewable
 	for device: Dictionary in topo.doc.get("devices", []):
 		if device["kind"] == "battery":
 			var p_max: float = 0.0 if event_system.is_down(device["id"], t) \
 				else device["params"]["p_max_kw"]
-			var p := clampf(shave, -p_max, p_max)
+			var p := DispatchPolicy.battery_p_kw(shave, p_max)
 			out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
 			residual -= p
 	for device: Dictionary in topo.doc.get("devices", []):
 		if device["kind"] == "generator":
-			# gas covers what is left AFTER renewables and the battery pass
-			var p: float = 0.0 if event_system.is_down(device["id"], t) \
-				else clampf(residual, 0.0, device["params"]["p_max_kw"])
+			var p := DispatchPolicy.gas_p_kw(residual,
+				float(device["params"]["p_max_kw"]),
+				event_system.is_down(device["id"], t))
 			out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
 			residual -= p
 	return out
@@ -708,13 +724,8 @@ func _heat_setpoints(t: int) -> Dictionary:
 		var down := event_system.is_down(device["id"], t)
 		if def_kind == "storage_heat":
 			var p_max := 0.0 if down else float(device["params"].get("p_max_kw", 100.0))
-			var hour := (t * 15 % 1440) / 60
-			var setpoint := 0.0
-			if hour >= 0 and hour < 5:
-				setpoint = -p_max          # charge from the net at night
-			elif hour >= 6 and hour < 10:
-				setpoint = minf(p_max, 0.6 * total_demand)
-			out[device["id"]] = {"q_kw": snappedf(setpoint, 0.1)}
+			out[device["id"]] = {"q_kw": snappedf(
+				DispatchPolicy.storage_heat_q_kw(t, p_max, total_demand), 0.1)}
 		elif not first and def_kind in ["chp", "boiler", "heat_pump"]:
 			# secondary plants are heat-exchanger feed-ins with constant dispatch
 			var b_kind: String = model.buildings[device["id"]]["kind"]
@@ -737,61 +748,44 @@ func _water_setpoints(t: int) -> Dictionary:
 		var down := event_system.is_down(device["id"], t)
 		match device["kind"]:
 			"well":
-				out[device["id"]] = {"yield_factor": 0.0 if down
-					else snappedf(weather.drought_factor(t), 0.01)}
+				out[device["id"]] = {"yield_factor":
+					DispatchPolicy.well_yield(weather.drought_factor(t), down)}
 			"water_pump":
-				var powered: bool = power_ok and not down \
-					and topo.connected.get(device["id"], false)
-				out[device["id"]] = {"enabled": powered}
+				out[device["id"]] = {"enabled": DispatchPolicy.pump_enabled(
+					power_ok, down, topo.connected.get(device["id"], false))}
 	return out
 
 
-# ─── economy engine (Phase 7 task 1) ───
+# ─── economy engine (EconomyBooks owns the rules; City owns money) ───
 
-## Fractional euros accumulate; whole euros land on the int balance.
 func _econ_apply(category: String, delta_eur: float) -> void:
-	econ_today[category] = econ_today.get(category, 0.0) + delta_eur
-	econ_total[category] = econ_total.get(category, 0.0) + delta_eur
-	_cash_frac += delta_eur
-	var whole := int(_cash_frac)
-	money += whole
-	_cash_frac -= whole
+	money += econ_books.apply(category, delta_eur)
 
 
-## Clock-driven costs: upkeep + loan interest accrue every step regardless
-## of network state; the day rolls over (and events roll) at midnight.
+## Clock-driven costs accrue every step regardless of network state; the
+## day rolls over (and events roll) at midnight.
 func _econ_tick(t: int) -> void:
-	var day := t / 96
-	if day != _econ_day:
-		_econ_day = day
-		econ_yesterday = econ_today.duplicate()
-		econ_today = {}
-		if events_enabled:
-			_roll_events(t)
 	var upkeep := 0.0
 	for id: String in model.buildings:
 		upkeep += float(BuildingDefs.UPKEEP_DAY.get(model.buildings[id]["kind"], 0.0))
-	if upkeep > 0.0:
-		_econ_apply("cost_upkeep", -upkeep / 96.0)
-	if not model.houses.is_empty():  # standing charges (Grundgebühr)
-		_econ_apply("income_base", model.houses.size() * BASE_FEE_HOUSE_DAY / 96.0)
-	if loans > 0.0:
-		_econ_apply("cost_interest", -loans * LOAN_RATE_DAY / 96.0)
+	var ticked := econ_books.tick(t, upkeep, model.houses.size())
+	money += int(ticked["cash"])
+	if ticked["day_rolled"] and events_enabled:
+		_roll_events(t)
 
 
 func take_loan(amount: float) -> void:
-	loans += amount
-	_econ_apply("loan_in", amount)
+	money += econ_books.take_loan(amount)
 	log_event("loan", "info", "Loan taken: €%.0f (outstanding €%.0f)" % [amount, loans])
 
 
 func repay_loan(amount: float) -> void:
-	var repay := minf(minf(amount, loans), float(money))
-	if repay <= 0.0:
+	var repaid := econ_books.repay_loan(amount, money)
+	if float(repaid["repaid"]) <= 0.0:
 		return
-	loans -= repay
-	_econ_apply("loan_out", -repay)
-	log_event("loan", "info", "Loan repaid: €%.0f (outstanding €%.0f)" % [repay, loans])
+	money += int(repaid["cash"])
+	log_event("loan", "info", "Loan repaid: €%.0f (outstanding €%.0f)"
+		% [float(repaid["repaid"]), loans])
 
 
 ## Slack-ish exemptions for MTBF: the pressure/voltage boundary failing is
@@ -857,8 +851,7 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 
 	if total_houses > 0:
 		var hurt := float(unsupplied_houses) / total_houses
-		satisfaction["power"] = clampf(satisfaction["power"] - 9.0 * hurt
-			+ (SATISFACTION_RECOVERY if hurt == 0.0 else 0.0), 0.0, 100.0)
+		satisfaction_model.apply_step("power", hurt)
 		_update_happiness(t)
 
 	# economy: delivered kWh earn the tariff; the slack settles wholesale;
@@ -866,24 +859,21 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 	var income := 0.0
 	for zone_id: String in topo.zones_info:
 		if zone_supplied.get(zone_id, false):
-			# bill only the net IMPORT: at sunny noon the zone's rooftop PV
-			# exports (negative net load) and nothing is delivered to sell
-			income += maxf(0.0, DemandModel.zone_sum_kw(
-				topo.zones_info[zone_id]["house_tiles"], t)) * STEP_H * TARIFF_ELEC_KWH
+			income += EconomyBooks.delivered_elec_eur(DemandModel.zone_sum_kw(
+				topo.zones_info[zone_id]["house_tiles"], t))
 	if income > 0.0:
 		_econ_apply("income_elec", income)
 	for slack_id: String in model.buildings_of_kind("grid_connection"):
 		var import_kw := float(result.get("devices", {})
 			.get(slack_id, {}).get("output_kw", 0.0))
-		if import_kw > 0.0:
-			_econ_apply("cost_grid", -import_kw * STEP_H * GRID_IMPORT_KWH)
-		elif import_kw < 0.0:
-			_econ_apply("income_feedin", -import_kw * STEP_H * GRID_FEEDIN_KWH)
+		if import_kw != 0.0:
+			var settlement := EconomyBooks.slack_settlement(import_kw)
+			_econ_apply(settlement[0], settlement[1])
 	for gas_id: String in model.buildings_of_kind("gas_plant"):
 		var p_kw := float(result.get("devices", {})
 			.get(gas_id, {}).get("output_kw", 0.0))
 		if p_kw > 0.0:
-			_econ_apply("cost_fuel", -p_kw / GAS_PLANT_ETA * STEP_H * FUEL_PRICE_KWH)
+			_econ_apply("cost_fuel", -EconomyBooks.gas_fuel_eur(p_kw))
 
 	# telemetry for the click-inspector graphs
 	for zone_id: String in topo.zones_info:
@@ -952,9 +942,11 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 		heat_zone_supplied[zone_id] = warm
 		# capacity signal: supply temperature scraping the minimum means the
 		# network is at its thermal limit for this weather
-		if t_supply > 0.0 and t_supply < HeatTopology.T_SUPPLY_MIN_C + 4.0:
+		var heat_level := CapacitySignals.heat_level(t_supply,
+			HeatTopology.T_SUPPLY_MIN_C)
+		if heat_level != "":
 			capacity_warnings[zone_id] = {
-				"level": "crit" if t_supply < HeatTopology.T_SUPPLY_MIN_C else "warn",
+				"level": heat_level,
 				"percent": t_supply,
 				"pos": heat_topo.zones_info[zone_id]["center"],
 				"text": "%.0f°C" % t_supply}
@@ -966,9 +958,7 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 			cold_houses += houses
 	if total > 0:
 		var hurt := float(cold_houses) / total
-		satisfaction["heat"] = clampf(satisfaction["heat"]
-			- 7.0 * cold_factor * hurt
-			+ (SATISFACTION_RECOVERY if hurt == 0.0 else 0.0), 0.0, 100.0)
+		satisfaction_model.apply_step("heat", hurt, cold_factor)
 		_update_happiness(t)
 		if cold_houses > 0 and t % 8 == 0:
 			log_event("cold_homes", "warning",
@@ -995,9 +985,8 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 	var income := 0.0
 	for zone_id: String in heat_topo.zones_info:
 		if heat_zone_supplied.get(zone_id, false):
-			income += DemandModel.heat_zone_sum_kw(
-				heat_topo.zones_info[zone_id]["house_tiles"], t, temp) \
-				* STEP_H * TARIFF_HEAT_KWH
+			income += EconomyBooks.heat_income_eur(DemandModel.heat_zone_sum_kw(
+				heat_topo.zones_info[zone_id]["house_tiles"], t, temp))
 	if income > 0.0:
 		_econ_apply("income_heat", income)
 	for kind: String in ["boiler_plant", "chp_plant"]:
@@ -1008,14 +997,14 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 			var q_kw := absf(float(device.get("output_kw", 0.0)))
 			var fuel_kw: float
 			if kind == "boiler_plant":
-				fuel_kw = float(device.get("detail", {})
-					.get("p_fuel_kw", q_kw / 0.95))
+				fuel_kw = EconomyBooks.boiler_fuel_kw(q_kw,
+					device.get("detail", {}))
 			else:
 				var p_el := absf(float(result.get("coupling_out", {})
 					.get(plant_id, {}).get("p_el_kw", q_kw * 0.5)))
-				fuel_kw = (q_kw + p_el) / CHP_ETA_TOTAL
+				fuel_kw = EconomyBooks.chp_fuel_kw(q_kw, p_el)
 			if fuel_kw > 0.0:
-				_econ_apply("cost_fuel", -fuel_kw * STEP_H * FUEL_PRICE_KWH)
+				_econ_apply("cost_fuel", -EconomyBooks.fuel_eur(fuel_kw))
 	state_changed.emit()
 	heat_result.emit(t, result)
 
@@ -1050,9 +1039,10 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 			dry_weight += (1.0 - supplied) * houses
 		# capacity signal: pressure approaching the W 400-1 minimum
 		var p_bar := float(zone_result.get("detail", {}).get("p_bar", -1.0))
-		if p_bar >= 0.0 and p_bar < 2.4:
+		var water_level := CapacitySignals.water_level(p_bar)
+		if water_level != "":
 			capacity_warnings[zone_id] = {
-				"level": "crit" if p_bar < 2.0 else "warn",
+				"level": water_level,
 				"percent": p_bar,
 				"pos": water_topo.zones_info[zone_id]["center"],
 				"text": "%.1f bar" % p_bar}
@@ -1060,8 +1050,7 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 			capacity_warnings.erase(zone_id)
 	if total > 0:
 		var hurt := dry_weight / total
-		satisfaction["water"] = clampf(satisfaction["water"] - 12.0 * hurt
-			+ (SATISFACTION_RECOVERY * 0.8 if hurt == 0.0 else 0.0), 0.0, 100.0)
+		satisfaction_model.apply_step("water", hurt)
 		_update_happiness(t)
 		if dry_weight > 0.0 and t % 8 == 0:
 			log_event("dry_taps", "critical",
@@ -1094,9 +1083,8 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 			.get(zone_id, {}).get("supplied", 0.0)), 0.0, 1.0)
 		if result.get("status", "failed") == "failed":
 			fraction = 0.0
-		income += DemandModel.water_zone_sum_m3h(
-			water_topo.zones_info[zone_id]["house_tiles"], t, temp_w) \
-			* fraction * STEP_H * TARIFF_WATER_M3
+		income += EconomyBooks.water_income_eur(DemandModel.water_zone_sum_m3h(
+			water_topo.zones_info[zone_id]["house_tiles"], t, temp_w), fraction)
 	if income > 0.0:
 		_econ_apply("income_water", income)
 	state_changed.emit()
@@ -1110,47 +1098,28 @@ func total_water_outage_minutes() -> int:
 	return total
 
 
+## Thin applier over ProtectionSystem (Phase-2 extraction): the streak
+## rules decide, City applies the consequences and logs.
 func _check_protection(t: int, result: Dictionary) -> void:
-	# line trips: sustained critical overload disconnects the WHOLE branch
-	# behind it (physics: the tiles leave the topology) and it STAYS dead
-	# until the player pays a maintenance crew — the pressure to split
+	# line trips disconnect the WHOLE branch (physics: the tiles leave the
+	# topology) and STAY dead until a paid crew — the pressure to split
 	# feeders, add substations, or build local generation
-	for edge_id: String in result.get("edges", {}):
-		var loading := float(result["edges"][edge_id].get("loading_percent", 0.0))
-		if loading > 120.0:
-			_line_streak[edge_id] = _line_streak.get(edge_id, 0) + 1
-			if _line_streak[edge_id] >= TRIP_STREAK and topo.line_tiles.has(edge_id):
-				for tile: Vector2i in topo.line_tiles[edge_id]:
-					tripped_tiles[tile] = AWAITING_CREW
-				_line_streak.erase(edge_id)
-				_topo_dirty = true
-				log_event("line_trip", "critical",
-					"Line overloaded (%.0f%%) — branch disconnected. Send a repair crew (M)." % loading)
-		else:
-			_line_streak.erase(edge_id)
-	# transformer trips: SOLVED loading of the 20/0.4 kV element above 120 %
-	# sustained (contract T-edges — same criticality rule as the lines)
-	var trafo_streak: Dictionary = get_meta("trafo_streak", {})
-	for edge_id: String in topo.trafo_subs:
-		var sub_id: String = topo.trafo_subs[edge_id]
-		if tripped_substations.has(sub_id):
-			continue
-		var loading := float(result.get("edges", {}).get(edge_id, {})
-			.get("loading_percent", 0.0))
-		if loading > 120.0:
-			trafo_streak[sub_id] = int(trafo_streak.get(sub_id, 0)) + 1
-			if trafo_streak[sub_id] >= TRAFO_TRIP_STREAK:
-				tripped_substations[sub_id] = AWAITING_CREW
-				trafo_streak.erase(sub_id)
-				log_event("trafo_trip", "critical",
-					"Transformer %s overloaded (%.0f%%) — zone dark. Send a repair crew (M)."
-					% [sub_id, loading])
-		else:
-			trafo_streak.erase(sub_id)
-	set_meta("trafo_streak", trafo_streak)
-	# grid connection capacity (game-side protection on the slack): TOTAL
-	# import across all CONNECTED 110/20 kV stations vs their combined MVA —
-	# a second grid connection genuinely adds import headroom
+	var edges: Dictionary = result.get("edges", {})
+	for trip: Dictionary in protection.line_trips(edges, topo.line_tiles):
+		for tile: Vector2i in topo.line_tiles[trip["edge_id"]]:
+			tripped_tiles[tile] = AWAITING_CREW
+		_topo_dirty = true
+		log_event("line_trip", "critical",
+			"Line overloaded (%.0f%%) — branch disconnected. Send a repair crew (M)."
+			% float(trip["loading"]))
+	for trip: Dictionary in protection.trafo_trips(edges, topo.trafo_subs,
+			tripped_substations):
+		tripped_substations[trip["sub_id"]] = AWAITING_CREW
+		log_event("trafo_trip", "critical",
+			"Transformer %s overloaded (%.0f%%) — zone dark. Send a repair crew (M)."
+			% [trip["sub_id"], float(trip["loading"])])
+	# grid connection capacity: TOTAL import across all CONNECTED 110/20 kV
+	# stations vs their combined MVA — a second station adds real headroom
 	var slack_ids := model.buildings_of_kind("grid_connection")
 	if not slack_ids.is_empty():
 		var per_cap: float = grid_capacity_override if grid_capacity_override > 0.0 \
@@ -1163,16 +1132,11 @@ func _check_protection(t: int, result: Dictionary) -> void:
 			import_kw += float(result.get("devices", {})
 				.get(slack_id, {}).get("output_kw", 0.0))
 		var capacity := per_cap * maxf(float(n_connected), 1.0)
-		if import_kw > capacity:
-			_slack_streak += 1
-			if _slack_streak >= GRID_TRIP_STREAK and grid_trip_until <= t:
-				grid_trip_until = t + REPAIR_STEPS
-				_slack_streak = 0
-				log_event("grid_trip", "critical",
-					"Grid connection overloaded (%.0f kW > %.0f kW) — city-wide outage"
-					% [import_kw, capacity])
-		else:
-			_slack_streak = 0
+		if protection.grid_trip(import_kw, capacity, grid_trip_until <= t):
+			grid_trip_until = t + REPAIR_STEPS
+			log_event("grid_trip", "critical",
+				"Grid connection overloaded (%.0f kW > %.0f kW) — city-wide outage"
+				% [import_kw, capacity])
 
 
 ## Capacity signaling: everything running close to its limit gets an entry
@@ -1182,13 +1146,15 @@ func _update_capacity_warnings(t: int, result: Dictionary) -> void:
 	for key: String in capacity_warnings.keys():
 		if not str(key).begins_with("hz_") and not str(key).begins_with("wz_"):
 			capacity_warnings.erase(key)
-	# lines: loading vs thermal rating (contract 1.1 edges)
+	# lines: loading vs thermal rating (contract 1.1 edges); thresholds
+	# live in CapacitySignals (Phase-2 extraction)
 	for edge_id: String in result.get("edges", {}):
 		var loading := float(result["edges"][edge_id].get("loading_percent", 0.0))
-		if loading >= 80.0 and topo.line_tiles.has(edge_id):
+		var line_level := CapacitySignals.line_level(loading)
+		if line_level != "" and topo.line_tiles.has(edge_id):
 			var tiles: Array = topo.line_tiles[edge_id]
 			capacity_warnings[edge_id] = {
-				"level": "crit" if loading >= 95.0 else "warn",
+				"level": line_level,
 				"percent": loading, "pos": tiles[tiles.size() / 2],
 				"text": "%d%%" % int(loading)}
 	# substation transformers: SOLVED loading of the 20/0.4 kV element
@@ -1196,11 +1162,13 @@ func _update_capacity_warnings(t: int, result: Dictionary) -> void:
 		var sub_id: String = topo.trafo_subs[edge_id]
 		var percent := float(result.get("edges", {}).get(edge_id, {})
 			.get("loading_percent", 0.0))
-		if percent >= 70.0 or tripped_substations.has(sub_id):
+		var tripped := tripped_substations.has(sub_id)
+		var trafo_level := CapacitySignals.trafo_level(percent, tripped)
+		if trafo_level != "":
 			capacity_warnings[sub_id] = {
-				"level": "crit" if percent >= 90.0 or tripped_substations.has(sub_id) else "warn",
+				"level": trafo_level,
 				"percent": percent, "pos": model.buildings[sub_id]["anchor"],
-				"text": "TRIP" if tripped_substations.has(sub_id) else "%d%%" % int(percent)}
+				"text": "TRIP" if tripped else "%d%%" % int(percent)}
 	# equipment failures (MTBF events, maintenance windows): the reason a
 	# plant sits silent must be VISIBLE in the world, not only one feed line
 	# (user report: "a windpark failed without reason")
@@ -1230,9 +1198,10 @@ func _update_capacity_warnings(t: int, result: Dictionary) -> void:
 			else BuildingDefs.get_def("grid_connection")["capacity_kw"]
 		var percent := 100.0 * float(result.get("devices", {})
 			.get(slack_id, {}).get("output_kw", 0.0)) / capacity
-		if percent >= 80.0:
+		var grid_level := CapacitySignals.grid_level(percent)
+		if grid_level != "":
 			capacity_warnings[slack_id] = {
-				"level": "crit" if percent >= 95.0 else "warn",
+				"level": grid_level,
 				"percent": percent, "pos": model.buildings[slack_id]["anchor"],
 				"text": "%d%%" % int(percent)}
 
@@ -1287,12 +1256,10 @@ func dispatch_repair(pos: Vector2i) -> bool:
 
 ## _paid already moved the money; this records the reporting category.
 func _book_maintenance() -> void:
-	econ_today["cost_maintenance"] = econ_today.get("cost_maintenance", 0.0) - CREW_COST
-	econ_total["cost_maintenance"] = econ_total.get("cost_maintenance", 0.0) - CREW_COST
+	econ_books.book_paid_cost("cost_maintenance", CREW_COST)
 
 
-const SATISFACTION_RECOVERY := 0.06  # per clean step (~6/day): weeks-scale memory
-const ABANDON_HAPPINESS := 35.0
+const ABANDON_HAPPINESS := GrowthModel.ABANDON_HAPPINESS
 
 
 ## Weighted blend of the per-network satisfactions. Water always weighs
@@ -1300,22 +1267,13 @@ const ABANDON_HAPPINESS := 35.0
 ## the town actually HAS count — a village with no district heating isn't
 ## shielded by a perfect score for a service that doesn't exist.
 func _update_happiness(t: int) -> void:
-	var temp := float(weather.sample(t)["temp_c"])
-	var cold_norm := clampf((18.0 - temp) / 24.0, 0.15, 1.25) / 1.25  # 0.12..1
-	var weights := {"water": 0.45, "power": 0.25,
-		"heat": 0.3 * (0.25 + 0.75 * cold_norm)}
-	var active := {"power": not topo.zones_info.is_empty(),
-		"heat": not heat_topo.zones_info.is_empty(),
-		"water": not water_topo.zones_info.is_empty()}
-	var acc := 0.0
-	var total_weight := 0.0
-	for key: String in weights:
-		if not active[key]:
-			continue
-		acc += weights[key] * float(satisfaction[key])
-		total_weight += weights[key]
-	if total_weight > 0.0:
-		happiness = clampf(acc / total_weight, 0.0, 100.0)
+	var blended := satisfaction_model.happiness(
+		float(weather.sample(t)["temp_c"]),
+		{"power": not topo.zones_info.is_empty(),
+			"heat": not heat_topo.zones_info.is_empty(),
+			"water": not water_topo.zones_info.is_empty()})
+	if blended >= 0.0:  # nothing active -> keep the previous happiness
+		happiness = blended
 
 
 ## Growth v2 (ROADMAP Phase 6 task 2): the growth rate follows happiness,
@@ -1328,10 +1286,8 @@ func _grow(t: int) -> void:
 	if happiness < ABANDON_HAPPINESS:
 		_abandon(t)
 		return
-	var interval := 4 if happiness >= 90.0 \
-		else (8 if happiness >= 75.0 else (16 if happiness >= GROWTH_HAPPINESS_MIN else 0))
-	if interval > 0:  # difficulty: easy towns grow faster, hard ones slower
-		interval = maxi(1, int(interval / float(difficulty["growth_scale"])))
+	var interval := GrowthModel.growth_interval(happiness,
+		float(difficulty["growth_scale"]))
 	if interval == 0 or t % interval != 0:
 		return
 	if not _supply_margin_ok():
@@ -1351,45 +1307,23 @@ func _grow(t: int) -> void:
 				return  # one house per growth tick, city-wide
 
 
-## Spare-margin gate: nobody moves into a town running at its limits.
-## (Power margin — houses hang off power zones; heat/water shortfalls
-## already gate growth through happiness.)
 func _supply_margin_ok() -> bool:
-	if last_result.get("status", "") == "failed":
-		return false
-	for edge_id: String in last_result.get("edges", {}):
-		if float(last_result["edges"][edge_id].get("loading_percent", 0.0)) > 95.0:
-			return false
 	var slack_ids := model.buildings_of_kind("grid_connection")
-	if not slack_ids.is_empty():
-		var capacity: float = grid_capacity_override if grid_capacity_override > 0.0 \
-			else BuildingDefs.get_def("grid_connection")["capacity_kw"]
-		var import_kw := float(last_result.get("devices", {})
-			.get(slack_ids[0], {}).get("output_kw", 0.0))
-		if import_kw > 0.85 * capacity:
-			return false
-	return true
+	var capacity: float = grid_capacity_override if grid_capacity_override > 0.0 \
+		else BuildingDefs.get_def("grid_connection")["capacity_kw"]
+	return GrowthModel.margin_ok(last_result, capacity,
+		"" if slack_ids.is_empty() else str(slack_ids[0]))
 
 
 ## Sustained misery: one household leaves every 4 game-hours, from the zone
 ## with the worst outage record first.
 func _abandon(t: int) -> void:
-	if t % 16 != 0 or model.houses.is_empty():
+	if t % GrowthModel.ABANDON_INTERVAL != 0 or model.houses.is_empty():
 		return
 	var houses := model.houses.keys()
 	houses.sort()  # deterministic
-	var victim: Vector2i = houses[0]
-	var worst_zone := ""
-	var worst := -1
-	for zone_id: String in outage_minutes:
-		if outage_minutes[zone_id] > worst:
-			worst = outage_minutes[zone_id]
-			worst_zone = zone_id
-	if worst_zone != "":
-		for pos: Vector2i in houses:
-			if topo.house_zone.get(pos, "") == worst_zone:
-				victim = pos
-				break
+	var victim := GrowthModel.abandon_victim(houses, topo.house_zone,
+		outage_minutes)
 	model.remove_house(victim)
 	_refresh_topo_assignment()
 	log_event("abandoned", "warning",
@@ -1441,20 +1375,16 @@ func reset_for_scenario(weather_seed: int) -> void:
 	tripped_tiles.clear()
 	tripped_substations.clear()
 	capacity_warnings.clear()
-	telemetry.clear()
-	set_meta("trafo_streak", {})
+	telemetry_rings.clear()
+	protection.reset()
+	_topo_warned.clear()  # warning dedup is per-city, not per-process
 	grid_trip_until = -1
 	grid_capacity_override = -1.0
 	growth_enabled = true
 	infinite_money = false
 	event_system = EventSystem.new(weather_seed)
 	events_enabled = false
-	loans = 0.0
-	econ_today = {}
-	econ_yesterday = {}
-	econ_total = {}
-	_cash_frac = 0.0
-	_econ_day = -1
+	econ_books.reset()
 	difficulty = {"growth_scale": 1.0, "event_scale": 1.0, "money_scale": 1.0}
 	registered = false
 	heat_registered = false
@@ -1462,10 +1392,7 @@ func reset_for_scenario(weather_seed: int) -> void:
 	_last_doc_json = ""
 	_last_heat_doc_json = ""
 	_last_water_doc_json = ""
-	_line_streak.clear()
-	_slack_streak = 0
-	_peak_ema = 0.0
-	_peak_ema_t = -1
+	dispatch.reset()
 	device_soc.clear()
 	_heat_degraded_streak = 0
 	zone_supplied.clear()
@@ -1508,7 +1435,7 @@ func serialize() -> Dictionary:
 		"econ_today": econ_today.duplicate(),
 		"econ_yesterday": econ_yesterday.duplicate(),
 		"econ_total": econ_total.duplicate(),
-		"econ_day": _econ_day,
+		"econ_day": econ_books.day,
 		"event_system": event_system.serialize(),
 		"device_soc": device_soc.duplicate(),
 	}
@@ -1549,10 +1476,10 @@ func restore(data: Dictionary) -> void:
 	econ_today = data.get("econ_today", {})
 	econ_yesterday = data.get("econ_yesterday", {})
 	econ_total = data.get("econ_total", {})
-	_econ_day = int(data.get("econ_day", -1))
+	econ_books.day = int(data.get("econ_day", -1))
 	device_soc = data.get("device_soc", {})
 	capacity_warnings.clear()
-	telemetry.clear()   # rings belong to the previous city
+	telemetry_rings.clear()   # rings belong to the previous city
 	zone_supplied.clear()
 	heat_zone_supplied.clear()
 	water_zone_supplied.clear()

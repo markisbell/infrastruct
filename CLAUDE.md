@@ -249,7 +249,24 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   firing-and-forgetting the first one.
 - **Inspector**: left-click with no tool → daily profile graph in rtpowerflow's
   ProfileGraph conventions (0–24 h, 2 h ticks, unit y-axis, staircase, dashed
-  limits, now marker, yesterday faded, hover readout). HOUSES are clickable
+  limits, now marker, yesterday faded, hover readout). The panel POPS AT THE
+  CLICKED ELEMENT's screen top-right (2026-08-04, user request — the fixed
+  right-edge dock sat far from the element): `city_view.tiles_screen_rect`
+  unprojects the element's footprint corners through the live camera, the
+  panel's bottom-left lands on that rect's top-right corner, clamped
+  on-screen (min y clears the status bar); placement is at click time only,
+  the panel doesn't track camera moves. The `--screenshot` demo focuses the
+  camera BEFORE opening the demo inspector for this reason. DISMISSAL
+  (user report same day, "cannot remove the panel": with every town tile
+  inspectable and the panel now mid-screen, ✕-only close felt broken —
+  the ✕ itself was verified fine via a synthetic-click probe): it
+  dismisses like the popup it now is — re-click of the SAME element
+  toggles it off (`_inspector_key`), a no-tool click on empty ground
+  closes it (`city_view.empty_clicked` signal), Esc closes it alongside
+  its back-to-inspect duty, ✕ stays. All four paths verified through the
+  real input pipeline (Input.warp_mouse + parse_input_event in a
+  temporary screenshot-mode probe — synthetic motion alone does NOT move
+  `mouse_tile()`'s viewport cursor, warp does). HOUSES are clickable
   too (user request 2026-07-31): net import / consumption / pv infeed as the
   DIVERSIFIED per-house expectation straight from DemandModel (no solved
   per-house telemetry exists — ProfileGraph series accept direct
@@ -429,7 +446,10 @@ re-verified green).
   PipeflowNotConverged instead of the broadcast ValueError (the rtheatflow
   pin accepts both), and `--smoke=economy` regenerates economy_windows.csv
   with sub-1 % heat-side drift — commit the regenerated CSV, the Linux
-  numbers are canonical now.
+  numbers are canonical now. KNOWN NOISE (verified 2026-08-04 by
+  back-to-back identical-code runs): the SUMMER cost_fuel/income_heat
+  cells wobble ±0.5 % run-to-run (pandapipes heat retry-ladder timing);
+  winter + blackout cells are byte-stable — only investigate drift there.
 - Commits end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`;
   push to origin main + backend gamebridge branches at milestone completion.
 - The user's memory preference: **lean solo work; state the scale and ask
@@ -460,6 +480,34 @@ bubbles ('no power'/'freezing'), per-house inspector profiles
 (net/consumption/pv from DemandModel), and the full MODEL PASS: every
 plant/utility building rebuilt after Sketchfab references (see §4).
 README + screenshots renewed after the model pass.
+
+REFACTOR TRACK (2026-08-04, plan in docs/refactor-plan.md): Phase 1 DONE —
+contract schemas fixed (zone_demand SIGNED for power per §4; topology
+schema knew neither 1.1 nor the water device kinds) and the contract suite
+now validates topology + every step-request against their schemas plus a
+signed-demand probe (fixtures carry `signed_demand_probe`; mock passes
+power through signed); CosimBridge enforces §2's minor rule
+(EXPECTED_CONTRACT "1.1", static version_ok, test_cosim_guards.gd);
+DemandModel gained reset_caches/set_pack_override test seams; City's
+trafo_streak/topo_warned moved from node meta to members (reset covers
+them now); 4 dead-code sites gone; WorldModel line-layer triplication
+collapsed (_can_set_line/_set_line); 5 smoke gates hardened (sidecars pins
+solver identity+contract, stress pins registered/houses>=40/converged>=1,
+playtest counts ALL THREE networks + closing-window liveness, windless
+asserts the import buckets vs the 14-kW cap, events pins fire sag 0.07
+bar + burst solved-supply + post-storm wind recovery). Phase 2 DONE the
+same day: City's rules extracted into 7 pure model classes —
+TelemetryRings, SatisfactionModel, EconomyBooks (owns ALL tariff/rate
+constants now), ProtectionSystem (trip streaks), DispatchPolicy (peak
+EMA, storage windows, pump/well gates), CapacitySignals (warn/crit
+table), GrowthModel — plus the NetSync inner-class collapse of
+_register_async; City keeps back-compat properties (satisfaction,
+econ_today/yesterday/total, loans, registered flags, _last_*_doc_json)
+so hud/smokes/envelope see the old names. Suites: test_telemetry_rings,
+test_satisfaction, test_economy, test_protection, test_dispatch,
+test_capacity_growth, test_cosim_guards. GdUnit 163/163; full smoke
+battery (19 + both e2e wrappers) + contract suite re-verified green
+after the extraction; economy CSV numerically pure.
 
 Releases on GitHub: v0.8.0 + v0.8.1 (verified Windows installers) and
 v0.8.2 (the Linux tarball, built + verified from a fresh extraction; a

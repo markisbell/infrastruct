@@ -346,6 +346,9 @@ func _take_screenshot() -> void:
 	City.model.spawn_house(Vector2i(148, 127))
 	City.model.spawn_house(Vector2i(151, 127))
 	City._refresh_topo_assignment()
+	# camera BEFORE the inspector demo: the panel anchors to the clicked
+	# element through the live camera at click time
+	view.focus_tile(Vector2i(133, 125), 24.0)
 	# inspector demo: synthetic two-day LINE-loading telemetry (yesterday
 	# full + today up to "now"), then open the clicked line's graph panel
 	var line_pos := Vector2i(130, 121)
@@ -364,7 +367,6 @@ func _take_screenshot() -> void:
 	view.redraw()
 	if not view._clouds.is_empty():  # drift one cloud over town for the shot
 		view._clouds[0].position = Vector3(126.0, 13.0, 128.0)
-	view.focus_tile(Vector2i(133, 125), 24.0)
 	await get_tree().create_timer(1.0).timeout
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)
@@ -579,11 +581,19 @@ func _smoke_sidecars() -> void:
 		return
 	var ok := true
 	var per_sidecar := {}
+	# installer verification: the WRONG solver answering the right port must
+	# fail (gate hardening 2026-08-04 — handshake booleans alone accepted it)
+	var expected_solver := {"power": "pandapower", "heat": "pandapipes",
+		"water": "pandapipes"}
 	for id: String in SidecarManager.ids():
 		var handshake_ok: bool = await CosimBridge.handshake(id)
-		per_sidecar[id] = {"handshake": handshake_ok,
-			"solver": CosimBridge.info.get(id, {}).get("solver", "?")}
-		ok = ok and handshake_ok
+		var backend_info: Dictionary = CosimBridge.info.get(id, {})
+		var solver := str(backend_info.get("solver", "?"))
+		var solver_ok := solver.begins_with(str(expected_solver.get(id, "")))
+		per_sidecar[id] = {"handshake": handshake_ok, "solver": solver,
+			"solver_ok": solver_ok,
+			"contract": str(backend_info.get("contract", "?"))}
+		ok = ok and handshake_ok and solver_ok
 	print("SMOKE_SIDECARS ", JSON.stringify({"ok": ok, "sidecars": per_sidecar}))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if ok else 1)
@@ -764,6 +774,10 @@ func _smoke_stress() -> void:
 	GameClock.restore({"total_minutes": 8.0 * 60.0, "speed": 4.0})
 	Orchestrator.start()
 	_stall["worst_ms"] = {}
+	var power_frames := {"converged": 0}  # Dictionary: lambdas capture by ref
+	City.power_result.connect(func(_t: int, r: Dictionary) -> void:
+		if str(r.get("status", "")) == "converged":
+			power_frames["converged"] += 1)
 	await _stress_phase("gc+substations", func() -> void:
 		City.place_building("grid_connection", Vector2i(10, 10))
 		City.place_building("substation", Vector2i(30, 10))
@@ -798,10 +812,19 @@ func _smoke_stress() -> void:
 		await _stress_wait(2.0, "after_" + plant[0])
 	await _stress_wait(8.0, "running")
 	var report := {"ok": true, "worst_ms": _stall["worst_ms"],
-		"registered": City.registered, "houses": City.model.houses.size()}
+		"registered": City.registered, "houses": City.model.houses.size(),
+		"converged_frames": power_frames["converged"]}
 	for phase: String in _stall["worst_ms"]:
 		if float(_stall["worst_ms"][phase]) > 250.0:
 			report["ok"] = false
+	# timing alone is not a pass (gate hardening 2026-08-04): the run must
+	# have registered, grown its town AND solved at least one power frame —
+	# a silently failed registration used to exit 0 on frame times alone.
+	# (This layout deterministically yields 47 houses — lots cap the bulk
+	# spawn below the 2x30 request; 40 still pins "town actually built".)
+	if not (City.registered and City.model.houses.size() >= 40
+			and power_frames["converged"] >= 1):
+		report["ok"] = false
 	print("SMOKE_STRESS ", JSON.stringify(report))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if report["ok"] else 1)
@@ -1809,6 +1832,12 @@ func _smoke_events() -> void:
 	City._apply_event(City.event_system.force_fire(zone_id, City.current_t), City.current_t)
 	await _run_steps(4, 240.0)
 	var p_bar_fire := _water_p_bar(zone_id)
+	# gate hardening 2026-08-04: the baseline is rock-steady (p_bar_pre ==
+	# p_bar_before_fire to the hundredth), so the solved ~0.09-bar sag is
+	# clean signal — pinned at 0.07 (was 0.05). The 48 m³/h itself is served
+	# from the TOWER buffer, not extra pump flow (the pump holds its rated
+	# ~20 m³/h hysteresis duty) — so the pump term only pins "still running".
+	var pump_fire: float = pump_q.call()
 
 	# 5. PIPE BURST on the trunk: the only head is cut off — network down,
 	# repair + resync bring it back
@@ -1816,17 +1845,26 @@ func _smoke_events() -> void:
 	City._apply_event(City.event_system.make_burst(Vector2i(10, 17),
 		["%s" % zone_id], City.current_t), City.current_t)
 	await _run_steps(10, 300.0)
+	# down = deregistered/emptied topology OR a solved dry frame (gate
+	# hardening 2026-08-04 — the registration proxy alone said nothing
+	# about supply; pre-burst solvedness is pinned by the fire p_bar pair)
 	var water_down_during_burst := not City.water_registered \
-		or City.water_topo.zones_info.is_empty()
+		or City.water_topo.zones_info.is_empty() \
+		or _water_supplied(zone_id) < 0.5
 	await _run_steps(24, 400.0)
 	var supplied_after := _water_supplied(zone_id)
+	# storm expiry: its force-wind window is until_t = storm start + 96 —
+	# by here we are past it, the 7 m/s base series resumes, rotors spin
+	await _run_steps(12, 300.0)
+	var wind_recovered: float = wind_out.call()
 
 	var report := {
 		"ok": wind_pre > 10.0 and wind_storm == 0.0 and gas_storm > 5.0
 			and gas_down == 0.0 and gas_back > 5.0
 			and pump_pre > 0.0 and pump_maint == 0.0
-			and p_bar_fire < p_bar_before_fire - 0.05
-			and water_down_during_burst and supplied_after >= 0.99,
+			and p_bar_fire < p_bar_before_fire - 0.07 and pump_fire > 15.0
+			and water_down_during_burst and supplied_after >= 0.99
+			and wind_recovered > 10.0,
 		"wind_pre": snappedf(wind_pre, 0.1), "wind_storm": wind_storm,
 		"gas_storm": snappedf(gas_storm, 0.1), "gas_down": gas_down,
 		"gas_back": snappedf(gas_back, 0.1),
@@ -1834,8 +1872,10 @@ func _smoke_events() -> void:
 		"p_bar_pre": snappedf(p_bar_pre, 0.01),
 		"p_bar_before_fire": snappedf(p_bar_before_fire, 0.01),
 		"p_bar_fire": snappedf(p_bar_fire, 0.01),
+		"pump_fire": snappedf(pump_fire, 0.1),
 		"water_down_during_burst": water_down_during_burst,
 		"supplied_after_burst": snappedf(supplied_after, 0.01),
+		"wind_recovered": snappedf(wind_recovered, 0.1),
 		"orch": Orchestrator.stats,
 	}
 	print("SMOKE_EVENTS ", JSON.stringify(report))
@@ -2095,10 +2135,18 @@ func _smoke_playtest() -> void:
 	var problems: Array[String] = []
 	var actions := {"path": 0, "building": 0, "bulldoze": 0, "repair": 0,
 		"loan": 0, "saveload": 0, "built_tiles": 0}
-	var statuses := {}
-	City.power_result.connect(func(_t: int, result: Dictionary) -> void:
+	# per-network status counters (gate hardening 2026-08-04: heat/water
+	# wedging was undetected — only power was ever counted)
+	var statuses := {"power": {}, "heat": {}, "water": {}}
+	var count_status := func(net: String, result: Dictionary) -> void:
 		var s: String = result.get("status", "?")
-		statuses[s] = statuses.get(s, 0) + 1)
+		statuses[net][s] = statuses[net].get(s, 0) + 1
+	City.power_result.connect(func(_t: int, r: Dictionary) -> void:
+		count_status.call("power", r))
+	City.heat_result.connect(func(_t: int, r: Dictionary) -> void:
+		count_status.call("heat", r))
+	City.water_result.connect(func(_t: int, r: Dictionary) -> void:
+		count_status.call("water", r))
 	var builds: Array[String] = []
 	builds.assign(City.PATH_BUILDS.keys())
 	var kinds: Array[String] = []
@@ -2177,13 +2225,27 @@ func _smoke_playtest() -> void:
 			GameClock.pause()
 		if problems.size() > 25:
 			break
-	# closing health check: the engine must still be alive and solving
+	# closing health check: ALL THREE solvers must still be alive and
+	# stepping in the FINAL window — a single early power frame used to
+	# satisfy a cumulative whole-run count (any status counts as liveness;
+	# a monkey-wrecked network may legitimately solve to 'failed')
+	var frame_total := func(net: String) -> int:
+		var total := 0
+		for s: String in statuses[net]:
+			total += int(statuses[net][s])
+		return total
 	await get_tree().create_timer(3.2).timeout
+	var closing_base := {"power": frame_total.call("power"),
+		"heat": frame_total.call("heat"), "water": frame_total.call("water")}
 	GameClock.speed = 60.0
 	await get_tree().create_timer(3.0).timeout
 	GameClock.pause()
 	await get_tree().create_timer(1.0).timeout
-	var solved := int(statuses.get("converged", 0)) + int(statuses.get("degraded", 0))
+	for net: String in closing_base:
+		if int(frame_total.call(net)) - int(closing_base[net]) < 1:
+			problems.append(net + " solver produced no frames in the closing window")
+	var solved := int(statuses["power"].get("converged", 0)) \
+		+ int(statuses["power"].get("degraded", 0))
 	if solved == 0:
 		problems.append("power solver produced no usable frames all run")
 	var report := {
@@ -2219,6 +2281,13 @@ func _smoke_windless_week() -> void:
 		plain["outage_min"] > 0 and plain["all_in_window"]
 		and plain["outage_before_calm"] == 0
 		and battery["outage_min"] == 0
+		# import buckets were collected but never asserted (gate hardening
+		# 2026-08-04): the plain town must actually EXCEED the 14-kW cap in
+		# the calm window (that is what trips it) and the battery town must
+		# hold its calm peak at the cap — outage==0 alone would also pass
+		# if the cap silently stopped being enforced
+		and float(plain["import_calm"][1]) > 14.0
+		and float(battery["import_calm"][1]) <= 14.5
 	)
 	print("SMOKE_WINDLESS ", JSON.stringify({"ok": ok,
 		"plain": plain, "battery": battery}))

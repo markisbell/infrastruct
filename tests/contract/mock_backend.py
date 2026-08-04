@@ -157,9 +157,13 @@ def _fabricate(req: dict) -> dict:
     state = _STATE
 
     # Sample-and-hold zone demand (contract §4: missing zone keeps previous value).
+    # Power carries the SIGNED net load (§4 power note: negative = the zone
+    # exports); heat/water stay clamped >= 0.
     for zid, entry in (req.get("zone_demand") or {}).items():
         if zid in state.zone_demand and isinstance(entry, dict) and _is_num(entry.get("value")):
-            state.zone_demand[zid] = max(0.0, float(entry["value"]))
+            value = float(entry["value"])
+            state.zone_demand[zid] = value if state.network_kind == "power" \
+                else max(0.0, value)
 
     # Hold device setpoints, too — devices echo their latest setpoint.
     for did, sp in (req.get("device_setpoints") or {}).items():

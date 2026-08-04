@@ -118,11 +118,6 @@ func force_height(a: Vector2i, b: Vector2i, level: int) -> void:
 			_overrides[Vector2i(x, y)] = clampi(level, 0, MAX_LEVEL)
 
 
-func clear_overrides() -> void:
-	_overrides.clear()
-	_water_overrides.clear()
-
-
 ## Cheap change detector for the renderer (rebuild the mesh only on change).
 func fingerprint() -> String:
 	return "%d|%s|%d|%d" % [seed_value, region, _overrides.hash(),

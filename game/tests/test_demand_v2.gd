@@ -157,3 +157,16 @@ func test_dhw_shape_sane() -> void:
 	assert_float(acc / (7.0 * STEPS)).is_between(0.93, 1.07)
 	assert_float(DemandModel.dhw_factor(_t(301, 7.5))) \
 		.is_greater(DemandModel.dhw_factor(_t(301, 3.0)) * 1.5)
+
+
+func test_seams_pack_override_and_reset() -> void:
+	# Phase-1 test seams: a forced-missing pack flips house_factor onto the
+	# v1 fallback curve, and reset_caches restores lazy pack loading.
+	var packed := DemandModel.house_factor(_t(301, 19.0))
+	DemandModel.set_pack_override({}, -1)
+	var fallback := DemandModel.house_factor(_t(301, 19.0))
+	assert_bool(DemandModel._get_pack().is_empty()).is_true()
+	assert_float(fallback).is_not_equal(packed)  # different shape families
+	DemandModel.reset_caches()
+	assert_float(DemandModel.house_factor(_t(301, 19.0))).is_equal(packed)
+	assert_object(DemandModel.weather).is_null()

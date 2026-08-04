@@ -39,7 +39,23 @@ from websocket import create_connection
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
-STEP_RESULT_SCHEMA = REPO_ROOT / "docs" / "contract" / "schemas" / "step-result.schema.json"
+SCHEMA_DIR = REPO_ROOT / "docs" / "contract" / "schemas"
+STEP_RESULT_SCHEMA = SCHEMA_DIR / "step-result.schema.json"
+STEP_REQUEST_SCHEMA = SCHEMA_DIR / "step-request.schema.json"
+TOPOLOGY_SCHEMA = SCHEMA_DIR / "topology.schema.json"
+
+
+def _schema_validator(path: Path) -> jsonschema.Draft202012Validator:
+    return jsonschema.Draft202012Validator(
+        json.loads(path.read_text(encoding="utf-8")))
+
+
+def _assert_schema(validator: "jsonschema.Draft202012Validator",
+                   obj: Any, label: str) -> None:
+    errors = sorted(validator.iter_errors(obj), key=str)
+    assert not errors, (
+        f"{label} violates its schema:\n" +
+        "\n".join(f"  - {e.json_path}: {e.message}" for e in errors))
 
 HEALTH_TIMEOUT_S = 120.0   # numba JIT imports can take a while on first spawn
 HTTP_TIMEOUT_S = 60.0
@@ -260,10 +276,15 @@ def test_contract(entry: dict, tmp_path: Path) -> None:
 
             # --- b. reset with the fixture topology ------------------------
             # sent through _floatify: every int arrives as a zero-fraction
-            # float, exactly like Godot's JSON layer produces (regression pin)
+            # float, exactly like Godot's JSON layer produces (regression pin).
+            # The wire shape must satisfy topology.schema.json — the schemas
+            # themselves are under test here, not just the backends.
             topology = fixture["topology"]
+            wire_topology = _floatify(topology)
+            _assert_schema(_schema_validator(TOPOLOGY_SCHEMA), wire_topology,
+                           "fixture topology (floatified wire shape)")
             status, reset = _http_json("POST", base + "/gb/net/reset",
-                                       _floatify(topology))
+                                       wire_topology)
             assert status == 200, f"/gb/net/reset -> HTTP {status}: {reset}"
             assert reset.get("ok") is True, f"reset not ok: {reset}"
             assert reset.get("n_zones") == len(topology["zones"]), \
@@ -275,16 +296,18 @@ def test_contract(entry: dict, tmp_path: Path) -> None:
                 f"warmup_solve_ms missing/not numeric: {reset}"
 
             # --- c. scripted stepping over WebSocket -----------------------
-            schema = json.loads(STEP_RESULT_SCHEMA.read_text(encoding="utf-8"))
-            validator = jsonschema.Draft202012Validator(schema)
+            validator = _schema_validator(STEP_RESULT_SCHEMA)
+            request_validator = _schema_validator(STEP_REQUEST_SCHEMA)
             script = fixture["script"]
             allowed = fixture["allowed_statuses"]
             ws = create_connection(f"ws://127.0.0.1:{port}/gb/ws", timeout=WS_TIMEOUT_S)
             last_req: dict = {}
             last_result: dict = {}
             for t in range(script["steps"]):
-                # Godot-wire shape: ints arrive as zero-fraction floats
+                # Godot-wire shape: ints arrive as zero-fraction floats;
+                # every request we send must itself satisfy its schema
                 req = _build_step_request_raw(script, t)
+                _assert_schema(request_validator, req, f"step-request t={t}")
                 ws.send(json.dumps(req))
                 result = json.loads(ws.recv())
                 assert result.get("t") == t, \
@@ -345,6 +368,37 @@ def test_contract(entry: dict, tmp_path: Path) -> None:
                     f"golden path {dotted!r}: value {value!r} is not numeric"
                 assert lo <= value <= hi, \
                     f"golden path {dotted!r}: {value} outside [{lo}, {hi}]"
+
+            # --- f2. signed power zone demand (v1.md §4 power note) --------
+            # A strongly negative zone must REDUCE slack import by roughly
+            # |old| + |probe| — a backend that clamps negatives to 0 only
+            # sheds |old| and fails the min_import_drop separation.
+            probe_neg = fixture.get("signed_demand_probe")
+            if probe_neg:
+                slack_id = probe_neg["slack_id"]
+                slack_before = last_result["devices"][slack_id]["output_kw"]
+                req = dict(last_req)
+                req["t"] = float(last_req["t"]) + 1.0
+                req["zone_demand"] = dict(last_req.get("zone_demand") or {})
+                req["zone_demand"][probe_neg["zone"]] = {
+                    "value": float(probe_neg["value"])}
+                _assert_schema(request_validator, req,
+                               "signed-demand step-request")
+                status, result = _http_json("POST", base + "/gb/step", req)
+                assert status == 200, \
+                    f"signed-demand step -> HTTP {status}: {result}"
+                assert result.get("status") in allowed, (
+                    f"signed-demand step: status {result.get('status')!r} "
+                    f"not in {allowed} — negative power demand is data, "
+                    f"never an error (v1.md §4)")
+                _assert_schema(validator, result, "signed-demand step result")
+                slack_after = result["devices"][slack_id]["output_kw"]
+                drop = slack_before - slack_after
+                assert drop >= probe_neg["min_import_drop"], (
+                    f"zone {probe_neg['zone']} at {probe_neg['value']} kW "
+                    f"only shed {drop:.1f} kW of slack import (need >= "
+                    f"{probe_neg['min_import_drop']}) — backend appears to "
+                    f"CLAMP signed power demand (v1.md §4 power note)")
 
             # --- g. patch round-trip + tolerant error ----------------------
             probe = fixture["patch_probe"]

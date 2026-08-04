@@ -20,8 +20,8 @@
       "additionalProperties": {
         "type": "object",
         "required": ["value"],
-        "properties": {"value": {"type": "number", "minimum": 0,
-          "description": "power: kW(el) · heat: kW(th) · water: m3/h. Missing zone => sample-and-hold."}}
+        "properties": {"value": {"type": "number",
+          "description": "power: kW(el), SIGNED net load (negative = zone exports, e.g. rooftop-PV backfeed — v1.md §4 power note) · heat: kW(th) >= 0 · water: m3/h >= 0 (backends may clamp heat/water). Missing zone => sample-and-hold."}}
       }
     },
     "device_setpoints": {

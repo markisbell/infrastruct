@@ -6,7 +6,9 @@ extends Node
 
 signal handshake_completed(id: String, ok: bool, info: Dictionary)
 
-const EXPECTED_CONTRACT := "1.0"
+## The game NEEDS 1.1 features (solved edges, water device rows, signed
+## power demand) — a backend speaking only 1.0 is refused at handshake.
+const EXPECTED_CONTRACT := "1.1"
 const STEP_TIMEOUT_S := 60.0  # first solve after net load pays the numba JIT
 const WS_CONNECT_TIMEOUT_S := 5.0
 
@@ -30,13 +32,24 @@ func base_url(id: String) -> String:
 	return "http://127.0.0.1:%d" % SidecarManager.port_of(id)
 
 
+## Contract §2 version rule: identical MAJOR and game-minor <= backend-minor
+## (the previous prefix match accepted a 1.0 backend the game can't use).
+static func version_ok(game: String, backend: String) -> bool:
+	var g := game.split(".")
+	var b := backend.split(".")
+	if g.size() < 2 or b.size() < 2:
+		return false
+	if g[0] != b[0] or not g[1].is_valid_int() or not b[1].is_valid_int():
+		return false
+	return int(g[1]) <= int(b[1])
+
+
 ## GET /gb/version and verify the contract (game refuses on mismatch, §2).
 func handshake(id: String) -> bool:
 	var response := await _http(id, HTTPClient.METHOD_GET, "/gb/version", "", 10.0)
 	var ok: bool = (
 		response.get("_status", 0) == 200
-		and str(response.get("contract", "")).begins_with(
-			EXPECTED_CONTRACT.split(".")[0] + ".")
+		and version_ok(EXPECTED_CONTRACT, str(response.get("contract", "")))
 		and response.get("external_clock", false) == true
 	)
 	if ok:

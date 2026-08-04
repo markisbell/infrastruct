@@ -5,13 +5,14 @@
   "type": "object",
   "required": ["contract", "network_kind", "name", "steps_per_day", "native", "zones", "devices"],
   "properties": {
-    "contract": {"const": "1.0"},
+    "contract": {"type": "string", "pattern": "^1\\.\\d+$",
+      "description": "major 1; minor compatibility is enforced by the handshake (v1.md §2), not here"},
     "network_kind": {"enum": ["power", "heat", "water"]},
     "name": {"type": "string", "minLength": 1},
     "steps_per_day": {"type": "integer", "minimum": 24, "maximum": 1440},
     "native": {
       "type": "object",
-      "description": "Backend-family-specific network description, verbatim (power: netzsim five-doc GridInputs; heat: rtheatflow five-file bundle). Profile arrays must have exactly steps_per_day entries."
+      "description": "Backend-family-specific network description, verbatim (power: netzsim five-doc GridInputs; heat: rtheatflow five-file bundle; water: rtwaterflow five-file bundle incl. supply.stations). Profile arrays must have exactly steps_per_day entries."
     },
     "zones": {
       "type": "array",
@@ -33,7 +34,8 @@
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "kind": {"enum": ["slack", "generator", "pv", "wind", "coupling_load",
-                            "chp", "heat_pump", "boiler", "battery", "storage_heat"]},
+                            "chp", "heat_pump", "boiler", "battery", "storage_heat",
+                            "well", "water_pump", "water_tower"]},
           "node": {"type": "string"},
           "params": {"type": "object"}
         }

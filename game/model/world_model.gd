@@ -72,17 +72,28 @@ func can_place_building(kind: String, anchor: Vector2i) -> bool:
 # ─── mutations (all return success; can_* are the dry-run twins the
 # drag-and-draw ghost path uses to color tiles before anything is built) ───
 
-func can_set_cable(pos: Vector2i, kind: int) -> bool:
+## One rule for all three line layers (cable/heat/water differ only in
+## which OTHER two layers they must not conflict with).
+func _can_set_line(pos: Vector2i, kind: int, others: Array[Dictionary]) -> bool:
 	var buried := kind == BuildingDefs.LINE_UNDERGROUND
 	return not (_line_blocked(pos, buried)
-		or _other_lines_conflict(pos, buried, [heat_pipes, water_pipes]))
+		or _other_lines_conflict(pos, buried, others))
+
+
+func _set_line(layer: Dictionary, pos: Vector2i, kind: int,
+		others: Array[Dictionary]) -> bool:
+	if not _can_set_line(pos, kind, others):
+		return false
+	layer[pos] = kind
+	return true
+
+
+func can_set_cable(pos: Vector2i, kind: int) -> bool:
+	return _can_set_line(pos, kind, [heat_pipes, water_pipes])
 
 
 func set_cable(pos: Vector2i, kind: int) -> bool:
-	if not can_set_cable(pos, kind):
-		return false
-	cables[pos] = kind
-	return true
+	return _set_line(cables, pos, kind, [heat_pipes, water_pipes])
 
 
 func remove_cable(pos: Vector2i) -> void:
@@ -90,16 +101,11 @@ func remove_cable(pos: Vector2i) -> void:
 
 
 func can_set_heat_pipe(pos: Vector2i, kind: int) -> bool:
-	var buried := kind == BuildingDefs.LINE_UNDERGROUND
-	return not (_line_blocked(pos, buried)
-		or _other_lines_conflict(pos, buried, [cables, water_pipes]))
+	return _can_set_line(pos, kind, [cables, water_pipes])
 
 
 func set_heat_pipe(pos: Vector2i, kind: int) -> bool:
-	if not can_set_heat_pipe(pos, kind):
-		return false
-	heat_pipes[pos] = kind
-	return true
+	return _set_line(heat_pipes, pos, kind, [cables, water_pipes])
 
 
 func remove_heat_pipe(pos: Vector2i) -> void:
@@ -107,16 +113,11 @@ func remove_heat_pipe(pos: Vector2i) -> void:
 
 
 func can_set_water_pipe(pos: Vector2i, kind: int) -> bool:
-	var buried := kind == BuildingDefs.LINE_UNDERGROUND
-	return not (_line_blocked(pos, buried)
-		or _other_lines_conflict(pos, buried, [cables, heat_pipes]))
+	return _can_set_line(pos, kind, [cables, heat_pipes])
 
 
 func set_water_pipe(pos: Vector2i, kind: int) -> bool:
-	if not can_set_water_pipe(pos, kind):
-		return false
-	water_pipes[pos] = kind
-	return true
+	return _set_line(water_pipes, pos, kind, [cables, heat_pipes])
 
 
 func remove_water_pipe(pos: Vector2i) -> void:

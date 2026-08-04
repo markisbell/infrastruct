@@ -7,7 +7,6 @@ extends RefCounted
 ## kept as the fixture-backed provider for the cosim/cosim-kill smokes.
 
 var fixtures := {}  # network id -> parsed fixture file
-var weather_override := {}  # debug console injection (F4)
 
 
 static func load_default(repo_root: String) -> FixtureProvider:
@@ -70,7 +69,6 @@ func get_weather(t: int) -> Dictionary:
 		var weather: Dictionary = fixtures[network].get("script", {}).get("weather", {})
 		for field: String in weather:
 			out[field] = _at(weather[field], t, steps(network))
-	out.merge(weather_override, true)
 	return out
 
 

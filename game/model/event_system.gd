@@ -32,7 +32,6 @@ var frequency_scale := 1.0           # difficulty knob
 var down_until := {}
 ## zone_id -> {until_t, m3h} (fire / burst leak draws)
 var water_draws := {}
-var log: Array[Dictionary] = []      # what roll_daily decided (for the caller)
 
 
 func _init(seed_arg: int = 42) -> void:
@@ -94,7 +93,6 @@ func roll_daily(t: int, model: WorldModel, weather: WeatherSystem,
 		var tiles := model.water_pipes.keys()
 		tiles.sort()
 		day_events.append(make_burst(tiles[rng.randi() % tiles.size()], zones, t))
-	log.append_array(day_events)
 	return day_events
 
 

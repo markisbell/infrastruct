@@ -1990,5 +1990,11 @@
   "params": {
    "p_max_kw": 100
   }
+ },
+ "signed_demand_probe": {
+  "zone": "z0",
+  "value": -50.0,
+  "slack_id": "slack",
+  "min_import_drop": 40.0
  }
 }

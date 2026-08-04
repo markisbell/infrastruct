@@ -158,7 +158,3 @@ static func wind_availability(wind: float) -> float:
 	if wind >= 12.0:
 		return 1.0
 	return pow((wind - 3.0) / 9.0, 3.0)
-
-
-static func pv_availability(ghi: float) -> float:
-	return clampf(ghi / 1000.0, 0.0, 1.0) * 0.9
