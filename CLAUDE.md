@@ -354,8 +354,10 @@ uv-managed Python 3.12 (`uv venv --python 3.12`, then
 additionally needs websocket-client + jsonschema for the contract suite;
 heat gets `[dev,profiles]` and MUST have the obsolete `pathlib` backport
 uninstalled afterwards — it blocks PyInstaller and the profiles extras pull
-it in). **numba must be installed EXPLICITLY** (accelerator, not a declared
-dep — Windows/CI always did): without it every solve runs pandapower's
+it in). **numba must be installed EXPLICITLY** (accelerator; declared in every
+backend's requirements.txt since 2026-08-05 so backend CI gets it, but NOT
+a pyproject dep — the `-e .[dev]` venv setup above still installs it by
+hand): without it every solve runs pandapower's
 slow path and warns per step, and PyInstaller's `--collect-all numba` only
 WARNS on a missing numba, so a freeze silently ships without it (the
 v0.8.2 tarball did — harmless at game scale, playtest worst frame 7 ms,

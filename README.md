@@ -186,6 +186,26 @@ save/load, feeder trips at the amperage the size test winds up to.
 
 ---
 
+## Credits
+
+Every solved frame in this game is pandapower or pandapipes doing the actual
+work. Both are developed by Fraunhofer IEE and the University of Kassel
+([e2nIEE](https://github.com/e2nIEE)) — if you build on this project, cite
+them the way they ask:
+
+- **pandapower** — L. Thurner, A. Scheidler, F. Schäfer et al., "pandapower —
+  an Open Source Python Tool for Convenient Modeling, Analysis and
+  Optimization of Electric Power Systems", *IEEE Transactions on Power
+  Systems*, vol. 33, no. 6, pp. 6510–6521, Nov 2018.
+  [doi:10.1109/TPWRS.2018.2829021](https://doi.org/10.1109/TPWRS.2018.2829021)
+- **pandapipes** — D. Lohmeier, D. Cronbach, S. R. Drauz, M. Braun,
+  T. M. Kneiske, "pandapipes: An Open-Source Piping Grid Calculation Package
+  for Multi-Energy Grid Simulations", *Sustainability*, vol. 12, no. 23,
+  art. 9899, 2020.
+  [doi:10.3390/su12239899](https://doi.org/10.3390/su12239899)
+
+---
+
 ## License
 
 The game source, tests and documentation are licensed under the
