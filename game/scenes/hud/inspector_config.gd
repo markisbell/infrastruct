@@ -9,8 +9,11 @@ extends RefCounted
 
 ## Per-kind graph configuration: which telemetry series, unit, axis title,
 ## and dashed limit lines (the rtpowerflow quantities per element type).
+## island_former: this battery forms a microgrid island (power islands M4)
+## — its panel shows the solved island balance against ±p_max_kw with the
+## SoC as the secondary graph (the EMS gauge) instead of SoC alone.
 static func config_for(kind: String, id: String, model: WorldModel,
-		grid_capacity_override: float) -> Dictionary:
+		grid_capacity_override: float, island_former := false) -> Dictionary:
 	var kw_series: Array[Dictionary] = [
 		{"key": "dev:" + id, "label": "P", "color": Color(0.95, 0.68, 0.21)}]
 	match kind:
@@ -44,6 +47,22 @@ static func config_for(kind: String, id: String, model: WorldModel,
 				"series": [{"key": "dev:" + id, "label": "Q",
 					"color": Color(0.9, 0.35, 0.25)}]}
 		"battery", "heat_storage", "water_tower":
+			if kind == "battery" and island_former:
+				var p_max := float(model.building_params(id)
+					.get("p_max_kw", 400.0))
+				return {"title": "Battery — grid-forming", "unit": "kW",
+					"dec": 1, "base_zero": false, "y": "Island balance [kW]",
+					"limits": [
+						{"value": p_max, "label": "p_max",
+							"color": Color(0.95, 0.3, 0.25)},
+						{"value": -p_max, "label": "-p_max",
+							"color": Color(0.95, 0.3, 0.25)}],
+					"series": [{"key": "dev:" + id, "label": "Balance",
+						"color": Color(0.95, 0.68, 0.21)}],
+					"secondary": {"unit": "%", "dec": 0, "base_zero": true,
+						"y": "SoC [%]", "limits": [],
+						"series": [{"key": "soc:" + id, "label": "SoC",
+							"color": Color(0.62, 0.44, 0.86)}]}}
 			return {"title": kind.capitalize(), "unit": "%", "dec": 0,
 				"base_zero": true, "y": "State of charge [%]", "limits": [],
 				"series": [{"key": "soc:" + id, "label": "SoC",

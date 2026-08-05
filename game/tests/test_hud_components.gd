@@ -41,6 +41,17 @@ func test_inspector_config_tables() -> void:
 	# storages share the SoC convention
 	var battery := InspectorConfig.config_for("battery", "b1", model, -1.0)
 	assert_str(battery["series"][0]["key"]).is_equal("soc:b1")
+	# an island FORMER shows the EMS gauge: solved balance vs ±p_max_kw
+	# with SoC as the secondary graph (power islands M4)
+	var bat_id := model.place_building("battery", Vector2i(9, 9), 0,
+		{"p_max_kw": 250.0})
+	var former := InspectorConfig.config_for("battery", bat_id, model,
+		-1.0, true)
+	assert_str(former["series"][0]["key"]).is_equal("dev:" + bat_id)
+	assert_float(float(former["limits"][0]["value"])).is_equal(250.0)
+	assert_float(float(former["limits"][1]["value"])).is_equal(-250.0)
+	assert_str(str((former["secondary"]["series"][0] as Dictionary)["key"])) \
+		.is_equal("soc:" + bat_id)
 	# unknown kinds carry no panel
 	assert_bool(InspectorConfig.config_for("house", "x", model, -1.0).is_empty()) \
 		.is_true()

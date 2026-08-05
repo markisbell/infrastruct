@@ -107,16 +107,37 @@ func run() -> void:
 	City._refresh_topo_assignment()
 	tutorial_ok = tutorial_ok and (steps[7]["done"] as Callable).call()
 
+	# ── E: off-grid village (power islands M4) — the prebuild registers
+	# WITHOUT any grid connection, the battery forms the island, houses are
+	# served, and the verdict machinery runs (no instant win/lose)
+	GameClock.restore({"total_minutes": 200.0 * 1440.0, "speed": 0.0})
+	state = Scenarios.start("island", "normal")
+	City._topo_dirty = true
+	if not await _wait_registered(240.0):
+		_fail("SMOKE_SCENARIOS", "register timeout (island)")
+		return
+	var island_offgrid: bool = City.model.buildings_of_kind(
+		"grid_connection").is_empty() and City.topo.islands.size() == 1
+	Orchestrator.start()
+	await _run_steps(8, 240.0)
+	var island_zone: String = "z_" + City.model.buildings_of_kind("substation")[0]
+	var island_supplied: bool = City.zone_supplied.get(island_zone, false)
+	var verdict_island := Scenarios.evaluate(state, City.current_t / 96)
+
 	var report := {
 		"ok": verdict_green == "win" and green_houses >= 25
 			and verdict_brown == "lose" and brown_happiness < 20.0
-			and verdict_transition == "win" and tutorial_ok,
+			and verdict_transition == "win" and tutorial_ok
+			and island_offgrid and island_supplied and verdict_island == "",
 		"greenfield": verdict_green, "greenfield_houses": green_houses,
 		"brownfield": verdict_brown,
 		"brownfield_happiness": snappedf(brown_happiness, 0.1),
 		"brownfield_state": brown_state,
 		"transition": verdict_transition,
 		"tutorial_chain": tutorial_ok,
+		"island_offgrid": island_offgrid,
+		"island_supplied": island_supplied,
+		"island_verdict": verdict_island,
 		"orch": Orchestrator.stats,
 	}
 	print("SMOKE_SCENARIOS ", JSON.stringify(report))

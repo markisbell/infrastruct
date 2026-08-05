@@ -97,7 +97,8 @@ pump's power draw) from one solver into the next step of the other.
   turbine cut-out speed, heat waves, frost, drought, W 405 fire flow, pipe
   bursts with leak draw — off in tests, on in the sandbox.
 - **Scenarios.** Sandbox, a 9-step tutorial, greenfield, an inherited relic
-  grid that loses by misery if left untouched, and an energy-transition path.
+  grid that loses by misery if left untouched, an energy-transition path,
+  and an off-grid village living entirely on its battery-formed microgrid.
 - **A living map.** Procedural terrain with rivers (wells near water yield
   more), groves and stone fields, clouds that drift with a slowly veering
   wind (small grey arrows show its direction, turbines yaw to face it and

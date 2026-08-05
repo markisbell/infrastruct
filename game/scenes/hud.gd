@@ -395,8 +395,11 @@ func _inspector_toggled_off(key: String) -> bool:
 
 ## Config tables live in InspectorConfig (Phase-6 extraction).
 func _inspector_config(kind: String, id: String) -> Dictionary:
+	var island_id: String = City.topo.island_of.get(id, "")
 	return InspectorConfig.config_for(kind, id, City.model,
-		City.grid_capacity_override)
+		City.grid_capacity_override,
+		island_id != "" and str(City.topo.islands.get(island_id, {})
+			.get("former", "")) == id)
 
 
 ## Line/pipe clicks: power lines carry real per-segment loading (contract
@@ -450,6 +453,14 @@ func _open_inspector(id: String) -> void:
 	if kind == "solar_park":
 		subtitle += " · facing " + DemandModel.PV_ROT_FACING[
 			int(City.model.buildings[id].get("rot", 0)) % 4]
+	# island badge (power islands M4): members carry their microgrid,
+	# the former its EMS role
+	var island_id: String = City.topo.island_of.get(id, "")
+	if island_id != "":
+		subtitle += " · island microgrid" \
+			if str(City.topo.islands.get(island_id, {})
+				.get("former", "")) != id \
+			else " · forms its island"
 	var tiles: Array = []  # full footprint, rotation included
 	for tile: Vector2i in City.model.building_tiles:
 		if City.model.building_tiles[tile] == id:

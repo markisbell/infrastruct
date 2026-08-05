@@ -220,9 +220,17 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   storage_empty violation + soc replay via grid_forming_probe); the
   STALE fixture generator was re-synced to emit every hand-added probe
   key (regeneration would have silently dropped them — landmine fixed).
-  NOT YET (M4): island badges/gauges in the hud, off-grid scenario;
-  spare batteries inside an island idle; island load estimate ignores
-  the aggregated cpl_* coupling draw (pre-existing coarseness).
+  M4 (same day) — the UX layer: the former's inspector panel is the EMS
+  gauge (solved island balance vs ±p_max_kw limits, SoC as the secondary
+  graph — `InspectorConfig.config_for` grew an `island_former` flag),
+  island members carry an "island microgrid"/"forms its island" subtitle
+  badge, the M2 capacity markers (ISLAND DARK / SOC %) stand, and the
+  scenario picker gained "Off-grid village" (`island`): battery-formed
+  prebuild, win = 16 happy houses SUSTAINED while STAYING off-grid (a
+  grid connection resets the win streak), scenarios smoke phase E pins
+  the off-grid registration + supplied village + running verdict.
+  Remaining coarseness: spare batteries inside an island idle; island
+  load estimate ignores the aggregated cpl_* coupling draw.
 - **Signals & maintenance**: `City.capacity_warnings` (lines ≥80 %, trafos
   ≥70 %, grid ≥80 %, heat < min+4 °C, water < 2.4 bar) → floating markers.
   Overload trips (line >120 % and trafo >120 % SOLVED loading, sustained)
@@ -238,8 +246,10 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   cut-out), heat wave/frost/drought, W 405 fire flow (48 m³/h), pipe bursts
   (tile trips out + leak draw).
 - **Scenarios**: sandbox / tutorial (9 steps) / greenfield / inherited grid
-  (20-kW relic, loses by misery untouched) / energy transition; difficulty
-  scales growth/events/money. Prebuilds run BEFORE the start budget lands.
+  (20-kW relic, loses by misery untouched) / energy transition / off-grid
+  village (battery-formed island, win by growing it happy while staying
+  off-grid); difficulty scales growth/events/money. Prebuilds run BEFORE
+  the start budget lands.
 - **REAL-DEM TERRAIN + SMOOTH RELIEF (2026-08-02, user request: "looks
   like Minecraft")**: `Terrain.load_region(name)` swaps the noise HEIGHTS
   for a baked real region (`game/data/terrain/<name>.json` — AWS/Mapzen

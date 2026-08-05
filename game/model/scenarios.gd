@@ -34,6 +34,8 @@ static func catalog() -> Array[Dictionary]:
 			"desc": "A 20-kW relic of a grid connection and a sagging feeder. Build local supply before the town gives up on you."},
 		{"id": "transition", "name": "Energy transition",
 			"desc": "Retire the old fossil plant within two years — without blackouts."},
+		{"id": "island", "name": "Off-grid village",
+			"desc": "No transmission grid for miles. Grow a village on wind, sun and one battery — stay off-grid, and mind the EMS: calm nights shed load when storage runs short."},
 	]
 
 
@@ -66,6 +68,9 @@ static func start(id: String, difficulty_key: String) -> Dictionary:
 		"transition":
 			start_money = 300_000
 			_build_transition()
+		"island":
+			start_money = 250_000
+			_build_island()
 	City.money = int(start_money * diff["money_scale"])
 	City._topo_dirty = true
 	# the CLOCK is the time authority (City.current_t is stale between steps)
@@ -111,6 +116,22 @@ static func evaluate(state: Dictionary, day: int) -> String:
 					and elapsed >= 7:
 				return "win"
 			if elapsed > 720:
+				return "lose"
+		"island":
+			if City.money < BANKRUPT_EUR:
+				return "lose"
+			# win: a GROWN village kept happy on the microgrid ALONE — a
+			# grid connection resets the streak (the point is off-grid)
+			var off_grid := City.model.buildings_of_kind(
+				"grid_connection").is_empty()
+			state["win_streak"] = state["win_streak"] + 1 \
+				if off_grid and City.happiness >= 75.0 \
+					and City.model.houses.size() >= 16 else 0
+			state["lose_streak"] = state["lose_streak"] + 1 \
+				if City.happiness < 20.0 else 0
+			if state["win_streak"] >= WIN_SUSTAIN_DAYS:
+				return "win"
+			if state["lose_streak"] >= LOSE_SUSTAIN_DAYS or elapsed > 720:
 				return "lose"
 	return ""
 
@@ -161,6 +182,25 @@ static func _build_transition() -> void:
 	City.place_building("well", Vector2i(10, 19))
 	City.build_water_pipe(Vector2i(10, 18))
 	City.spawn_houses_bulk(City.model.buildings_of_kind("substation")[0], 18)
+
+
+## Off-grid village (power islands M4): no grid connection anywhere — a
+## battery-formed microgrid (one turbine, one park, one 1-MWh battery)
+## feeds a small village. Heat is oil stoves, water a gravity spring;
+## electricity is the scenario. Ten starter houses; growth pushes the
+## calm-night balance until the player adds storage or a gas reserve.
+static func _build_island() -> void:
+	City.place_building("battery", Vector2i(6, 4))
+	for x in range(6, 18):
+		City.build_cable(Vector2i(x, 5))
+	City.place_building("wind_farm", Vector2i(9, 4))
+	City.place_building("solar_park", Vector2i(12, 3))
+	City.place_building("substation", Vector2i(17, 6))
+	for x in range(10, 24):
+		City.build_road(Vector2i(x, 8))
+	for x in range(10, 24):
+		City.build_zone(Vector2i(x, 9))
+	City.spawn_houses_bulk(City.model.buildings_of_kind("substation")[0], 10)
 
 
 # ─── tutorial (teaches the three networks one at a time) ───
