@@ -519,7 +519,19 @@ _repo_file() (INFRA_OUT_DIR override) for the two dev-only CSV writes.
 Full battery re-verified 21/21 after the move (one extraction miss —
 economy's _econ_net helper — caught by the battery, moved, re-green;
 lesson: when moving function groups, grep the moved bodies for CALLS
-to helpers not in the move spec). Phase 4 DONE (same day):
+to helpers not in the move spec). Phase 5 DONE 2026-08-05 (daylight
+extraction deferred, cosmetic-only): city_view.gd 2857 -> 1640 via
+game/scenes/rendering/ — BuildingModels (static factories + shared
+material cache; colors/PIPE_HEIGHT authoritative), DecoScatter (first
+tests ever — it hid behind the headless early-return), TerrainMeshBuilder
+(plateau-cap + seam-vs-cliff pinned by skirt SPAN), LineSpecs (all
+line-tile decisions + cache keys; staircase/parallel/Kabelendmast/road
+table regression pins), one merged _orient_surface_pipe. Visual gates:
+screenshots at identical-run noise floor; KNOWN CONFOUND — the
+substation-tool ghost coverage overlay in --screenshot follows the
+PHYSICAL cursor and moves between runs (wind arrows/clouds/rotors/
+bubbles drift with wall-clock too); model-region crops are the honest
+comparison. GdUnit 196/196. Phase 4 DONE (2026-08-04):
 Orchestrator gained bridge_override/health_override/reset_for_test
 seams (in-process fakes bypass wire float coercion — the Python
 contract suite stays the wire authority); FakeCosimBridge +

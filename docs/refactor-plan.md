@@ -162,7 +162,28 @@ sidecars/cosim smokes + resilience wrapper green against real backends.
   wire float coercion — the Python contract suite stays the wire
   authority; the GDScript fake tests orchestration logic only.
 
-## Phase 5 — city_view.gd rendering split (~1 wk)
+## Phase 5 — city_view.gd rendering split — DONE 2026-08-05
+## (daylight-curve extraction deferred: cosmetic-only, no decision logic)
+
+Landed in four commits (5a-5e), city_view.gd 2857 -> 1640 lines, all
+verified against pre-refactor screenshots (identical-run noise floor
+~0.05/255; the recurring confound is the substation-tool ghost coverage
+overlay anchored to the PHYSICAL MOUSE CURSOR — it moves between
+capture runs; wind arrows/clouds/rotors/bubbles drift with wall-clock):
+- 5a BuildingModels (~750 loc statics; shared material cache; colors +
+  PIPE_HEIGHT authoritative there; one real drift caught: 0.38 retyped
+  as 0.4).
+- 5b DecoScatter + first-ever tests for the scatter (was headless-
+  unreachable); cluster noise is INDEPENDENT of terrain heights.
+- 5c TerrainMeshBuilder returning Packed arrays; plateau-cap semantics
+  pinned (lower tile capped at its own plateau; 1-level steps stitch
+  sub-step SEAMS — expected, distinguish skirts by SPAN not count).
+- 5d LineSpecs: predicates + road table + cable/buried specs + cache
+  keys; 7 regression pins (staircase, parallel, Kabelendmast key, all
+  16 road masks, single-tap, road plates).
+- 5e pipe_spec + one merged _orient_surface_pipe (heat double / water
+  single); _make_water_pipe nearly lost in the splice — caught by grep
+  of _diff callers. GdUnit 196/196.
 
 1. `rendering/building_models.gd` — the 15 `_make_*` builders +
    `_pole_visual`/`_termination_hardware`/`_wire_segment` (~750 LOC,

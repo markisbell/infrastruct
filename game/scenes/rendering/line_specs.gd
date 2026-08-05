@@ -164,3 +164,24 @@ static func buried_spec(model: WorldModel, pos: Vector2i,
 					else network_taps_here(model, pos + d, network, pos)):
 			risers.append(i)
 	return {"on_road": model.roads.has(pos), "links": links, "risers": risers}
+
+
+# ─── surface pipes (heat double-run / water main share the decisions) ───
+
+## Same shape as cable_spec minus termination: linked directions + the
+## single-tap building directions for a pipe layer. A neighbor tile that
+## HAS a pipe but is not linked (parallel run) is neither — the map must
+## show what the solver sees.
+static func pipe_spec(model: WorldModel, pos: Vector2i, layer: Dictionary,
+		network: String) -> Dictionary:
+	var kind := int(layer.get(pos, BuildingDefs.LINE_OVERHEAD))
+	var links: Array[int] = []
+	var taps: Array[int] = []
+	for i in 4:
+		var d := DIRECTIONS[i]
+		if layer.has(pos + d) \
+				and PowerTopology.cable_linked(layer, pos, pos + d):
+			links.append(i)
+		elif network_taps_here(model, pos + d, network, pos):
+			taps.append(i)
+	return {"kind": kind, "links": links, "taps": taps}

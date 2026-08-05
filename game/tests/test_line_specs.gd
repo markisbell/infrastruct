@@ -110,3 +110,27 @@ func test_buried_spec_road_plate_links_and_riser() -> void:
 	assert_bool(bool(mid["on_road"])).is_false()
 	assert_that(mid["links"]).is_equal([1, 3] as Array[int])  # E + W
 	assert_that(mid["risers"]).is_equal([] as Array[int])
+
+func test_pipe_spec_links_taps_and_parallel_rule() -> void:
+	var model := _town()
+	for x in range(4, 9):
+		model.set_heat_pipe(Vector2i(x, 5), OH)
+		model.set_heat_pipe(Vector2i(x, 6), OH)  # parallel run below
+	var spec := LineSpecs.pipe_spec(model, Vector2i(6, 5),
+		model.heat_pipes, "heat")
+	# E/W joined; the lateral parallel contact (S) is NEITHER link nor tap
+	assert_that(spec["links"]).is_equal([1, 3] as Array[int])
+	assert_that(spec["taps"]).is_equal([] as Array[int])
+
+
+func test_pipe_spec_single_building_tap() -> void:
+	var model := _town()
+	for x in range(4, 10):
+		model.set_water_pipe(Vector2i(x, 5), OH)
+	assert_str(model.place_building("water_station", Vector2i(5, 6), 0)) \
+		.is_not_empty()
+	var taps := 0
+	for x in range(4, 10):
+		taps += (LineSpecs.pipe_spec(model, Vector2i(x, 5),
+			model.water_pipes, "water")["taps"] as Array).size()
+	assert_int(taps).is_equal(1)

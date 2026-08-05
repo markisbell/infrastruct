@@ -847,168 +847,97 @@ func _make_pipe(pos: Vector2i) -> Node3D:
 	return node  # segments set by _orient_pipe
 
 
-## District-heating double pipe: forward (red) and return (blue) run in
-## parallel on low supports. One segment pair per connected direction from
-## the tile center to its edge — handles straights, bends, tees and crosses
-## without piece-picking. Side convention is world-axis based (X-runs offset
-## in Z, Z-runs offset in X) so straights never zigzag.
-## Double heat pipe toward every connected NEIGHBOR — pipe tiles and heat
-## buildings alike: a plant or exchanger next to the pipe gets visible
-## supply/return stubs plus a valve box at the joint (same idea as the
-## electrical service drops).
-func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
-	var kind := int(City.model.heat_pipes.get(pos, BuildingDefs.LINE_OVERHEAD))
-	var connections := "%d|" % kind
-	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
-	for i in 4:
-		if City.model.heat_pipes.has(pos + directions[i]) \
-				and PowerTopology.cable_linked(City.model.heat_pipes, pos,
-					pos + directions[i]):
-			connections += str(i)
-		elif _network_taps_here(pos + directions[i], "heat", pos):
-			connections += "b%d" % i
-	var wanted := "%s|r%s@%s" % [connections,
-		City.model.roads.has(pos), _terrain_fingerprint]
-	if node.get_meta("pipes", "") == wanted:
-		return
-	node.set_meta("pipes", wanted)
-	for child in node.get_children():
-		child.queue_free()
-	if kind == BuildingDefs.LINE_UNDERGROUND:
-		_orient_buried(pos, node, City.model.heat_pipes, "heat",
-			[PIPE_SUPPLY_COLOR, PIPE_RETURN_COLOR], false)
-		return
-	# support foot
-	node.add_child(_box(Vector3(0.14, PIPE_HEIGHT - 0.05, 0.14),
-		Color(0.45, 0.46, 0.5), Vector3(0, (PIPE_HEIGHT - 0.05) / 2.0, 0)))
-	var any_connection := false
-	for i in 4:
-		var d := directions[i]
-		var joined: bool = City.model.heat_pipes.has(pos + d) \
-			and PowerTopology.cable_linked(City.model.heat_pipes, pos, pos + d)
-		var to_building: bool = not City.model.heat_pipes.has(pos + d) \
-			and _network_taps_here(pos + d, "heat", pos)
-		if not joined and not to_building:
-			continue
-		any_connection = true
-		if to_building:
-			# valve box where the pair enters the building
-			node.add_child(_box(
-				Vector3(0.1, 0.3, 0.44) if d.y == 0 else Vector3(0.44, 0.3, 0.1),
-				Color(0.5, 0.52, 0.56),
-				Vector3(d.x * 0.48, PIPE_HEIGHT, d.y * 0.48)))
-		var horizontal := d.y == 0  # segment runs along world X
-		var perp := Vector3(0, 0, 0.13) if horizontal else Vector3(0.13, 0, 0)
-		var dh := _ground_y(pos + d) - _ground_y(pos)
-		for pair: Array in [[PIPE_SUPPLY_COLOR, 1.0], [PIPE_RETURN_COLOR, -1.0]]:
-			var seg := MeshInstance3D.new()
-			var cyl := CylinderMesh.new()
-			cyl.top_radius = 0.055
-			cyl.bottom_radius = 0.055
-			cyl.height = 0.5
-			seg.mesh = cyl
-			if horizontal:
-				seg.rotation_degrees.z = 90.0
-			else:
-				seg.rotation_degrees.x = 90.0
-			seg.position = Vector3(d.x * 0.25, PIPE_HEIGHT, d.y * 0.25) \
-				+ perp * pair[1]
-			seg.material_override = _flat(pair[0])
-			node.add_child(seg)
-			if dh > 0.0:  # climbing a plateau step: riser at the shared edge
-				var riser := MeshInstance3D.new()
-				var riser_mesh := CylinderMesh.new()
-				riser_mesh.top_radius = 0.055
-				riser_mesh.bottom_radius = 0.055
-				riser_mesh.height = dh
-				riser.mesh = riser_mesh
-				riser.position = Vector3(d.x * 0.5, PIPE_HEIGHT + dh / 2.0, d.y * 0.5) \
-					+ perp * pair[1]
-				riser.material_override = _flat(pair[0])
-				node.add_child(riser)
-	# per-color joint flanges bridge the corner gaps
-	if any_connection:
-		node.add_child(_box(Vector3(0.15, 0.15, 0.15), PIPE_SUPPLY_COLOR,
-			Vector3(0.13, PIPE_HEIGHT, 0.13)))
-		node.add_child(_box(Vector3(0.15, 0.15, 0.15), PIPE_RETURN_COLOR,
-			Vector3(-0.13, PIPE_HEIGHT, -0.13)))
-
-
 func _make_water_pipe(pos: Vector2i) -> Node3D:
 	var node := Node3D.new()
 	node.position = _center(pos)
 	return node  # segments set by _orient_water_pipe
 
 
-## Water main: a single green pipe on the same low supports as the heat
-## pair — one fatter cylinder per connected direction, center joint knuckle.
-## Green main toward every connected neighbor — pipe tiles AND water
-## buildings: towers/wells/pumps/stations get a visible stub + collar.
+## Shared surface-pipe renderer (Phase-5 merge of the heat/water
+## orienters): forward/return double run for heat, single fatter main
+## for water — same low supports, per-direction half-segments from the
+## tile center, step risers on plateau climbs, a grey box where the run
+## enters a tapped building, and per-network joint hardware. Decisions
+## come from LineSpecs.pipe_spec; side convention is world-axis based
+## (X-runs offset in Z, Z-runs offset in X) so straights never zigzag.
+func _orient_pipe(pos: Vector2i, node: Node3D) -> void:
+	_orient_surface_pipe(pos, node, City.model.heat_pipes, "heat")
+
+
 func _orient_water_pipe(pos: Vector2i, node: Node3D) -> void:
-	var kind := int(City.model.water_pipes.get(pos, BuildingDefs.LINE_OVERHEAD))
-	var connections := "%d|" % kind
-	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
-	for i in 4:
-		if City.model.water_pipes.has(pos + directions[i]) \
-				and PowerTopology.cable_linked(City.model.water_pipes, pos,
-					pos + directions[i]):
-			connections += str(i)
-		elif _network_taps_here(pos + directions[i], "water", pos):
-			connections += "b%d" % i
-	var wanted := "%s|r%s@%s" % [connections,
-		City.model.roads.has(pos), _terrain_fingerprint]
+	_orient_surface_pipe(pos, node, City.model.water_pipes, "water")
+
+
+func _pipe_cylinder(radius: float, height: float, color: Color) -> MeshInstance3D:
+	var seg := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = height
+	seg.mesh = cyl
+	seg.material_override = _flat(color)
+	return seg
+
+
+func _orient_surface_pipe(pos: Vector2i, node: Node3D, layer: Dictionary,
+		network: String) -> void:
+	var heat := network == "heat"
+	var spec := LineSpecs.pipe_spec(City.model, pos, layer, network)
+	var wanted := LineSpecs.cable_cache_key(spec,
+		City.model.roads.has(pos), _terrain_fingerprint)
 	if node.get_meta("pipes", "") == wanted:
 		return
 	node.set_meta("pipes", wanted)
 	for child in node.get_children():
 		child.queue_free()
-	if kind == BuildingDefs.LINE_UNDERGROUND:
-		_orient_buried(pos, node, City.model.water_pipes, "water",
-			[WATER_PIPE_COLOR], false)
+	if int(spec["kind"]) == BuildingDefs.LINE_UNDERGROUND:
+		_orient_buried(pos, node, layer, network,
+			[PIPE_SUPPLY_COLOR, PIPE_RETURN_COLOR] if heat
+				else [WATER_PIPE_COLOR], false)
 		return
+	# support foot
 	node.add_child(_box(Vector3(0.14, PIPE_HEIGHT - 0.05, 0.14),
 		Color(0.45, 0.46, 0.5), Vector3(0, (PIPE_HEIGHT - 0.05) / 2.0, 0)))
-	var any_connection := false
-	for i in 4:
-		var d := directions[i]
-		var joined: bool = City.model.water_pipes.has(pos + d) \
-			and PowerTopology.cable_linked(City.model.water_pipes, pos, pos + d)
-		var to_building: bool = not City.model.water_pipes.has(pos + d) \
-			and _network_taps_here(pos + d, "water", pos)
-		if not joined and not to_building:
-			continue
-		any_connection = true
-		if to_building:
-			# collar where the main enters the building
-			node.add_child(_box(
-				Vector3(0.1, 0.26, 0.24) if d.y == 0 else Vector3(0.24, 0.26, 0.1),
-				Color(0.5, 0.52, 0.56),
-				Vector3(d.x * 0.48, PIPE_HEIGHT, d.y * 0.48)))
-		var seg := MeshInstance3D.new()
-		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.07
-		cyl.bottom_radius = 0.07
-		cyl.height = 0.5
-		seg.mesh = cyl
-		if d.y == 0:
-			seg.rotation_degrees.z = 90.0
-		else:
-			seg.rotation_degrees.x = 90.0
-		seg.position = Vector3(d.x * 0.25, PIPE_HEIGHT, d.y * 0.25)
-		seg.material_override = _flat(WATER_PIPE_COLOR)
-		node.add_child(seg)
-		var dh := _ground_y(pos + d) - _ground_y(pos)
-		if dh > 0.0:  # climbing a plateau step: riser at the shared edge
-			var riser := MeshInstance3D.new()
-			var riser_mesh := CylinderMesh.new()
-			riser_mesh.top_radius = 0.07
-			riser_mesh.bottom_radius = 0.07
-			riser_mesh.height = dh
-			riser.mesh = riser_mesh
-			riser.position = Vector3(d.x * 0.5, PIPE_HEIGHT + dh / 2.0, d.y * 0.5)
-			riser.material_override = _flat(WATER_PIPE_COLOR)
-			node.add_child(riser)
-	if any_connection:
+	# heat: supply/return pair offset perpendicular; water: one center run
+	var radius := 0.055 if heat else 0.07
+	var lines: Array = [[PIPE_SUPPLY_COLOR, 1.0], [PIPE_RETURN_COLOR, -1.0]] 		if heat else [[WATER_PIPE_COLOR, 0.0]]
+	var box_size := Vector3(0.1, 0.3, 0.44) if heat else Vector3(0.1, 0.26, 0.24)
+	for entry: Array in [[spec["links"], false], [spec["taps"], true]]:
+		for dir_index: int in entry[0]:
+			var d: Vector2i = LineSpecs.DIRECTIONS[dir_index]
+			if entry[1]:
+				# valve box / collar where the run enters the building
+				node.add_child(_box(box_size if d.y == 0
+					else Vector3(box_size.z, box_size.y, box_size.x),
+					Color(0.5, 0.52, 0.56),
+					Vector3(d.x * 0.48, PIPE_HEIGHT, d.y * 0.48)))
+			var horizontal := d.y == 0  # segment runs along world X
+			var perp := Vector3(0, 0, 0.13) if horizontal else Vector3(0.13, 0, 0)
+			var dh := _ground_y(pos + d) - _ground_y(pos)
+			for line: Array in lines:
+				var seg := _pipe_cylinder(radius, 0.5, line[0])
+				if horizontal:
+					seg.rotation_degrees.z = 90.0
+				else:
+					seg.rotation_degrees.x = 90.0
+				seg.position = Vector3(d.x * 0.25, PIPE_HEIGHT, d.y * 0.25) \
+					+ perp * float(line[1])
+				node.add_child(seg)
+				if dh > 0.0:  # climbing a plateau step: riser at the edge
+					var riser := _pipe_cylinder(radius, dh, line[0])
+					riser.position = Vector3(d.x * 0.5, PIPE_HEIGHT + dh / 2.0,
+						d.y * 0.5) + perp * float(line[1])
+					node.add_child(riser)
+	if (spec["links"] as Array).is_empty() and (spec["taps"] as Array).is_empty():
+		return
+	# joint hardware bridges the corner gaps: per-color flanges (heat),
+	# one center knuckle (water)
+	if heat:
+		node.add_child(_box(Vector3(0.15, 0.15, 0.15), PIPE_SUPPLY_COLOR,
+			Vector3(0.13, PIPE_HEIGHT, 0.13)))
+		node.add_child(_box(Vector3(0.15, 0.15, 0.15), PIPE_RETURN_COLOR,
+			Vector3(-0.13, PIPE_HEIGHT, -0.13)))
+	else:
 		node.add_child(_box(Vector3(0.17, 0.17, 0.17), WATER_PIPE_COLOR,
 			Vector3(0, PIPE_HEIGHT, 0)))
 
