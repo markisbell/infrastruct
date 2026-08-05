@@ -654,7 +654,7 @@
 			"well_12": false
 		},
 		"doc": {
-			"contract": "1.0",
+			"contract": "1.2",
 			"devices": [
 				{
 					"id": "grid_connection_1",

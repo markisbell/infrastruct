@@ -527,6 +527,41 @@ def test_contract(entry: dict, tmp_path: Path) -> None:
                     <= float(soc_probe["tolerance"]), (
                     f"replayed soc {soc_probe['soc']} came back as {soc}")
 
+            gf_probe = fixture.get("grid_forming_probe")
+            if gf_probe:
+                # contract 1.2 (§3.1 grid-forming note): the backend REPORTS
+                # and never enforces — the script drained the island former,
+                # so the FINAL scripted result must carry storage_empty on
+                # device:<id> while the island zone stayed solved (the
+                # golden pins supplied/soc); and reset must honor an
+                # explicit soc replay on a grid_forming device
+                dev = gf_probe["device"]
+                if gf_probe.get("expect_empty_violation"):
+                    kinds = [v.get("kind")
+                             for v in last_result.get("violations", [])
+                             if v.get("element") == f"device:{dev}"]
+                    assert "storage_empty" in kinds, (
+                        f"drained grid_forming {dev!r} carries no "
+                        f"storage_empty violation: "
+                        f"{last_result.get('violations')}")
+                gf_topology = json.loads(json.dumps(wire_topology))
+                for device in gf_topology["devices"]:
+                    if device["id"] == dev:
+                        device.setdefault("params", {})["soc"] = \
+                            float(gf_probe["soc"])
+                status, gf_reset = _http_json("POST", base + "/gb/net/reset",
+                                              gf_topology)
+                assert status == 200 and gf_reset.get("ok") is True
+                status, first = _http_json(
+                    "POST", base + "/gb/step",
+                    _floatify({"t": 0, "dt_s": int(last_req["dt_s"])}))
+                assert status == 200
+                soc = float(first["devices"][dev]["soc"])
+                assert abs(soc - float(gf_probe["soc"])) \
+                    <= float(gf_probe["tolerance"]), (
+                    f"replayed grid_forming soc {gf_probe['soc']} came back "
+                    f"as {soc}")
+
             # --- g. patch round-trip + tolerant error ----------------------
             probe = fixture["patch_probe"]
             probe_id = probe["id"]

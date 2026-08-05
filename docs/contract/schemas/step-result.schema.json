@@ -58,7 +58,7 @@
         "required": ["element", "kind", "severity"],
         "properties": {
           "element": {"type": "string"},
-          "kind": {"enum": ["overload", "voltage", "dp_low", "t_supply_low", "pressure_low", "clamped"]},
+          "kind": {"enum": ["overload", "voltage", "dp_low", "t_supply_low", "pressure_low", "clamped", "storage_empty", "storage_full"]},
           "severity": {"enum": ["info", "warning", "critical"]},
           "value": {"type": "number"}
         }

@@ -1011,6 +1011,10 @@ func _update_islands(t: int, result: Dictionary) -> void:
 				"p_max_kw": float(params.get("p_max_kw", 0.0)),
 				"slack_kw": _num_or(result.get("devices", {})
 					.get(former, {}).get("output_kw"), 0.0),
+				# contract 1.2: the backend integrates the grid_forming SoC
+				# from the solved flow — its report is authoritative (the
+				# controller falls back to local integration without one)
+				"soc": result.get("devices", {}).get(former, {}).get("soc"),
 				"zone_kw": zone_kw, "renew_kw": renew, "gas_max_kw": gas_max,
 				"former_down": event_system.is_down(former, t),
 				"t": t, "dt_h": GameClock.SIM_STEP_MINUTES / 60.0}):

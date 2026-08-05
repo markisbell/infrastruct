@@ -35,7 +35,7 @@
           "id": {"type": "string", "minLength": 1},
           "kind": {"enum": ["slack", "generator", "pv", "wind", "coupling_load",
                             "chp", "heat_pump", "boiler", "battery", "storage_heat",
-                            "well", "water_pump", "water_tower"]},
+                            "well", "water_pump", "water_tower", "grid_forming"]},
           "node": {"type": "string"},
           "params": {"type": "object"}
         }

@@ -38,13 +38,16 @@ func test_battery_forms_island_renewable_cluster_stays_dark() -> void:
 	assert_bool(topo.has_slack).is_true()
 	assert_array(topo.islands.keys()).contains_exactly([island_id])
 	assert_str(str(topo.islands[island_id]["former"])).is_equal(battery_id)
-	# the former rides the doc as a slack device with ONLY the vm_pu param
+	# a battery former rides the doc as the contract-1.2 grid_forming
+	# device — vm_pu plus the battery limits the backend SoC-tracks
 	var former_dev := {}
 	for device: Dictionary in topo.doc["devices"]:
 		if device["id"] == battery_id:
 			former_dev = device
-	assert_str(str(former_dev.get("kind"))).is_equal("slack")
-	assert_that(former_dev.get("params")).is_equal({"vm_pu": 1.0})
+	assert_str(str(former_dev.get("kind"))).is_equal("grid_forming")
+	assert_that(former_dev.get("params")).is_equal(
+		{"vm_pu": 1.0, "e_kwh": 1000.0, "p_max_kw": 400.0})
+	assert_str(str(topo.doc["contract"])).is_equal("1.2")
 	# members are energized, the island zone is flagged, houses assigned
 	var subs := model.buildings_of_kind("substation")
 	assert_bool(bool(topo.connected[subs[0]])).is_true()
@@ -108,6 +111,11 @@ func test_gas_plant_forms_island_without_battery() -> void:
 	assert_array(topo.islands.keys()).contains_exactly(["isl_%s" % gas_id])
 	assert_str(str(topo.islands["isl_%s" % gas_id]["former_kind"])) \
 		.is_equal("gas_plant")
+	# a gas former is fuel-limited, not SoC-limited: plain slack, never
+	# grid_forming
+	for device: Dictionary in topo.doc["devices"]:
+		if device["id"] == gas_id:
+			assert_str(str(device["kind"])).is_equal("slack")
 
 
 func test_grid_connected_city_has_no_islands() -> void:

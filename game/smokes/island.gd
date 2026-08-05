@@ -46,11 +46,12 @@ func run() -> void:
 	var island_id := "isl_%s" % battery_id
 	var zone_id: String = "z_" + City.model.buildings_of_kind("substation")[0]
 	check("island_detected", City.topo.islands.has(island_id))
-	var former_is_slack := false
+	# contract 1.2: a battery former is the backend-SoC-tracked grid_forming
+	var former_is_forming := false
 	for device: Dictionary in City.topo.doc.get("devices", []):
-		if device["id"] == battery_id and device["kind"] == "slack":
-			former_is_slack = true
-	check("former_is_slack", former_is_slack)
+		if device["id"] == battery_id and device["kind"] == "grid_forming":
+			former_is_forming = true
+	check("former_is_grid_forming", former_is_forming)
 	check("zone_flagged", str(City.topo.zones_info.get(zone_id, {})
 		.get("island", "")) == island_id)
 
@@ -71,6 +72,11 @@ func run() -> void:
 	check("noon_zone_supplied", bool(City.zone_supplied.get(zone_id, false)))
 	check("noon_curtailed", float(window["min_curtail"]) < 1.0)
 	check("noon_soc_charged", float(City.device_soc.get(battery_id, 0.0)) >= 0.6)
+	# the SoC must come REPORTED from the solver (contract 1.2 grid_forming),
+	# not from the game's fallback integration
+	var reported: Variant = City.last_result.get("devices", {}) \
+		.get(battery_id, {}).get("soc")
+	check("soc_backend_reported", reported is float or reported is int)
 
 	# ── phase C: dead-calm night — the battery carries the town, hits its
 	# reserve, and the EMS sheds the zone (outage minutes book, dark town)

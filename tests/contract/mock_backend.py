@@ -26,7 +26,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-CONTRACT_VERSION = "1.1"
+CONTRACT_VERSION = "1.2"
 BACKEND_NAME = "mock"
 API_VERSION = "0.1.0"
 

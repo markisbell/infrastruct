@@ -6,7 +6,7 @@ Deterministic, stdlib-only. Rerun after changing any parameter:
     python gen_power_fixture.py            # writes power_fixture.json here
 
 Network (contract §3.1, authored per the Phase-2 task; battery added with
-the Phase-3 backend slice / contract 1.1):
+the Phase-3 backend slice / contract 1.1; island added with contract 1.2):
     5 buses ``b0``-``b4``, one 0.4-kV chain of NAYY 4x150 SE segments
     (0.3 km hops), 10 zones spread 3/2/2/3 over ``b1``-``b4``, devices:
     slack@b0 (vm_pu 1.0) · generator gen1@b1 (p_max_kw 500, dispatched
@@ -17,6 +17,14 @@ the Phase-3 backend slice / contract 1.1):
     0 kW at the final step so the golden slack band is untouched; sized so
     neither the p_max nor the SoC bounds ever clamp — SoC runs 0.5 → ~0.95
     → ~0.16, inside the [0, 1] golden). 96 steps/day, dt_s 900.
+
+    PLUS (contract 1.2) a DISCONNECTED island ``i0``-``i1``: grid_forming
+    gfi@i0 (vm_pu 1.0, e_kwh 200, p_max_kw 100) as the island's slack,
+    zone ``zi``@i1 drawing a constant 20 kW. 20 kW × 24 h = 480 kWh drains
+    the 100-kWh half charge before midday — DELIBERATE: the backend must
+    keep solving (report, never enforce), pin soc 0 + the storage_empty
+    violation at the final step while ``zi`` stays supplied (frequency
+    collapse is the game EMS's call, contract §3.1 grid-forming note).
 
 Boundary script: one full day. Zone demands 10-40 kW with a morning/evening
 double peak; the b1 zones keep a late-evening plateau so the constant
@@ -129,10 +137,13 @@ def weather() -> dict:
 # ------------------------------------------------------------------ topology
 
 def topology() -> dict:
-    buses = [{"name": f"b{i}", "vn_kv": 0.4} for i in range(5)]
+    buses = [{"name": f"b{i}", "vn_kv": 0.4} for i in range(5)] \
+        + [{"name": "i0", "vn_kv": 0.4}, {"name": "i1", "vn_kv": 0.4}]
     lines = [{"name": f"l{i}{i + 1}", "from_bus": i, "to_bus": i + 1,
               "length_km": 0.3, "std_type": "NAYY 4x150 SE"}
-             for i in range(4)]
+             for i in range(4)] \
+        + [{"name": "li01", "from_bus": 5, "to_bus": 6,
+            "length_km": 0.1, "std_type": "NAYY 4x150 SE"}]
     native = {
         "grid_structure": {"name": "contract_power_fixture", "f_hz": 50.0,
                            "buses": buses},
@@ -145,12 +156,13 @@ def topology() -> dict:
                        "substations": []},
     }
     return {
-        "contract": "1.0",
+        "contract": "1.2",   # the doc USES a 1.2 device kind (grid_forming)
         "network_kind": "power",
         "name": "contract_power_fixture",
         "steps_per_day": STEPS,
         "native": native,
-        "zones": [{"id": zid, "node": bus} for zid, bus in ZONE_BUS.items()],
+        "zones": [{"id": zid, "node": bus} for zid, bus in ZONE_BUS.items()]
+        + [{"id": "zi", "node": "i1"}],
         "devices": [
             {"id": "slack", "kind": "slack", "node": "b0",
              "params": {"vm_pu": 1.0}},
@@ -163,6 +175,8 @@ def topology() -> dict:
             {"id": "cpl_heat", "kind": "coupling_load", "node": "b2"},
             {"id": "bat1", "kind": "battery", "node": "b2",
              "params": {"e_kwh": 200, "p_max_kw": 100}},
+            {"id": "gfi", "kind": "grid_forming", "node": "i0",
+             "params": {"vm_pu": 1.0, "e_kwh": 200, "p_max_kw": 100}},
         ],
     }
 
@@ -175,8 +189,9 @@ def main() -> None:
         "script": {
             "steps": STEPS,
             "dt_s": DT_S,
-            "zone_demand_kw": {zid: zone_demand(i)
-                               for i, zid in enumerate(ZONE_BUS)},
+            "zone_demand_kw": {**{zid: zone_demand(i)
+                                  for i, zid in enumerate(ZONE_BUS)},
+                               "zi": [20.0] * STEPS},
             "device_setpoints": {
                 "gen1": {"p_kw": {"const": 200.0}},
                 "pv1": {"p_kw": pv_series()},
@@ -201,6 +216,12 @@ def main() -> None:
             "devices.bat1.output_kw": [-0.01, 0.01],
             "devices.bat1.soc": [0.0, 1.0],
             "devices.slack.output_kw": [-80.0, 60.0],
+            # the drained island former still supplies its zone (report,
+            # never enforce): flow = demand + line losses, soc pinned empty
+            "zones.zi.supplied": [1.0, 1.0],
+            "zones.zi.detail.v_pu": [0.93, 1.02],
+            "devices.gfi.output_kw": [19.0, 22.0],
+            "devices.gfi.soc": [0.0, 0.005],
         },
         # Evaluated by the GAME's cosim e2e at the same step — but with live
         # cross-network coupling: the heat fixture's slack CHP feeds its
@@ -217,9 +238,31 @@ def main() -> None:
             "devices.bat1.output_kw": [-0.01, 0.01],
             "devices.bat1.soc": [0.0, 1.0],
             "devices.slack.output_kw": [-170.0, 60.0],
+            # coupling shifts only the MAIN component; the island is galvanic
+            "zones.zi.supplied": [1.0, 1.0],
+            "zones.zi.detail.v_pu": [0.90, 1.10],
+            "devices.gfi.output_kw": [19.0, 22.0],
+            "devices.gfi.soc": [0.0, 0.005],
         },
         "patch_probe": {"id": "gen_probe", "kind": "generator", "node": "b2",
                         "params": {"p_max_kw": 100}},
+        # hand-added probe keys (Phase-7b contract expansion) — kept HERE so
+        # regeneration never drops them again (the generator was stale once)
+        "signed_demand_probe": {"zone": "z0", "value": -50.0,
+                                "slack_id": "slack",
+                                "min_import_drop": 40.0},
+        "clamp_probe": {"device": "bat1", "p_kw": 99999.0,
+                        "bound_kw": 100.0},
+        "coupling_probe": {"device": "cpl_heat", "p_kw": 123.0,
+                           "tolerance": 5.0},
+        "soc_probe": {"device": "bat1", "soc": 0.33, "tolerance": 0.25},
+        "require_edges": True,
+        # contract 1.2: the exhausted island former must carry the
+        # storage_empty violation at the final step, and reset must honor
+        # an explicit soc replay on a grid_forming device
+        "grid_forming_probe": {"device": "gfi",
+                               "expect_empty_violation": True,
+                               "soc": 0.4, "tolerance": 0.05},
     }
     OUT.write_text(json.dumps(fixture, indent=1) + "\n", encoding="utf-8",
                    newline="\n")

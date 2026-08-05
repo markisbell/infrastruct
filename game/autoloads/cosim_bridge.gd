@@ -6,9 +6,10 @@ extends Node
 
 signal handshake_completed(id: String, ok: bool, info: Dictionary)
 
-## The game NEEDS 1.1 features (solved edges, water device rows, signed
-## power demand) — a backend speaking only 1.0 is refused at handshake.
-const EXPECTED_CONTRACT := "1.1"
+## The game NEEDS 1.2 features (grid_forming island slacks, on top of
+## 1.1's solved edges, water device rows, signed power demand) — a
+## backend speaking an older minor is refused at handshake.
+const EXPECTED_CONTRACT := "1.2"
 const STEP_TIMEOUT_S := 60.0  # first solve after net load pays the numba JIT
 const WS_CONNECT_TIMEOUT_S := 5.0
 

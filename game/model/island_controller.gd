@@ -102,9 +102,17 @@ func update_island(island_id: String, input: Dictionary) -> Array[String]:
 	var gas_max := float(input.get("gas_max_kw", 0.0))
 	var t := int(input.get("t", 0))
 
-	# the solved slack flow is what the former actually delivered/absorbed
+	# the solved slack flow is what the former actually delivered/absorbed.
+	# Since contract 1.2 the BACKEND integrates the grid_forming SoC from
+	# that flow and reports it — the reported value is authoritative and
+	# this controller is supervisory (M3). The local integration stays as
+	# the fallback for formers the backend doesn't SoC-track.
 	if battery:
-		s["soc"] = clampf(float(s["soc"]) - slack_kw * dt_h / e_kwh, 0.0, 1.0)
+		var reported: Variant = input.get("soc")
+		if reported is float or reported is int:
+			s["soc"] = clampf(float(reported), 0.0, 1.0)
+		else:
+			s["soc"] = clampf(float(s["soc"]) - slack_kw * dt_h / e_kwh, 0.0, 1.0)
 
 	# a dead former (equipment failure / maintenance) collapses the island
 	# until the crew is done — the blackout branch re-evaluates afterwards

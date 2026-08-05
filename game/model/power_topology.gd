@@ -234,12 +234,21 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			continue
 		var isl_id: String = island_of.get(id, "")
 		if isl_id != "" and id == str(islands[isl_id]["former"]):
-			# the island's grid-forming device IS its slack: netzsim maps it
-			# onto its own ext_grid, its solved power IS the battery/gas
-			# dispatch; energy bookkeeping stays game-side (IslandController —
-			# a solved ext_grid has no backend SoC machinery)
-			devices.append({"id": id, "kind": "slack", "node": _bus_name(id),
-				"params": {"vm_pu": 1.0}})
+			# the island's grid-forming device IS its slack. A battery former
+			# is the contract-1.2 grid_forming device: the BACKEND integrates
+			# its SoC from the solved flow and reports soc + storage_empty/
+			# overload violations (IslandController demotes to supervisory).
+			# A gas former stays a plain slack (fuel-limited, not SoC-limited).
+			if str(islands[isl_id]["former_kind"]) == "battery":
+				var p := model.building_params(id)
+				devices.append({"id": id, "kind": "grid_forming",
+					"node": _bus_name(id),
+					"params": {"vm_pu": 1.0,
+						"e_kwh": float(p.get("e_kwh", 1000.0)),
+						"p_max_kw": float(p.get("p_max_kw", 400.0))}})
+			else:
+				devices.append({"id": id, "kind": "slack",
+					"node": _bus_name(id), "params": {"vm_pu": 1.0}})
 			continue
 		if isl_id != "":
 			(islands[isl_id]["devices"] as Dictionary)[id] = device_kind
@@ -250,7 +259,9 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			"node": coupling_bus[network], "params": {}})
 
 	doc = {
-		"contract": "1.0",
+		# declares the contract minor the doc may USE (grid_forming is 1.2);
+		# heat/water docs stay 1.0 — they carry no post-1.0 features
+		"contract": "1.2",
 		"network_kind": "power",
 		"name": "city_grid",
 		"steps_per_day": 96,

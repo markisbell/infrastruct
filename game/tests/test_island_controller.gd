@@ -187,3 +187,16 @@ func test_gas_former_keeps_stability_floor_and_restarts_on_timer() -> void:
 		"zone_kw": {"z": 100.0}, "t": restart_at}))
 	assert_array(out).contains(["black_start"])
 	assert_bool(ctrl.zone_dark("isl_g1", "z")).is_false()
+
+
+func test_backend_reported_soc_is_authoritative() -> void:
+	var ctrl := _ctrl(0.5)
+	# a reported soc (contract 1.2 grid_forming) replaces local integration:
+	# the slack flow says "drain" but the backend's book says 0.9
+	ctrl.update_island("isl_b1", _inp({"slack_kw": 40.0, "soc": 0.9,
+		"zone_kw": {"z": 10.0}}))
+	assert_float(ctrl.soc_of("isl_b1")).is_equal(0.9)
+	# absent report -> the local fallback integrates as before
+	ctrl.update_island("isl_b1", _inp({"slack_kw": 40.0,
+		"zone_kw": {"z": 10.0}}))
+	assert_float(ctrl.soc_of("isl_b1")).is_equal_approx(0.8, 0.0001)

@@ -25,6 +25,9 @@ func test_version_rule_refuses_malformed() -> void:
 
 
 func test_game_requirement_matches_backends() -> void:
-	# all three gamebridge backends speak 1.1 — the requirement must pass them
-	assert_bool(CosimBridge.version_ok(CosimBridge.EXPECTED_CONTRACT, "1.1")) \
+	# all three gamebridge backends speak 1.2 — the requirement must pass
+	# them and refuse the pre-grid_forming 1.1
+	assert_bool(CosimBridge.version_ok(CosimBridge.EXPECTED_CONTRACT, "1.2")) \
 		.is_true()
+	assert_bool(CosimBridge.version_ok(CosimBridge.EXPECTED_CONTRACT, "1.1")) \
+		.is_false()

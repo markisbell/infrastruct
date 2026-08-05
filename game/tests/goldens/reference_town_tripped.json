@@ -654,7 +654,7 @@
 			"well_12": false
 		},
 		"doc": {
-			"contract": "1.0",
+			"contract": "1.2",
 			"devices": [
 				{
 					"id": "grid_connection_1",
@@ -682,9 +682,11 @@
 				},
 				{
 					"id": "battery_4",
-					"kind": "slack",
+					"kind": "grid_forming",
 					"node": "bb_battery_4",
 					"params": {
+						"e_kwh": 1000.0,
+						"p_max_kw": 400.0,
 						"vm_pu": 1.0
 					}
 				},

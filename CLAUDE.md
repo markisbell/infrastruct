@@ -203,10 +203,26 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   off a battery-holding tail now forms an island — the tripped golden
   pins this. Suites: test_island_controller, test_topology_islands;
   `--smoke=island` runs the full loop (curtail → night shed → restore)
-  against the real solver. NOT YET (sketch M3/M4): backend grid_forming
-  device (contract 1.2), island badges/gauges in the hud, off-grid
-  scenario; spare batteries inside an island idle; island load estimate
-  ignores the aggregated cpl_* coupling draw (pre-existing coarseness).
+  against the real solver. M3 (same day) — CONTRACT 1.2 `grid_forming`:
+  battery formers ride the doc as the backend-SoC-tracked island slack
+  (netzsim: ext_grid + battery state, SoC integrated AFTER each converged
+  solve from the SOLVED flow, discharge lossless / charge 0.95; REPORTS,
+  never enforces — `storage_empty`/crit + `storage_full`/warn +
+  device-overload violations, `soc` in results, params.soc replay incl.
+  set_device); gas formers stay plain `slack` (fuel- not SoC-limited).
+  IslandController is SUPERVISORY now: backend-reported soc is
+  authoritative, local integration stays the fallback. EXPECTED_CONTRACT
+  "1.2"; heat/water bumped to 1.2 doc-level (no surface change); power
+  doc declares contract "1.2" (all-power-goldens re-baseline, booster
+  untouched); schemas: kind enum + storage_empty/full violation kinds.
+  Contract-suite: power fixture gained a DISCONNECTED drained island
+  (former exhausts before midday — pins report-never-enforce + the
+  storage_empty violation + soc replay via grid_forming_probe); the
+  STALE fixture generator was re-synced to emit every hand-added probe
+  key (regeneration would have silently dropped them — landmine fixed).
+  NOT YET (M4): island badges/gauges in the hud, off-grid scenario;
+  spare batteries inside an island idle; island load estimate ignores
+  the aggregated cpl_* coupling draw (pre-existing coarseness).
 - **Signals & maintenance**: `City.capacity_warnings` (lines ≥80 %, trafos
   ≥70 %, grid ≥80 %, heat < min+4 °C, water < 2.4 bar) → floating markers.
   Overload trips (line >120 % and trafo >120 % SOLVED loading, sustained)
