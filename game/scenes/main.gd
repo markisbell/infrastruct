@@ -76,6 +76,10 @@ const SMOKES := {
 	"scenarios": "res://smokes/scenarios.gd",
 	"maintenance": "res://smokes/maintenance.gd",
 	"playtest": "res://smokes/playtest.gd",
+	"boosterblackout": "res://smokes/boosterblackout.gd",
+	"savemidevent": "res://smokes/savemidevent.gd",
+	"region": "res://smokes/region.gd",
+	"buriedoverload": "res://smokes/buriedoverload.gd",
 }
 
 

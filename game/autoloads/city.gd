@@ -758,6 +758,14 @@ func _water_setpoints(t: int) -> Dictionary:
 
 # ─── economy engine (EconomyBooks owns the rules; City owns money) ───
 
+## JSON-null-safe numeric read: failed solver frames may carry `null`
+## where a number usually sits (observed: water p_bar on a dead-station
+## solve) — float(null) errors and ABORTS the consequence handler, so
+## outage/satisfaction/economy booking silently stopped for later zones.
+static func _num_or(value: Variant, fallback: float) -> float:
+	return float(value) if (value is float or value is int) else fallback
+
+
 func _econ_apply(category: String, delta_eur: float) -> void:
 	money += econ_books.apply(category, delta_eur)
 
@@ -841,8 +849,8 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 			and not tripped_substations.has(topo.zones_info[zone_id]["sub"])
 			and not zone_result.is_empty()
 			and float(zone_result.get("supplied", 0.0)) >= 0.99
-			and float(zone_result.get("detail", {}).get("v_pu", 0.0)) >= 0.90
-			and float(zone_result.get("detail", {}).get("v_pu", 2.0)) <= 1.10
+			and _num_or(zone_result.get("detail", {}).get("v_pu"), 0.0) >= 0.90
+			and _num_or(zone_result.get("detail", {}).get("v_pu"), 2.0) <= 1.10
 		)
 		zone_supplied[zone_id] = supplied
 		if not supplied and houses > 0:
@@ -880,7 +888,7 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
 		if not zone_result.is_empty():
 			_telemetry_put("v:" + zone_id, t,
-				float(zone_result.get("detail", {}).get("v_pu", NAN)))
+				_num_or(zone_result.get("detail", {}).get("v_pu"), NAN))
 		_telemetry_put("d:" + zone_id, t, DemandModel.zone_sum_kw(
 			topo.zones_info[zone_id]["house_tiles"], t))
 	# district trafo loading comes SOLVED from the contract T-edges
@@ -933,7 +941,7 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 		var houses: int = heat_topo.zones_info[zone_id]["houses"]
 		total += houses
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
-		var t_supply := float(zone_result.get("detail", {}).get("t_supply_c", 0.0))
+		var t_supply := _num_or(zone_result.get("detail", {}).get("t_supply_c"), 0.0)
 		var warm: bool = (
 			not failed and not zone_result.is_empty()
 			and float(zone_result.get("supplied", 0.0)) >= 0.99
@@ -972,7 +980,7 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
 		if not zone_result.is_empty():
 			_telemetry_put("t:" + zone_id, t,
-				float(zone_result.get("detail", {}).get("t_supply_c", NAN)))
+				_num_or(zone_result.get("detail", {}).get("t_supply_c"), NAN))
 	_telemetry_put("net:heat", t, net_heat)
 	for device_id: String in result.get("devices", {}):
 		var device: Dictionary = result["devices"][device_id]
@@ -1038,7 +1046,7 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 				+ GameClock.SIM_STEP_MINUTES
 			dry_weight += (1.0 - supplied) * houses
 		# capacity signal: pressure approaching the W 400-1 minimum
-		var p_bar := float(zone_result.get("detail", {}).get("p_bar", -1.0))
+		var p_bar := _num_or(zone_result.get("detail", {}).get("p_bar"), -1.0)
 		var water_level := CapacitySignals.water_level(p_bar)
 		if water_level != "":
 			capacity_warnings[zone_id] = {
@@ -1065,7 +1073,7 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
 		if not zone_result.is_empty():
 			_telemetry_put("pb:" + zone_id, t,
-				float(zone_result.get("detail", {}).get("p_bar", NAN)))
+				_num_or(zone_result.get("detail", {}).get("p_bar"), NAN))
 	_telemetry_put("net:water", t, net_water)
 	for device_id: String in result.get("devices", {}):
 		var device: Dictionary = result["devices"][device_id]

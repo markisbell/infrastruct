@@ -313,9 +313,11 @@ use the Linux paths — on Windows substitute `Godot_v4.7.1-stable_win64_console
 #        heatstorage pumpblackout drought towerheight hilltower yearcurves
 #        citylife economy events scenarios maintenance
 #        playtest (monkey player; optional --seed=N for fuzz sweeps)
+#        boosterblackout savemidevent region buriedoverload (2026-08-05)
 # resilience + cosim-kill are NOT standalone — an external wrapper must kill
 # the backend (bare runs report saw_down/down_event false and fail):
 tests/e2e/resilience_smoke.sh && tests/e2e/cosim_kill_recovery.sh
+# cosim-kill accepts KILL_NET=power (kills the coupling CARRIER; default heat)
 # GdUnit (import pass REQUIRED after adding class_name files AND on fresh checkouts!)
 .tools/godot/Godot_v4.7.1-stable_linux.x86_64 --headless --path game --import
 .tools/godot/Godot_v4.7.1-stable_linux.x86_64 --headless --path game -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd -a res://tests --ignoreHeadlessMode

@@ -3,6 +3,9 @@ extends SmokeBase
 
 
 var kill_mode := false  # cosim-kill sets this via the registry
+## which backend the external wrapper kills; INFRA_KILL_NET env overrides
+## (the power variant kills the network that CARRIES the coupling)
+var kill_net := "heat"
 
 
 func run() -> void:
@@ -45,6 +48,8 @@ func run() -> void:
 		_fail("SMOKE_COSIM", "register failed")
 		return
 
+	if OS.get_environment("INFRA_KILL_NET") != "":
+		kill_net = OS.get_environment("INFRA_KILL_NET")
 	GameClock.restore({"total_minutes": 0.0, "speed": 0.0})
 	Orchestrator.start()
 	if kill_mode:
@@ -53,10 +58,13 @@ func run() -> void:
 
 	var deadline := Time.get_ticks_msec() + (420_000 if kill_mode else 240_000)
 	while Time.get_ticks_msec() < deadline:
-		var power_done: bool = (seen["power"] as Array).size() >= n_steps
-		var heat_done: bool = (seen["heat"] as Array).size() >= n_steps \
-			or (kill_mode and GameClock.total_minutes >= n_steps * GameClock.SIM_STEP_MINUTES)
-		if power_done and heat_done:
+		var all_done := true
+		for id: String in ["power", "heat"]:
+			var net_done: bool = (seen[id] as Array).size() >= n_steps \
+				or (kill_mode and id == kill_net and GameClock.total_minutes
+					>= n_steps * GameClock.SIM_STEP_MINUTES)
+			all_done = all_done and net_done
+		if all_done:
 			break
 		await get_tree().create_timer(0.25).timeout
 	GameClock.pause()
@@ -79,23 +87,24 @@ func run() -> void:
 			"missed": Orchestrator.networks[id]["missed"], "monotonic": monotonic,
 			"statuses": statuses[id], "bad_status_steps": bad_status,
 			"golden_fails": golden_fails}
-		if kill_mode and id == "heat":
+		if kill_mode and id == kill_net:
 			var down := events.any(func(e: Dictionary) -> bool:
-				return e.kind == "backend_down" and e.network == "heat")
+				return e.kind == "backend_down" and e.network == kill_net)
 			var recovered := events.any(func(e: Dictionary) -> bool:
-				return e.kind == "backend_recovered" and e.network == "heat")
+				return e.kind == "backend_recovered" and e.network == kill_net)
 			var resumed: bool = not ts.is_empty() and ts.back() > (ts[0] + ts.size())
-			report["heat"]["down_event"] = down
-			report["heat"]["recovered_event"] = recovered
-			report["heat"]["resumed_after_gap"] = resumed
+			report[id]["down_event"] = down
+			report[id]["recovered_event"] = recovered
+			report[id]["resumed_after_gap"] = resumed
 			report["ok"] = report["ok"] and down and recovered and resumed and monotonic
 		else:
 			report["ok"] = report["ok"] and ts.size() >= n_steps \
 				and Orchestrator.networks[id]["missed"] == 0 and monotonic \
 				and bad_status == 0 and golden_fails.is_empty()
 	if kill_mode:
-		report["ok"] = report["ok"] and report["power"]["completed"] >= n_steps - 2 \
-			and report["power"]["bad_status_steps"] == 0
+		var survivor := "power" if kill_net == "heat" else "heat"
+		report["ok"] = report["ok"] and report[survivor]["completed"] >= n_steps - 2 \
+			and report[survivor]["bad_status_steps"] == 0
 	print("SMOKE_COSIM_KILL " if kill_mode else "SMOKE_COSIM ", JSON.stringify(report))
 	SidecarManager.stop_all()
 	get_tree().quit(0 if report["ok"] else 1)

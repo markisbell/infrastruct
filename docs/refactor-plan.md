@@ -304,7 +304,26 @@ steps + telemetry ingestion, no real solvers. Today the game has ZERO
 tests against the mock; also unit-test the game's CONSUMER side of
 step-results (telemetry key vocabulary dev:/soc:/q:/t:/pb:).
 
-## New smokes (integration gaps the survey found)
+## New smokes — DONE 2026-08-05
+
+All five landed (first users of SmokeBase's check()/verdict() named
+reporting): boosterblackout (station_modes cut end-to-end; found a REAL
+pre-existing bug — float(null) on failed frames' p_bar ABORTED
+_on_water_step mid-zone, silently skipping outage/satisfaction/economy
+booking: all seven detail reads now go through City._num_or; also
+documented that DEGRADED frames carry optimistic supplied values the
+consequence layer takes at face value — candidate stricter-degraded
+policy), savemidevent (trips/down_until/draws/RNG position survive a
+mid-storm+failure+burst load, water honestly STAYS down while the burst
+bites; KNOWN GAP: weather override windows are not in the envelope —
+candidate v5 field), region (kraichgau headless: found a natural
+level-11 plateau, station elevation 355 m pinned in the doc, converged
+solves), buriedoverload (the NA2XS2Y rating fingerprint: 204 % loading
+vs ~246 % if the overhead rating applied), and cosim-kill KILL_NET=power
+(the coupling carrier dies: 88/96 with down/recovered/resumed, heat
+96/96 untouched; heat default re-verified).
+
+## Original new-smoke list (for reference)
 
 1. **Booster blackout**: inline pumping station bridging a run, grid
    trip → station_modes off → downstream zone dry → recovery.
