@@ -78,6 +78,13 @@ pump's power draw) from one solver into the next step of the other.
   day's shape is: overcast skies visibly dim rooftop and park dispatch alike.
   Sunny noon exports; the battery peak-shaves against its own moving average;
   gas covers the residual.
+- **Power islands.** A district with no grid connection stays alive if it has
+  a grid-forming source — a battery inverter or a gas plant; wind and solar
+  alone are grid-following and stay dark. The former becomes that island's
+  slack in the real power flow, and a microgrid EMS keeps the balance:
+  renewables curtail when the battery can't absorb more, reserve gas starts
+  before load shedding, zones shed in rotation when generation runs short,
+  and a drained island black-starts once its battery recovers.
 - **Signals, trips and repair crews.** Capacity warnings float over lines ≥80 %,
   transformers ≥70 %, cold heat far-ends and low water pressure. Sustained
   overloads trip the branch and do NOT self-heal — send a repair crew (€1 500,

@@ -178,6 +178,10 @@ var protection := ProtectionSystem.new()
 var _topo_warned := {}
 ## Dispatch rules incl. the battery peak-shave EMA (Phase-2 extraction).
 var dispatch := DispatchPolicy.new()
+## Microgrid EMS (power islands, 2026-08-05): per-island SoC integration,
+## renewable curtailment, rolling shed and blackout/black-start — rules
+## live pure in IslandController, City feeds it from solved steps.
+var island_ctrl := IslandController.new()
 ## Last known SoC per storage device (battery/heat storage/water tower,
 ## 0..1) — replayed into the docs at registration so topology resets and
 ## save/load never silently recharge the fleet (Phase 8).
@@ -503,6 +507,7 @@ func _refresh_topo_assignment() -> void:
 	topo = PowerTopology.build(model, tripped_tiles)
 	heat_topo = HeatTopology.build(model, tripped_tiles)
 	water_topo = WaterTopology.build(model, tripped_tiles)
+	island_ctrl.sync_islands(topo.islands, device_soc)
 
 
 func _sync_topology() -> void:
@@ -510,6 +515,7 @@ func _sync_topology() -> void:
 	topo = PowerTopology.build(model, tripped_tiles)
 	heat_topo = HeatTopology.build(model, tripped_tiles)
 	water_topo = WaterTopology.build(model, tripped_tiles)
+	island_ctrl.sync_islands(topo.islands, device_soc)
 	# storage continuity: a reset re-creates the backend devices — carry the
 	# last known SoC/level so building a road doesn't recharge the city
 	for doc: Dictionary in [topo.doc, heat_topo.doc, water_topo.doc]:
@@ -526,6 +532,8 @@ func _sync_topology() -> void:
 
 func _inject_soc(doc: Dictionary) -> void:
 	for device: Dictionary in doc.get("devices", []):
+		if device["kind"] == "slack":
+			continue  # island formers: SoC is game-side (IslandController)
 		if device_soc.has(device["id"]):
 			device["params"] = (device["params"] as Dictionary).duplicate()
 			device["params"]["soc"] = snappedf(float(device_soc[device["id"]]), 0.0001)
@@ -639,6 +647,11 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 		if tripped_substations.has(topo.zones_info[zone_id]["sub"]):
 			out[zone_id] = {"value": 0.0}
 			continue
+		# island EMS: a shed or collapsed island zone draws nothing
+		if island_ctrl.zone_dark(
+				str(topo.zones_info[zone_id].get("island", "")), zone_id):
+			out[zone_id] = {"value": 0.0}
+			continue
 		out[zone_id] = {"value": DemandModel.zone_sum_kw(
 			topo.zones_info[zone_id]["house_tiles"], t)}
 	return out
@@ -652,9 +665,11 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 	var sample := weather.sample(t)
 	var total_demand := 0.0
 	for zone_id: String in topo.zones_info:
-		# only zones that actually draw: in the doc and not de-energized
+		# only zones that actually draw: in the doc and not de-energized;
+		# island zones balance through their OWN EMS, not the main dispatch
 		if not bool(topo.zones_info[zone_id].get("connected", true)) \
-				or tripped_substations.has(topo.zones_info[zone_id]["sub"]):
+				or tripped_substations.has(topo.zones_info[zone_id]["sub"]) \
+				or str(topo.zones_info[zone_id].get("island", "")) != "":
 			continue
 		total_demand += DemandModel.zone_sum_kw(topo.zones_info[zone_id]["house_tiles"], t)
 	var out := {}
@@ -663,12 +678,18 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 	for device: Dictionary in topo.doc.get("devices", []):
 		var params: Dictionary = device.get("params", {})
 		var down := event_system.is_down(device["id"], t)  # equipment/maintenance
+		var island_id: String = topo.island_of.get(device["id"], "")
 		match device["kind"]:
 			"wind":
 				var p: float = 0.0 if down else params["p_rated_kw"] \
 					* WeatherSystem.wind_availability(sample["wind_ms"])
+				# island renewables run under the EMS curtailment factor and
+				# never feed the main-grid residual
+				if island_id != "":
+					p *= island_ctrl.curtail_of(island_id)
+				else:
+					renewable += p
 				out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
-				renewable += p
 			"pv":
 				# solar parks follow the REAL measured day shapes (rtpowerflow
 				# real_pv_days via the profile pack) — the same sun that drives
@@ -677,22 +698,43 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 				var p: float = 0.0 if down else float(params["p_rated_kw"]) \
 					* DemandModel.pv_park_availability(t, int(model.buildings
 						.get(device["id"], {}).get("rot", 0)))
+				if island_id != "":
+					p *= island_ctrl.curtail_of(island_id)
+				else:
+					renewable += p
 				out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
-				renewable += p
 			"battery":
-				if not down:
+				if not down and island_id == "":
 					n_batteries += 1
 	var shave := dispatch.battery_shave_kw(t, total_demand, n_batteries)
 	var residual := total_demand - renewable
 	for device: Dictionary in topo.doc.get("devices", []):
 		if device["kind"] == "battery":
+			# a NON-forming battery inside an island idles (the EMS runs the
+			# island through its forming slack; spares are M-later material)
+			if topo.island_of.has(device["id"]):
+				out[device["id"]] = {"p_kw": 0.0}
+				continue
 			var p_max: float = 0.0 if event_system.is_down(device["id"], t) \
 				else device["params"]["p_max_kw"]
 			var p := DispatchPolicy.battery_p_kw(shave, p_max)
 			out[device["id"]] = {"p_kw": snappedf(p, 0.1)}
 			residual -= p
+	var island_gas := {}  # island_id -> reserve dispatch left to distribute
 	for device: Dictionary in topo.doc.get("devices", []):
 		if device["kind"] == "generator":
+			var island_id: String = topo.island_of.get(device["id"], "")
+			if island_id != "":
+				# reserve gas inside a battery-formed island: the EMS asked
+				# for gas_kw total; fill the island's units in doc order
+				if not island_gas.has(island_id):
+					island_gas[island_id] = island_ctrl.gas_kw_of(island_id)
+				var cap: float = 0.0 if event_system.is_down(device["id"], t) \
+					else float(device["params"]["p_max_kw"])
+				var share: float = clampf(float(island_gas[island_id]), 0.0, cap)
+				island_gas[island_id] = float(island_gas[island_id]) - share
+				out[device["id"]] = {"p_kw": snappedf(share, 0.1)}
+				continue
 			var p := DispatchPolicy.gas_p_kw(residual,
 				float(device["params"]["p_max_kw"]),
 				event_system.is_down(device["id"], t))
@@ -751,8 +793,16 @@ func _water_setpoints(t: int) -> Dictionary:
 				out[device["id"]] = {"yield_factor":
 					DispatchPolicy.well_yield(weather.drought_factor(t), down)}
 			"water_pump":
+				# an island-fed pump follows ITS island, not the main grid: a
+				# grid trip doesn't reach it, an island blackout kills it
+				# (its draw still aggregates into the one cpl_water load —
+				# pre-existing coarseness, see PowerTopology coupling_bus)
+				var isl: String = topo.island_of.get(device["id"], "")
+				var feed_ok: bool = power_ok if isl == "" else (registered
+					and not island_ctrl.is_blackout(isl)
+					and last_result.get("status", "failed") != "failed")
 				out[device["id"]] = {"enabled": DispatchPolicy.pump_enabled(
-					power_ok, down, topo.connected.get(device["id"], false))}
+					feed_ok, down, topo.connected.get(device["id"], false))}
 	return out
 
 
@@ -844,9 +894,15 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		var houses: int = topo.zones_info[zone_id]["houses"]
 		total_houses += houses
 		var zone_result: Dictionary = result.get("zones", {}).get(zone_id, {})
+		# a grid-connection trip darkens the GRID's zones; islands ride
+		# through on their own former. Shed/collapsed island zones are dark
+		# by EMS decision (their boundary demand was zeroed — the state here
+		# is the one in force DURING this step, _update_islands runs after)
+		var island_id := str(topo.zones_info[zone_id].get("island", ""))
 		var supplied: bool = (
-			not grid_tripped and not failed
+			(not grid_tripped or island_id != "") and not failed
 			and not tripped_substations.has(topo.zones_info[zone_id]["sub"])
+			and not island_ctrl.zone_dark(island_id, zone_id)
 			and not zone_result.is_empty()
 			and float(zone_result.get("supplied", 0.0)) >= 0.99
 			and _num_or(zone_result.get("detail", {}).get("v_pu"), 0.0) >= 0.90
@@ -906,11 +962,76 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 			_telemetry_put(topo.line_key(edge_id), t,
 				float(result["edges"][edge_id].get("loading_percent", NAN)))
 
+	_update_islands(t, result)
 	_check_protection(t, result)
 	_update_capacity_warnings(t, result)
 	_grow(t)
 	state_changed.emit()
 	power_result.emit(t, result)
+
+
+## Feed each island's EMS from the solved step: the former's slack flow
+## drives SoC, the decisions (curtail/gas/shed/blackout) apply to the NEXT
+## boundary read — the architecture's one-step lag. The forming battery's
+## SoC mirrors into device_soc so the save envelope and the inspector's
+## soc: telemetry keep working without backend involvement.
+func _update_islands(t: int, result: Dictionary) -> void:
+	if topo.islands.is_empty():
+		return
+	island_ctrl.sync_islands(topo.islands, device_soc)
+	var sample := weather.sample(t)
+	for island_id: String in topo.islands:
+		var island: Dictionary = topo.islands[island_id]
+		var former: String = island["former"]
+		if not model.buildings.has(former):
+			continue
+		var params := model.building_params(former)
+		var zone_kw := {}
+		for zone_id: String in island["zones"]:
+			zone_kw[zone_id] = DemandModel.zone_sum_kw(
+				topo.zones_info[zone_id]["house_tiles"], t)
+		var renew := 0.0
+		var gas_max := 0.0
+		for dev_id: String in island["devices"]:
+			if event_system.is_down(dev_id, t):
+				continue
+			match str(island["devices"][dev_id]):
+				"wind":
+					renew += float(model.building_params(dev_id)["p_rated_kw"]) \
+						* WeatherSystem.wind_availability(sample["wind_ms"])
+				"pv":
+					renew += float(model.building_params(dev_id)["p_rated_kw"]) \
+						* DemandModel.pv_park_availability(t, int(model.buildings
+							.get(dev_id, {}).get("rot", 0)))
+				"generator":
+					gas_max += float(model.building_params(dev_id)["p_max_kw"])
+		for label: String in island_ctrl.update_island(island_id, {
+				"former_kind": island["former_kind"],
+				"e_kwh": float(params.get("e_kwh", 0.0)),
+				"p_max_kw": float(params.get("p_max_kw", 0.0)),
+				"slack_kw": _num_or(result.get("devices", {})
+					.get(former, {}).get("output_kw"), 0.0),
+				"zone_kw": zone_kw, "renew_kw": renew, "gas_max_kw": gas_max,
+				"former_down": event_system.is_down(former, t),
+				"t": t, "dt_h": GameClock.SIM_STEP_MINUTES / 60.0}):
+			match label:
+				"blackout":
+					log_event("island_blackout", "critical",
+						"Island %s collapsed — microgrid dark until its former recovers"
+						% former)
+				"black_start":
+					log_event("island_restart", "info",
+						"Island %s black-started — zones reconnecting" % former)
+				"shed":
+					log_event("island_shed", "warning",
+						"Island %s shedding load — not enough generation" % former)
+				"restore":
+					log_event("island_restore", "info",
+						"Island %s restored a shed zone" % former)
+		if str(island["former_kind"]) == "battery":
+			device_soc[former] = snappedf(island_ctrl.soc_of(island_id), 0.0001)
+			_telemetry_put("soc:" + former, t,
+				100.0 * island_ctrl.soc_of(island_id))
 
 
 ## Heat consequences (ROADMAP Phase 4 task 4): a zone is warm when supplied
@@ -1200,6 +1321,22 @@ func _update_capacity_warnings(t: int, result: Dictionary) -> void:
 	for i in range(0, crewed.size(), 6):
 		capacity_warnings["crew_%d" % i] = {"level": "warn", "percent": 0.0,
 			"pos": crewed[i], "text": "CREW"}
+	# island EMS state: a low forming-battery SoC is a microgrid's "grid
+	# near its limit" signal; a collapsed island is a crit marker
+	for island_id: String in topo.islands:
+		var former: String = topo.islands[island_id]["former"]
+		if not model.buildings.has(former):
+			continue
+		var pos: Vector2i = model.buildings[former]["anchor"]
+		if island_ctrl.is_blackout(island_id):
+			capacity_warnings[island_id] = {"level": "crit", "percent": 0.0,
+				"pos": pos, "text": "ISLAND DARK"}
+		elif str(topo.islands[island_id]["former_kind"]) == "battery":
+			var soc := island_ctrl.soc_of(island_id)
+			if soc < IslandController.RESTART_SOC:
+				capacity_warnings[island_id] = {"level": "warn",
+					"percent": 100.0 * soc, "pos": pos,
+					"text": "SOC %d%%" % int(100.0 * soc)}
 	# the 110/20 kV interface: import vs its MVA rating
 	for slack_id: String in model.buildings_of_kind("grid_connection"):
 		var capacity: float = grid_capacity_override if grid_capacity_override > 0.0 \
@@ -1401,6 +1538,7 @@ func reset_for_scenario(weather_seed: int) -> void:
 	_last_heat_doc_json = ""
 	_last_water_doc_json = ""
 	dispatch.reset()
+	island_ctrl.reset()
 	device_soc.clear()
 	_heat_degraded_streak = 0
 	zone_supplied.clear()
@@ -1486,6 +1624,10 @@ func restore(data: Dictionary) -> void:
 	econ_total = data.get("econ_total", {})
 	econ_books.day = int(data.get("econ_day", -1))
 	device_soc = data.get("device_soc", {})
+	# island EMS state belongs to the previous city; the rebuild reseeds
+	# island SoC from the restored device_soc (shed/blackout are transient
+	# and re-evaluate within a step — documented envelope decision)
+	island_ctrl.reset()
 	capacity_warnings.clear()
 	telemetry_rings.clear()   # rings belong to the previous city
 	zone_supplied.clear()

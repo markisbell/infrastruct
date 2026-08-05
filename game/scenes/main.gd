@@ -80,6 +80,7 @@ const SMOKES := {
 	"savemidevent": "res://smokes/savemidevent.gd",
 	"region": "res://smokes/region.gd",
 	"buriedoverload": "res://smokes/buriedoverload.gd",
+	"island": "res://smokes/island.gd",
 }
 
 

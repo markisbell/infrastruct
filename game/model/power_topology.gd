@@ -4,8 +4,14 @@ extends RefCounted
 ## source of truth) and builds the contract v1 topology document for the
 ## power backend, plus everything the game needs to interpret results:
 ## line-id → cable-tile paths (overlays, trips), house → zone assignment,
-## slack-reachability (islands are excluded from the solver doc and rendered
-## unpowered — pandapower needs the slack).
+## slack-reachability. Components with no path to a grid connection are
+## excluded and rendered unpowered (pandapower needs a slack) — UNLESS they
+## contain a grid-FORMING device (power islands, 2026-08-05): a battery
+## inverter or the gas plant's synchronous machine can hold an island's
+## voltage/frequency, so that component stays in the doc with the former
+## emitted as its slack (netzsim maps every slack device onto its own
+## ext_grid). Wind/solar inverters are grid-FOLLOWING — pure renewable
+## clusters stay dark. IslandController keeps each island's balance.
 ##
 ## Graph rules:
 ## - a cable tile is a BUS TILE if it touches a building footprint (the
@@ -46,8 +52,10 @@ var doc := {}                    # contract topology document ({} if no slack)
 var line_tiles := {}             # "L<idx>" -> Array[Vector2i] (path incl. endpoints)
 var zones_info := {}             # zone_id -> {sub: building_id, houses: int, bus: String, center: Vector2i}
 var house_zone := {}             # Vector2i -> zone_id
-var connected := {}              # building_id -> bool (slack-reachable)
+var connected := {}              # building_id -> bool (slack- OR island-energized)
 var trafo_subs := {}             # "T<idx>" (solved edge id) -> substation building id
+var islands := {}                # "isl_<former>" -> {former, former_kind, zones: [], devices: {id: kind}}
+var island_of := {}              # building id -> island id (members incl. the former)
 var has_slack := false
 var warnings: Array[String] = []
 
@@ -127,12 +135,16 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	# left later stations dead (user report: "newer grid connections don't
 	# get activated").
 	var slack_ids := model.buildings_of_kind("grid_connection")
-	has_slack = not slack_ids.is_empty()
+	var adjacency := NetGraph.adjacency(raw_lines)
+	var reachable := NetGraph.bfs_from(adjacency, slack_ids)
+	# 3b. POWER ISLANDS: unreached components keep running as microgrids
+	# when they contain a grid-forming device — the former joins the doc as
+	# that component's slack, everything else stays dark (class doc).
+	_detect_islands(model, adjacency, reachable)
+	has_slack = not slack_ids.is_empty() or not islands.is_empty()
 	if not has_slack:
 		warnings.append("no grid connection — network unsolvable, everything unpowered")
 		return
-	var adjacency := NetGraph.adjacency(raw_lines)
-	var reachable := NetGraph.bfs_from(adjacency, slack_ids)
 	for id: String in model.buildings:
 		connected[id] = reachable.has(id)
 
@@ -188,10 +200,17 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		buses.append({"name": lv_name, "vn_kv": 0.4})
 		zones.append({"id": zone_id, "node": lv_name})
 		zones_info[zone_id]["bus"] = lv_name
+		# island zones carry their island id so the boundary/consequence
+		# layers route them through the IslandController (shed/blackout)
+		var isl: String = island_of.get(sub_id, "")
+		if isl != "":
+			zones_info[zone_id]["island"] = isl
+			(islands[isl]["zones"] as Array).append(zone_id)
 	_assign_houses(model)
 
 	var devices: Array[Dictionary] = []
 	var coupling_bus := {}  # other network -> bus (first cable-connected device)
+	var coupling_island := {}  # network -> bool (current pick sits in an island)
 	for id: String in model.buildings:
 		if not connected.get(id, false):
 			continue
@@ -201,12 +220,29 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		if network != "power":
 			# a cable-connected heat/water plant: its electric coupling (heat
 			# pump draw / CHP feed-in / water pump draw) lands here as the
-			# aggregated cpl_<network> load (Orchestrator._coupling_for)
-			if device_kind != "" and not coupling_bus.has(network):
+			# aggregated cpl_<network> load (Orchestrator._coupling_for).
+			# Prefer a MAIN-GRID bus — the aggregated draw of the WHOLE other
+			# network must not land inside one small island (island-bus pick
+			# only when no main-grid candidate exists)
+			if device_kind != "" and (not coupling_bus.has(network)
+					or (bool(coupling_island.get(network, false))
+						and not island_of.has(id))):
 				coupling_bus[network] = _bus_name(id)
+				coupling_island[network] = island_of.has(id)
 			continue
 		if device_kind == "":
 			continue
+		var isl_id: String = island_of.get(id, "")
+		if isl_id != "" and id == str(islands[isl_id]["former"]):
+			# the island's grid-forming device IS its slack: netzsim maps it
+			# onto its own ext_grid, its solved power IS the battery/gas
+			# dispatch; energy bookkeeping stays game-side (IslandController —
+			# a solved ext_grid has no backend SoC machinery)
+			devices.append({"id": id, "kind": "slack", "node": _bus_name(id),
+				"params": {"vm_pu": 1.0}})
+			continue
+		if isl_id != "":
+			(islands[isl_id]["devices"] as Dictionary)[id] = device_kind
 		devices.append({"id": id, "kind": device_kind, "node": _bus_name(id),
 			"params": model.building_params(id)})
 	for network: String in coupling_bus:
@@ -228,6 +264,34 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		"zones": zones,
 		"devices": devices,
 	}
+
+
+## Components without a grid connection but WITH a grid-forming device
+## keep running as microgrids. Batteries claim first (a grid-forming
+## inverter beats keeping a synchronous machine spinning as the reference),
+## then gas plants, sorted ids within each kind; the first former claims
+## its whole component, a second candidate in the same island stays an
+## ordinary device (spare/reserve). Members join `reachable` in place so
+## the bus/line/zone/device emission includes them.
+func _detect_islands(model: WorldModel, adjacency: Dictionary,
+		reachable: Dictionary) -> void:
+	var formers: Array[String] = []
+	for kind: String in ["battery", "gas_plant"]:
+		var ids := model.buildings_of_kind(kind)
+		ids.sort()
+		formers.append_array(ids)
+	for former_id: String in formers:
+		if reachable.has(former_id) or not adjacency.has(former_id):
+			continue
+		var members := NetGraph.bfs_from(adjacency, [former_id])
+		var island_id := "isl_%s" % former_id
+		islands[island_id] = {"former": former_id,
+			"former_kind": model.buildings[former_id]["kind"],
+			"zones": [], "devices": {}}
+		for member: Variant in members:
+			reachable[member] = true
+			if member is String and model.buildings.has(member):
+				island_of[member] = island_id
 
 
 func _assign_houses(model: WorldModel) -> void:

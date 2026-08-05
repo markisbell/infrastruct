@@ -175,6 +175,38 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
 - **Battery = peak shaving ALWAYS** (user direction): discharge net load
   above its one-day EMA (`City._peak_ema`, alpha 1/96), recharge below;
   gas covers the residual AFTER the battery pass.
+- **POWER ISLANDS (2026-08-05, user feature)**: a component with no grid
+  connection stays in the solver doc when it holds a grid-FORMING device —
+  battery preferred, else gas plant; wind/solar are grid-following, pure
+  renewable clusters stay dark (`PowerTopology._detect_islands`,
+  `topo.islands`/`island_of`, zones flagged `island`). The former is
+  emitted as that component's SLACK device (netzsim maps every slack onto
+  its own ext_grid — the parallel-ext_grid machinery grid connections
+  already use), so the SOLVED slack flow IS the battery/gas dispatch.
+  `IslandController` (pure, game/model/) is the microgrid EMS fed per
+  solved step (one-step lag): integrates forming-battery SoC from the
+  slack flow (game-side — an ext_grid has no backend SoC; mirrored into
+  `device_soc` for envelope + `soc:` telemetry, `_inject_soc` skips slack
+  kinds), curtails renewables when the charge path saturates (PREDICTIVE
+  reserve: discharge promise = energy above the 5 % reserve per step — a
+  binary gate let one coarse 15-min step blow through into the blackout
+  backstop, caught by the smoke), starts reserve gas before shedding,
+  sheds zones in ROTATION (restore one per step at 1.2× headroom
+  hysteresis), collapses on sustained overload (3 steps >105 %) or an
+  empty forming battery, black-starts at SoC ≥25 % AFTER a cooldown
+  (instant restart made blackout a no-op — caught by the unit suite).
+  A grid trip darkens only GRID zones (islands ride through); island
+  water pumps follow their island's state, not the main grid; island
+  zones/renewables are excluded from the main peak-shave/gas residual;
+  gas formers book fuel via the existing solved-output loop (device id =
+  building id), formers never settle wholesale. A tripped line splitting
+  off a battery-holding tail now forms an island — the tripped golden
+  pins this. Suites: test_island_controller, test_topology_islands;
+  `--smoke=island` runs the full loop (curtail → night shed → restore)
+  against the real solver. NOT YET (sketch M3/M4): backend grid_forming
+  device (contract 1.2), island badges/gauges in the hud, off-grid
+  scenario; spare batteries inside an island idle; island load estimate
+  ignores the aggregated cpl_* coupling draw (pre-existing coarseness).
 - **Signals & maintenance**: `City.capacity_warnings` (lines ≥80 %, trafos
   ≥70 %, grid ≥80 %, heat < min+4 °C, water < 2.4 bar) → floating markers.
   Overload trips (line >120 % and trafo >120 % SOLVED loading, sustained)
@@ -314,6 +346,7 @@ use the Linux paths — on Windows substitute `Godot_v4.7.1-stable_win64_console
 #        citylife economy events scenarios maintenance
 #        playtest (monkey player; optional --seed=N for fuzz sweeps)
 #        boosterblackout savemidevent region buriedoverload (2026-08-05)
+#        island (power islands: curtail -> night shed -> restore)
 # resilience + cosim-kill are NOT standalone — an external wrapper must kill
 # the backend (bare runs report saw_down/down_event false and fail):
 tests/e2e/resilience_smoke.sh && tests/e2e/cosim_kill_recovery.sh

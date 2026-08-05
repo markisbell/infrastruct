@@ -639,15 +639,15 @@
 	},
 	"power": {
 		"connected": {
-			"battery_4": false,
+			"battery_4": true,
 			"boiler_plant_6": false,
 			"chp_plant_9": false,
 			"gas_plant_2": true,
 			"grid_connection_1": true,
 			"heat_exchanger_7": false,
 			"heat_storage_8": false,
-			"pumping_station_13": false,
-			"solar_park_3": false,
+			"pumping_station_13": true,
+			"solar_park_3": true,
 			"substation_5": true,
 			"water_station_11": false,
 			"water_tower_10": false,
@@ -671,6 +671,28 @@
 					"params": {
 						"p_max_kw": 2000.0
 					}
+				},
+				{
+					"id": "solar_park_3",
+					"kind": "pv",
+					"node": "bb_solar_park_3",
+					"params": {
+						"p_rated_kw": 1200.0
+					}
+				},
+				{
+					"id": "battery_4",
+					"kind": "slack",
+					"node": "bb_battery_4",
+					"params": {
+						"vm_pu": 1.0
+					}
+				},
+				{
+					"id": "cpl_water",
+					"kind": "coupling_load",
+					"node": "bb_pumping_station_13",
+					"params": {}
 				}
 			],
 			"name": "city_grid",
@@ -692,6 +714,22 @@
 						},
 						{
 							"name": "bb_gas_plant_2",
+							"vn_kv": 20.0
+						},
+						{
+							"name": "bb_battery_4",
+							"vn_kv": 20.0
+						},
+						{
+							"name": "bb_solar_park_3",
+							"vn_kv": 20.0
+						},
+						{
+							"name": "bj_31_6",
+							"vn_kv": 20.0
+						},
+						{
+							"name": "bb_pumping_station_13",
 							"vn_kv": 20.0
 						},
 						{
@@ -717,12 +755,33 @@
 							"name": "L1",
 							"std_type": "48-AL1/8-ST1A 20.0",
 							"to_bus": 2
+						},
+						{
+							"from_bus": 4,
+							"length_km": 0.15,
+							"name": "L2",
+							"std_type": "48-AL1/8-ST1A 20.0",
+							"to_bus": 3
+						},
+						{
+							"from_bus": 3,
+							"length_km": 0.2,
+							"name": "L3",
+							"std_type": "NA2XS2Y 1x95 RM/25 12/20 kV",
+							"to_bus": 5
+						},
+						{
+							"from_bus": 5,
+							"length_km": 0.775,
+							"name": "L4",
+							"std_type": "48-AL1/8-ST1A 20.0",
+							"to_bus": 6
 						}
 					],
 					"transformers": [
 						{
 							"hv_bus": 1,
-							"lv_bus": 3,
+							"lv_bus": 7,
 							"name": "T0",
 							"std_type": "0.63 MVA 20/0.4 kV"
 						}
@@ -791,6 +850,57 @@
 				"(14, 5)",
 				"(15, 5)",
 				"(16, 5)"
+			],
+			"L2": [
+				"(20, 5)",
+				"(21, 5)",
+				"(22, 5)",
+				"(23, 5)",
+				"(24, 5)",
+				"(25, 5)"
+			],
+			"L3": [
+				"(25, 5)",
+				"(26, 5)",
+				"(27, 5)",
+				"(28, 5)",
+				"(29, 5)",
+				"(30, 5)",
+				"(31, 5)",
+				"(31, 6)"
+			],
+			"L4": [
+				"(31, 6)",
+				"(31, 7)",
+				"(31, 8)",
+				"(31, 9)",
+				"(31, 10)",
+				"(31, 11)",
+				"(31, 12)",
+				"(31, 13)",
+				"(31, 14)",
+				"(31, 15)",
+				"(31, 16)",
+				"(31, 17)",
+				"(31, 18)",
+				"(31, 19)",
+				"(30, 19)",
+				"(29, 19)",
+				"(28, 19)",
+				"(27, 19)",
+				"(26, 19)",
+				"(25, 19)",
+				"(24, 19)",
+				"(23, 19)",
+				"(22, 19)",
+				"(21, 19)",
+				"(20, 19)",
+				"(19, 19)",
+				"(18, 19)",
+				"(17, 19)",
+				"(16, 19)",
+				"(15, 19)",
+				"(14, 19)"
 			]
 		},
 		"trafo_subs": {
