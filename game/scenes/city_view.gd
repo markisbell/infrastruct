@@ -768,33 +768,16 @@ const DECO_KINDS := {
 	"patch_dirt":  {"file": "patch-dirt.glb",  "fit": 0.85},
 	"patch_grass": {"file": "patch-grass.glb", "fit": 0.85},
 }
-## category -> [weighted variant pool, density (fraction of member tiles)]
-const DECO_POOLS := {
-	"grove":    {"pool": ["tree", "tree", "tree", "tree_high", "tree_high",
-		"plant", "patch_grass"], "density": 0.62},
-	"rocks":    {"pool": ["stones", "stones", "rocks_low", "rocks_low",
-		"rocks_high", "patch_dirt"], "density": 0.25},
-	"riparian": {"pool": ["tree", "tree", "plant", "plant", "patch_grass"],
-		"density": 0.45},
-	"sparse":   {"pool": ["patch_dirt", "patch_grass", "stones", "plant",
-		"tree"], "density": 0.012},
-}
-## cluster field: > this = grove, < negative rock threshold = stone field
-## (grove threshold lowered in the graphics pass: bigger forest masses)
-const GROVE_LEVEL := 0.22
-const ROCKS_LEVEL := -0.42
-
 var _deco_nodes := {}        # variant -> MultiMeshInstance3D
 var _deco_lib := {}          # variant -> {mesh, base: Transform3D} | null
 var _deco_scatter: Array[Dictionary] = []   # per terrain fingerprint
 var _deco_scatter_fp := ""
-var _deco_noise := FastNoiseLite.new()
 
 
+## Scatter/placement rules live in DecoScatter (Phase-5 extraction);
+## this keeps the fingerprint cache + the MultiMesh assembly.
 static func _tile_hash(pos: Vector2i, seed_value: int) -> int:
-	# cheap 2D integer hash — deterministic prop placement per (tile, seed)
-	var h := pos.x * 73856093 ^ pos.y * 19349663 ^ seed_value * 83492791
-	return absi(h)
+	return DecoScatter.tile_hash(pos, seed_value)
 
 
 func _rebuild_deco() -> void:
@@ -803,64 +786,8 @@ func _rebuild_deco() -> void:
 	var terrain: Terrain = City.model.terrain
 	if terrain.fingerprint() != _deco_scatter_fp:
 		_deco_scatter_fp = terrain.fingerprint()
-		_deco_scatter.clear()
-		_deco_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-		_deco_noise.seed = terrain.seed_value + 4021
-		_deco_noise.frequency = 0.045  # grove/stone-field features ~20 tiles
-		# pass 1: river tiles as a set — the riparian strip needs cheap
-		# neighborhood lookups, not 13 noise evaluations per tile
-		var water := {}
-		for x in WORLD_TILES:
-			for z in WORLD_TILES:
-				var pos := Vector2i(x, z)
-				if terrain.is_water(pos):
-					water[pos] = true
-		# pass 2: category per tile, then the category's density gate
-		for x in WORLD_TILES:
-			for z in WORLD_TILES:
-				var pos := Vector2i(x, z)
-				if water.has(pos):
-					continue
-				var c := _deco_noise.get_noise_2d(float(x), float(z))
-				var category := "sparse"
-				if c > GROVE_LEVEL:
-					category = "grove"
-				elif c < ROCKS_LEVEL:
-					category = "rocks"
-				else:
-					for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0),
-							Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1),
-							Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
-							Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2),
-							Vector2i(0, -2)]:
-						if water.has(pos + offset):
-							category = "riparian"
-							break
-				var h := _tile_hash(pos, terrain.seed_value)
-				var spec: Dictionary = DECO_POOLS[category]
-				if h % 1000 >= int(float(spec["density"]) * 1000.0):
-					continue
-				var pool: Array = spec["pool"]
-				_deco_scatter.append({"pos": pos,
-					"variant": pool[(h / 1000) % pool.size()], "h": h})
-	# occupancy pass: a prop lives only on truly empty, unzoned land the
-	# bulldozer hasn't cleared
-	var model: WorldModel = City.model
-	var buckets := {}
-	for entry: Dictionary in _deco_scatter:
-		var pos: Vector2i = entry["pos"]
-		if not model.is_tile_free(pos) or model.zoning.has(pos) \
-				or model.deco_cleared.has(pos):
-			continue
-		var variant: String = entry["variant"]
-		if not buckets.has(variant):
-			buckets[variant] = []
-		var h: int = entry["h"]
-		var jitter := Vector3((h % 41) / 41.0 - 0.5, 0.0,
-			(h % 37) / 37.0 - 0.5) * 0.55
-		var spot := Vector3(pos.x + 0.5, _ground_y(pos), pos.y + 0.5) + jitter
-		buckets[variant].append(Transform3D(
-			Basis(Vector3.UP, TAU * float(h % 97) / 97.0), spot))
+		_deco_scatter = DecoScatter.compute(terrain, WORLD_TILES)
+	var buckets := DecoScatter.placements(_deco_scatter, City.model, _ground_y)
 	for variant: String in DECO_KINDS:
 		var lib: Variant = _deco_lib_entry(variant)
 		var transforms: Array = buckets.get(variant, [])
