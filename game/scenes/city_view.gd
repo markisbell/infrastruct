@@ -729,16 +729,9 @@ func _make_road(pos: Vector2i) -> Node3D:
 	return node  # child mesh set by _orient_road
 
 
+## Piece/orientation decisions live in LineSpecs (Phase-5 extraction).
 func _orient_road(pos: Vector2i, node: Node3D) -> void:
-	var mask := 0
-	var height := City.model.terrain.height(pos)
-	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
-	for i in 4:
-		# roads only join on the same plateau — a step is a wall, not a ramp
-		var n: Vector2i = pos + directions[i]
-		if City.model.roads.has(n) and City.model.terrain.height(n) == height:
-			mask |= 1 << i
-	var pick := _road_piece(mask)  # [model, yaw_deg]
+	var pick := LineSpecs.road_piece(LineSpecs.road_mask(City.model, pos))
 	var wanted: String = "%s|%d" % [pick[0], pick[1]]
 	if node.get_meta("piece", "") == wanted:
 		return
@@ -750,102 +743,34 @@ func _orient_road(pos: Vector2i, node: Node3D) -> void:
 	node.add_child(piece)
 
 
-func _road_piece(mask: int) -> Array:
-	# mask bits: 1=N 2=E 4=S 8=W. Native orientations read off the raw GLBs
-	# with N/E marker posts (--roadtest ..._native.png): straight runs E-W,
-	# end opens W, bend connects N+E, intersection is the E-W bar with the
-	# stem S. Godot +yaw is CCW from above: E→N→W→S→E per 90°.
-	match mask:
-		0: return ["road-end-round", 90]
-		1: return ["road-end", 270]
-		2: return ["road-end", 180]
-		4: return ["road-end", 90]
-		8: return ["road-end", 0]
-		5: return ["road-straight", 90]
-		10: return ["road-straight", 0]
-		3: return ["road-bend", 180]
-		9: return ["road-bend", 270]
-		12: return ["road-bend", 0]
-		6: return ["road-bend", 90]
-		14: return ["road-intersection", 0]
-		7: return ["road-intersection", 90]
-		11: return ["road-intersection", 180]
-		13: return ["road-intersection", 270]
-		_: return ["road-crossroad", 0]
-
-
 func _make_cable(pos: Vector2i) -> Node3D:
 	var node := Node3D.new()
 	node.position = _center(pos)
 	return node  # everything kind-dependent is built by _orient_cable
 
 
-## Is the neighbor tile part of a building that belongs on the grid —
-## power buildings, or any coupled plant (heat pumps, water pumps...)?
-## Single-tap check for heat/water service stubs — pipes tap a building at
-## ONE tile too (PowerTopology.connection_tiles is layer-agnostic).
+## Decisions live in LineSpecs (Phase-5 extraction); the pipe orienters
+## still call these thin delegates until their own extraction pass.
 func _network_taps_here(building_pos: Vector2i, network: String,
 		pipe_pos: Vector2i) -> bool:
-	if not _network_building_at(building_pos, network):
-		return false
-	var id: String = City.model.building_tiles.get(building_pos, "")
-	var layer: Dictionary = City.model.heat_pipes if network == "heat" \
-		else City.model.water_pipes
-	return PowerTopology.connection_tiles(City.model, id, layer,
-		"pumping_station" if network == "water" else "").has(pipe_pos)
+	return LineSpecs.network_taps_here(City.model, building_pos, network,
+		pipe_pos)
 
 
-func _electrical_building_at(pos: Vector2i) -> bool:
-	var id: String = City.model.building_tiles.get(pos, "")
-	if id == "":
-		return false
-	var def := BuildingDefs.get_def(City.model.buildings[id]["kind"])
-	return def.get("network", "") == "power" or def.get("device", "") != ""
-
-
-## Does the building on `building_pos` take its (single) service connection
-## from the cable at `cable_pos`? Grid connections tap everywhere; every
-## other building only at its sorted-first tile (mirrors PowerTopology).
-func _building_taps_here(building_pos: Vector2i, cable_pos: Vector2i) -> bool:
-	if not _electrical_building_at(building_pos):
-		return false
-	var id: String = City.model.building_tiles.get(building_pos, "")
-	return PowerTopology.connection_tiles(City.model, id, City.model.cables) \
-		.has(cable_pos)
-
-
-## Is the neighbor tile part of a building of the given network? (pipe
-## connection stubs — heat plants/exchangers, water sources/stations)
 func _network_building_at(pos: Vector2i, network: String) -> bool:
-	var id: String = City.model.building_tiles.get(pos, "")
-	if id == "":
-		return false
-	return BuildingDefs.get_def(
-		City.model.buildings[id]["kind"]).get("network", "") == network
+	return LineSpecs.network_building_at(City.model, pos, network)
 
 
 func _orient_cable(pos: Vector2i, node: Node3D) -> void:
-	var kind := int(City.model.cables.get(pos, BuildingDefs.LINE_OVERHEAD))
-	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
-	var connections := "%d|" % kind
-	for i in 4:
-		if City.model.cables.has(pos + directions[i]) \
-				and PowerTopology.cable_linked(City.model.cables, pos,
-					pos + directions[i]):
-			# neighbor KIND rides the cache key: an overhead pole becomes a
-			# Kabelendmast when its neighbor turns buried
-			connections += "%d k%d" % [i,
-				int(City.model.cables.get(pos + directions[i], 0))]
-		if _building_taps_here(pos + directions[i], pos):
-			connections += "b%d" % i
-	var wanted := "%s|r%s@%s" % [connections,
-		City.model.roads.has(pos), _terrain_fingerprint]
+	var spec := LineSpecs.cable_spec(City.model, pos)
+	var wanted := LineSpecs.cable_cache_key(spec,
+		City.model.roads.has(pos), _terrain_fingerprint)
 	if node.get_meta("wires", "") == wanted:
 		return
 	node.set_meta("wires", wanted)
 	for child in node.get_children():
 		child.queue_free()
-	if kind == BuildingDefs.LINE_UNDERGROUND:
+	if int(spec["kind"]) == BuildingDefs.LINE_UNDERGROUND:
 		_orient_buried(pos, node, City.model.cables, "power",
 			[Color(0.85, 0.75, 0.35)], true)
 		return
@@ -853,30 +778,25 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 	# Kabelendmast (user request 2026-08-02; researched: Endmast carries
 	# Endverschluesse + Ueberspannungsableiter + Kabelschutzrohr): where
 	# the overhead run hands over to a buried cable, dress the pole
-	for i in 4:
-		var d0 := directions[i]
-		if kind == BuildingDefs.LINE_OVERHEAD \
-				and int(City.model.cables.get(pos + d0, -1)) \
-					== BuildingDefs.LINE_UNDERGROUND \
-				and PowerTopology.cable_linked(City.model.cables, pos, pos + d0):
-			node.add_child(_termination_hardware(Vector3(d0.x, 0, d0.y)))
-			break
-	for i in 4:
-		var d := directions[i]
+	if int(spec["termination"]) >= 0:
+		var toward: Vector2i = LineSpecs.DIRECTIONS[spec["termination"]]
+		node.add_child(_termination_hardware(Vector3(toward.x, 0, toward.y)))
+	for link: Dictionary in spec["links"]:
+		var d: Vector2i = LineSpecs.DIRECTIONS[link["dir"]]
 		var dh := _ground_y(pos + d) - _ground_y(pos)
-		if City.model.cables.has(pos + d) \
-				and PowerTopology.cable_linked(City.model.cables, pos, pos + d):
-			# half-span to the tile edge; slopes across terrain steps.
-			# PARALLEL runs are electrically separate — no cross-wires
-			# (the map must show what the solver sees)
-			node.add_child(_wire_segment(Vector3(0, 0.74, 0),
-				Vector3(d.x * 0.5, 0.74 + dh / 2.0, d.y * 0.5),
-				0.03, Color(0.2, 0.2, 0.22)))
-		elif _building_taps_here(pos + d, pos):
-			# service drop ONLY at the building's single chosen tap tile
-			node.add_child(_wire_segment(Vector3(0, 0.74, 0),
-				Vector3(d.x * 0.5, 0.32 + dh, d.y * 0.5),
-				0.025, Color(0.16, 0.16, 0.18)))
+		# half-span to the tile edge; slopes across terrain steps.
+		# PARALLEL runs are electrically separate — no cross-wires
+		# (the map must show what the solver sees)
+		node.add_child(_wire_segment(Vector3(0, 0.74, 0),
+			Vector3(d.x * 0.5, 0.74 + dh / 2.0, d.y * 0.5),
+			0.03, Color(0.2, 0.2, 0.22)))
+	for tap_dir: int in spec["taps"]:
+		var d: Vector2i = LineSpecs.DIRECTIONS[tap_dir]
+		var dh := _ground_y(pos + d) - _ground_y(pos)
+		# service drop ONLY at the building's single chosen tap tile
+		node.add_child(_wire_segment(Vector3(0, 0.74, 0),
+			Vector3(d.x * 0.5, 0.32 + dh, d.y * 0.5),
+			0.025, Color(0.16, 0.16, 0.18)))
 
 
 ## Shared buried-line renderer (power/heat/water). Open ground: a trench
@@ -887,9 +807,9 @@ func _orient_cable(pos: Vector2i, node: Node3D) -> void:
 ## shared street cross-sections stay readable.
 func _orient_buried(pos: Vector2i, node: Node3D, layer: Dictionary,
 		network: String, markers: Array, tint_loading: bool) -> void:
-	var directions: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+	var spec := LineSpecs.buried_spec(City.model, pos, layer, network)
 	var trench := Color(0.36, 0.33, 0.29)
-	if City.model.roads.has(pos):
+	if spec["on_road"]:
 		var plate_offset := {"power": Vector3.ZERO,
 			"heat": Vector3(0.24, 0, 0.24),
 			"water": Vector3(-0.24, 0, -0.24)}[network] as Vector3
@@ -903,31 +823,22 @@ func _orient_buried(pos: Vector2i, node: Node3D, layer: Dictionary,
 	for i in markers.size():  # marker posts so buried runs stay findable
 		node.add_child(_box(Vector3(0.05, 0.2, 0.05), markers[i],
 			Vector3(0.2, 0.1, 0.2 - 0.14 * i)))
-	for i in 4:
-		var d := directions[i]
-		if layer.has(pos + d) \
-				and PowerTopology.cable_linked(layer, pos, pos + d):
-			var strip := _box(Vector3(0.16 if d.y != 0 else 0.5,
-				0.025, 0.16 if d.x != 0 else 0.5), trench,
-				Vector3(d.x * 0.25, 0.012, d.y * 0.25))
-			if tint_loading:
-				strip.set_meta("wire", true)  # loading overlay tints the trench
-			node.add_child(strip)
-		elif _buried_building_target(pos + d, network) \
-				and (_building_taps_here(pos + d, pos) if network == "power"
-					else _network_taps_here(pos + d, network, pos)):
-			# riser box where the line comes up into the building
-			node.add_child(_box(Vector3(0.4 if d.x != 0 else 0.16, 0.025,
-				0.4 if d.y != 0 else 0.16), trench,
-				Vector3(d.x * 0.3, 0.012, d.y * 0.3)))
-			node.add_child(_box(Vector3(0.12, 0.22, 0.12), Color(0.55, 0.57, 0.6),
-				Vector3(d.x * 0.42, 0.11, d.y * 0.42)))
-
-
-func _buried_building_target(pos: Vector2i, network: String) -> bool:
-	if network == "power":
-		return _electrical_building_at(pos)
-	return _network_building_at(pos, network)
+	for link_dir: int in spec["links"]:
+		var d: Vector2i = LineSpecs.DIRECTIONS[link_dir]
+		var strip := _box(Vector3(0.16 if d.y != 0 else 0.5,
+			0.025, 0.16 if d.x != 0 else 0.5), trench,
+			Vector3(d.x * 0.25, 0.012, d.y * 0.25))
+		if tint_loading:
+			strip.set_meta("wire", true)  # loading overlay tints the trench
+		node.add_child(strip)
+	for riser_dir: int in spec["risers"]:
+		var d: Vector2i = LineSpecs.DIRECTIONS[riser_dir]
+		# riser box where the line comes up into the building
+		node.add_child(_box(Vector3(0.4 if d.x != 0 else 0.16, 0.025,
+			0.4 if d.y != 0 else 0.16), trench,
+			Vector3(d.x * 0.3, 0.012, d.y * 0.3)))
+		node.add_child(_box(Vector3(0.12, 0.22, 0.12), Color(0.55, 0.57, 0.6),
+			Vector3(d.x * 0.42, 0.11, d.y * 0.42)))
 
 
 func _make_pipe(pos: Vector2i) -> Node3D:
