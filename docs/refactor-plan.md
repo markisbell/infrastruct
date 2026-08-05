@@ -209,7 +209,24 @@ capture runs; wind arrows/clouds/rotors/bubbles drift with wall-clock):
 
 city_view.gd lands ~1300 LOC (scene graph, materials, input, camera).
 
-## Phase 6 — hud componentization (~4 days)
+## Phase 6 — hud componentization — DONE 2026-08-05 (logic extractions;
+## panel-shell moves deferred — pure UI assembly, no decision logic)
+
+Landed: game/scenes/hud/inspector_config.gd (per-kind config tables +
+the sampled-house series builder as pure statics over WorldModel/
+WeatherSystem params), CompassRose to its own file,
+Hud.popup_position() static (callout clamping geometry),
+ProfileGraph.y_range() static (padding rules). test_hud_components.gd
+(6 cases): placement clamping (note: bottom clamping cannot trigger for
+on-screen anchors — the panel opens upward), config tables (grid cap
+limit, trafo/soc key conventions), house-series determinism + secondary
+axis, y-range rules, money format, and a palette-table validation sweep
+(fields, known kinds, unique tools/hotkeys). Deferred: BuildPalette/
+SaveSlotUI/ScenarioUI/InspectorPanel shell components + thumbnail
+factory move. Visual gates: inspector panel + palette regions
+pixel-identical (NEW CONFOUND documented: the async palette-thumbnail
+render races the screenshot capture — the row flips between monograms
+and icons run-to-run; compare same-stage captures). GdUnit 202/202.
 
 - `InspectorConfig` static (config tables + house-series builder) +
   table test; `InspectorPanel` component — with a regression test for

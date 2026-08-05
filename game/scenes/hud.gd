@@ -393,109 +393,10 @@ func _inspector_toggled_off(key: String) -> bool:
 	return false
 
 
-## Screen-true compass (user request 2026-08-02): letters are PROJECTED
-## through the live camera (ortho, so any anchor point works), so they stay
-## honest under Q/E rotation and smoothing; the gold dot is the sun's
-## current azimuth — anticipate it when orienting solar parks.
-class CompassRose extends Control:
-	var view: CityView
-
-	func _process(_dt: float) -> void:
-		queue_redraw()
-
-	func _screen_dir(camera: Camera3D, world_dir: Vector3) -> Vector2:
-		var anchor := Vector3(128.0, 0.0, 128.0)
-		return (camera.unproject_position(anchor + world_dir * 8.0)
-			- camera.unproject_position(anchor)).normalized()
-
-	func _draw() -> void:
-		var camera := get_viewport().get_camera_3d()
-		if camera == null or view == null:
-			return
-		var c := size / 2.0
-		var r := minf(c.x, c.y) - 12.0
-		draw_circle(c, r + 11.0, Color(0.08, 0.1, 0.13, 0.72))
-		draw_arc(c, r + 4.0, 0.0, TAU, 48, Color(1.0, 1.0, 1.0, 0.22), 1.0)
-		var font := get_theme_default_font()
-		for entry: Array in [
-				["N", Vector3(0, 0, -1), Color(0.95, 0.45, 0.38)],
-				["E", Vector3(-1, 0, 0), Color(1, 1, 1, 0.85)],
-				["S", Vector3(0, 0, 1), Color(1, 1, 1, 0.85)],
-				["W", Vector3(1, 0, 0), Color(1, 1, 1, 0.85)]]:
-			var a := _screen_dir(camera, entry[1])
-			var letter: String = entry[0]
-			var letter_size := font.get_string_size(letter,
-				HORIZONTAL_ALIGNMENT_CENTER, -1, 12)
-			draw_string(font, c + a * (r - 3.0)
-				- Vector2(letter_size.x / 2.0, -letter_size.y * 0.35),
-				letter, HORIZONTAL_ALIGNMENT_CENTER, -1, 12, entry[2])
-		var sun := view.sun_dir_world()
-		if sun != Vector3.ZERO:
-			var a := _screen_dir(camera, sun)
-			draw_line(c, c + a * (r - 12.0), Color(1.0, 0.85, 0.3, 0.5), 1.5)
-			draw_circle(c + a * (r - 10.0), 4.0, Color(1.0, 0.85, 0.3))
-
-
-## Per-kind graph configuration: which telemetry series, unit, axis title,
-## and dashed limit lines (the rtpowerflow quantities per element type).
+## Config tables live in InspectorConfig (Phase-6 extraction).
 func _inspector_config(kind: String, id: String) -> Dictionary:
-	var kw_series: Array[Dictionary] = [
-		{"key": "dev:" + id, "label": "P", "color": Color(0.95, 0.68, 0.21)}]
-	match kind:
-		"grid_connection":
-			var capacity: float = City.grid_capacity_override \
-				if City.grid_capacity_override > 0.0 \
-				else BuildingDefs.get_def(kind)["capacity_kw"]
-			var limits: Array[Dictionary] = []
-			if capacity <= 1_000.0:  # a 10-MVA line would flatten the curve
-				limits = [{"value": capacity, "label": "%.0f kW cap" % capacity,
-					"color": Color(0.95, 0.3, 0.25)}]
-			return {"title": "Grid connection 110/20 kV", "unit": "kW", "dec": 0,
-				"base_zero": false, "y": "Import / export [kW]", "limits": limits,
-				"series": [{"key": "dev:" + id, "label": "Import",
-					"color": Color(0.95, 0.45, 0.3)}]}
-		"substation":
-			return {"title": "Substation 20/0.4 kV (%.0f kVA)"
-					% float(City.model.building_params(id).get("rating_kva",
-						BuildingDefs.get_def(kind).get("rating_kva", 630.0))),
-				"unit": "%", "dec": 0, "base_zero": true, "y": "Trafo loading [%]",
-				"limits": [{"value": 100.0, "label": "rating",
-					"color": Color(0.95, 0.3, 0.25)}],
-				"series": [{"key": "trafo:" + id, "label": "Loading",
-					"color": Color(0.31, 0.76, 0.97)}]}
-		"gas_plant", "wind_farm", "solar_park":
-			return {"title": kind.capitalize(), "unit": "kW", "dec": 0,
-				"base_zero": true, "y": "P [kW]", "limits": [], "series": kw_series}
-		"chp_plant", "boiler_plant", "heat_pump_plant":
-			return {"title": kind.capitalize(), "unit": "kW", "dec": 0,
-				"base_zero": true, "y": "Q [kW]", "limits": [],
-				"series": [{"key": "dev:" + id, "label": "Q",
-					"color": Color(0.9, 0.35, 0.25)}]}
-		"battery", "heat_storage", "water_tower":
-			return {"title": kind.capitalize(), "unit": "%", "dec": 0,
-				"base_zero": true, "y": "State of charge [%]", "limits": [],
-				"series": [{"key": "soc:" + id, "label": "SoC",
-					"color": Color(0.62, 0.44, 0.86)}]}
-		"heat_exchanger":
-			return {"title": "Heat exchanger", "unit": "°C", "dec": 1,
-				"base_zero": false, "y": "Supply temperature [°C]",
-				"limits": [{"value": 60.0, "label": "min 60 °C",
-					"color": Color(0.35, 0.55, 0.95)}],
-				"series": [{"key": "t:hz_" + id, "label": "T supply",
-					"color": Color(0.95, 0.55, 0.2)}]}
-		"water_station":
-			return {"title": "Water station", "unit": "bar", "dec": 2,
-				"base_zero": false, "y": "Zone pressure [bar]",
-				"limits": [{"value": 2.0, "label": "min 2.0 bar",
-					"color": Color(0.95, 0.3, 0.25)}],
-				"series": [{"key": "pb:wz_" + id, "label": "p",
-					"color": Color(0.25, 0.75, 0.5)}]}
-		"well", "pumping_station":
-			return {"title": kind.capitalize(), "unit": "m³/h", "dec": 1,
-				"base_zero": true, "y": "Flow [m³/h]", "limits": [],
-				"series": [{"key": "q:" + id, "label": "Q",
-					"color": Color(0.25, 0.75, 0.5)}]}
-	return {}
+	return InspectorConfig.config_for(kind, id, City.model,
+		City.grid_capacity_override)
 
 
 ## Line/pipe clicks: power lines carry real per-segment loading (contract
@@ -507,72 +408,9 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 	var anchor := view.tiles_screen_rect([pos])
 	match category:
 		"house":
-			# THE sampled household on this lot (per-house individuality,
-			# user request): its LPG archetype's own curve, its concrete
-			# 22-kW charging block, its rooftop size/orientation, its
-			# heat/water volumes. Real telemetry still only exists per
-			# zone — these are the deterministic samples behind the mix.
-			var profile := DemandModel.house_profile(pos)
-			var day := City.current_t / 96
-			var net: Array[float] = []
-			var net_prev: Array[float] = []
-			var consumption: Array[float] = []
-			var pv: Array[float] = []
-			var heat: Array[float] = []
-			var heat_prev: Array[float] = []
-			var water_l: Array[float] = []
-			var water_l_prev: Array[float] = []
-			for i in 96:
-				var t0 := day * 96 + i
-				var t1 := maxi(day - 1, 0) * 96 + i
-				var base0 := DemandModel.house_base_kw(profile, t0) \
-					+ DemandModel.house_ev_kw(profile, t0)
-				var pv0 := DemandModel.house_pv_kw(profile, t0)
-				consumption.append(base0)
-				pv.append(pv0)
-				net.append(base0 - pv0)
-				net_prev.append(DemandModel.house_base_kw(profile, t1)
-					+ DemandModel.house_ev_kw(profile, t1)
-					- DemandModel.house_pv_kw(profile, t1))
-				# heat (SH physics + LPG DHW shape) and water follow the
-				# seeded weather — yesterday's curves use yesterday's temps
-				heat.append(DemandModel.house_heat_kw(
-					profile, t0, City.weather.temp_c(t0)))
-				heat_prev.append(DemandModel.house_heat_kw(
-					profile, t1, City.weather.temp_c(t1)))
-				water_l.append(1000.0 * DemandModel.house_water_m3h(
-					profile, t0, City.weather.temp_c(t0)))
-				water_l_prev.append(1000.0 * DemandModel.house_water_m3h(
-					profile, t1, City.weather.temp_c(t1)))
-			var zone: String = City.topo.house_zone.get(pos, "")
-			var tags: String = profile["label"]
-			if profile["has_ev"]:
-				tags += " · EV 22 kW"
-			if profile["has_pv"]:
-				tags += " · PV %.1f kWp %s" % [profile["pv_kwp"],
-					DemandModel.PV_ROT_FACING[profile["pv_rot"]]]
-			if zone != "":
-				tags += " · " + zone
-			_show_config({"title": "House (%d, %d)" % [pos.x, pos.y],
-				"unit": "kW", "dec": 2, "base_zero": false,
-				"y": "This household [kW]", "limits": [],
-				"series": [
-					{"label": "Net import", "color": Color(0.95, 0.68, 0.21),
-						"values": net, "values_prev": net_prev},
-					{"label": "Consumption", "color": Color(0.55, 0.65, 0.9),
-						"values": consumption},
-					{"label": "PV infeed", "color": Color(0.4, 0.8, 0.45),
-						"values": pv},
-					{"label": "Heat", "color": Color(0.9, 0.35, 0.25),
-						"values": heat, "values_prev": heat_prev},
-				],
-				"secondary": {"unit": "L/h", "dec": 1, "base_zero": true,
-					"y": "Water [L/h]", "limits": [],
-					"series": [{"label": "Water",
-						"color": Color(0.25, 0.75, 0.5),
-						"values": water_l, "values_prev": water_l_prev}]},
-			}, tags if zone != "" else tags + " · no substation coverage",
-				anchor)
+			var built := InspectorConfig.house_config(pos, City.current_t / 96,
+				City.weather, City.topo.house_zone.get(pos, ""))
+			_show_config(built["config"], built["subtitle"], anchor)
 		"cable":
 			var edge := City.topo.line_id_at(pos)
 			if edge == "":
@@ -675,17 +513,25 @@ func _show_config(config: Dictionary, subtitle: String, anchor: Rect2) -> void:
 		_inspector_graph2.setup(series2, secondary["unit"], secondary["dec"],
 			limits2, secondary["base_zero"], secondary["y"])
 	_inspector.visible = true
-	# pop up at the clicked element's top-right like a callout (user request
-	# 2026-08-04 — the fixed right-edge dock sat far from the element),
-	# clamped on screen; min y clears the status bar
 	_inspector.reset_size()  # shrink back after a taller house panel
-	var panel_size := _inspector.get_combined_minimum_size()
-	var vp := get_viewport().get_visible_rect().size
+	_inspector.position = popup_position(anchor,
+		_inspector.get_combined_minimum_size(),
+		get_viewport().get_visible_rect().size)
+
+
+## Pop up at the clicked element's top-right like a callout (user request
+## 2026-08-04 — the fixed right-edge dock sat far from the element),
+## clamped fully on screen; min y clears the status bar. Static so the
+## clamping geometry is unit-testable.
+static func popup_position(anchor: Rect2, panel_size: Vector2,
+		viewport_size: Vector2) -> Vector2:
 	var panel_pos := Vector2(anchor.end.x + 10.0,
 		anchor.position.y - panel_size.y - 10.0)
-	panel_pos.x = clampf(panel_pos.x, 8.0, maxf(vp.x - panel_size.x - 8.0, 8.0))
-	panel_pos.y = clampf(panel_pos.y, 48.0, maxf(vp.y - panel_size.y - 8.0, 48.0))
-	_inspector.position = panel_pos
+	panel_pos.x = clampf(panel_pos.x, 8.0,
+		maxf(viewport_size.x - panel_size.x - 8.0, 8.0))
+	panel_pos.y = clampf(panel_pos.y, 48.0,
+		maxf(viewport_size.y - panel_size.y - 8.0, 48.0))
+	return panel_pos
 
 
 # ─── save / load (envelope v3): four slots with day/time/house labels ───

@@ -531,7 +531,13 @@ screenshots at identical-run noise floor; KNOWN CONFOUND — the
 substation-tool ghost coverage overlay in --screenshot follows the
 PHYSICAL cursor and moves between runs (wind arrows/clouds/rotors/
 bubbles drift with wall-clock too); model-region crops are the honest
-comparison. GdUnit 196/196. Phase 4 DONE (2026-08-04):
+comparison (the async palette-thumbnail render also races the capture —
+the palette row flips between monograms and icons run-to-run). Phase 6
+DONE 2026-08-05 (logic only; panel-shell moves deferred): InspectorConfig
+tables + house-series builder as statics (game/scenes/hud/), CompassRose
+own file, Hud.popup_position + ProfileGraph.y_range statics,
+test_hud_components (placement clamping, tables, palette validation
+sweep, money format). GdUnit 202/202. Phase 4 DONE (2026-08-04):
 Orchestrator gained bridge_override/health_override/reset_for_test
 seams (in-process fakes bypass wire float coercion — the Python
 contract suite stays the wire authority); FakeCosimBridge +

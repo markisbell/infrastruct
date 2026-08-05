@@ -80,6 +80,24 @@ static func _last_value(samples: Array) -> float:
 	return NAN
 
 
+## y range over both day curves + limits (base_zero anchors at 0 for
+## all-positive data, but negatives are never clipped away). Returns
+## Vector2(y_min, y_max) — static so the padding rules are testable.
+static func y_range(values: Array[float], anchor_zero: bool) -> Vector2:
+	var data_min: float = 0.0 if values.is_empty() else values.min()
+	var y_max: float = 1.0 if values.is_empty() else values.max()
+	var y_min: float = minf(0.0, data_min) if anchor_zero else data_min
+	var pad: float = (y_max - y_min) * 0.08
+	if pad <= 0.0:
+		pad = maxf(absf(y_max) * 0.08, 0.01)
+	y_max += pad
+	if not anchor_zero or y_min < 0.0:
+		y_min -= pad
+	if y_max <= y_min:
+		y_max = y_min + 1.0
+	return Vector2(y_min, y_max)
+
+
 ## Evenly spaced y ticks (five, like rtpowerflow's axisTicks).
 static func _ticks(y_min: float, y_max: float) -> Array[float]:
 	var out: Array[float] = []
@@ -97,8 +115,6 @@ func _draw() -> void:
 	var plot_top := MARGIN_T
 	var plot_bottom := h - MARGIN_B
 
-	# y range over both day curves + limits (base_zero anchors at 0 for
-	# all-positive data, but negatives are never clipped away)
 	var values: Array[float] = []
 	for entry: Dictionary in series:
 		for samples: Array in [_today(entry), _yesterday(entry)]:
@@ -107,17 +123,9 @@ func _draw() -> void:
 					values.append(float(v))
 	for limit: Dictionary in limits:
 		values.append(float(limit["value"]))
-	var data_min: float = 0.0 if values.is_empty() else values.min()
-	var y_max: float = 1.0 if values.is_empty() else values.max()
-	var y_min: float = minf(0.0, data_min) if base_zero else data_min
-	var pad: float = (y_max - y_min) * 0.08
-	if pad <= 0.0:
-		pad = maxf(absf(y_max) * 0.08, 0.01)
-	y_max += pad
-	if not base_zero or y_min < 0.0:
-		y_min -= pad
-	if y_max <= y_min:
-		y_max = y_min + 1.0
+	var range_y := y_range(values, base_zero)
+	var y_min := range_y.x
+	var y_max := range_y.y
 
 	var px := func(frac: float) -> float:
 		return plot_left + frac * (plot_right - plot_left)
