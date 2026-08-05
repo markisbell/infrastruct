@@ -40,79 +40,22 @@ func _relevant(model: WorldModel, id: String) -> bool:
 
 
 func _build(model: WorldModel, tripped: Dictionary) -> void:
-	var pipe := {}
-	for pos: Vector2i in model.heat_pipes:
-		if not tripped.has(pos):
-			pipe[pos] = true
+	var pipe := NetGraph.live_layer(model.heat_pipes, tripped, false)
 
 	# 1. bus tiles: heat-building connection points + junctions. A pipe tile
 	# adjacent to SEVERAL heat buildings serves them ALL (service edges
 	# below) — first-wins orphaned every later neighbor of a shared tile
-	var tile_buildings := {}
-	for id: String in model.buildings:
-		if not _relevant(model, id):
-			continue
-		var entry: Dictionary = model.buildings[id]
-		# single service connection per building (user correction
-		# 2026-08-02) — same rule as power, no multi-tap exception here
-		for n: Vector2i in PowerTopology.connection_tiles(model, id, pipe):
-			if not tile_buildings.has(n):
-				tile_buildings[n] = []
-			if not (tile_buildings[n] as Array).has(id):
-				tile_buildings[n].append(id)
+	# single service connection per building (user correction 2026-08-02)
+	var tile_buildings := NetGraph.tap_map(model, pipe, "heat")
 	var bus_tiles := {}
 	for pos: Vector2i in pipe:
 		if tile_buildings.has(pos):
 			bus_tiles[pos] = tile_buildings[pos][0]
-		elif _degree(pipe, pos) >= 3:
+		elif NetGraph.degree(pipe, pos) >= 3:
 			bus_tiles[pos] = "j:%d,%d" % [pos.x, pos.y]
 
-	# 2. walk pipe runs between bus tiles
-	var raw_pipes: Array[Dictionary] = []
-	var walked := {}
-	for pos: Vector2i in bus_tiles:
-		for offset: Vector2i in NEIGHBORS:
-			var step: Vector2i = pos + offset
-			if not pipe.has(step) or not PowerTopology.cable_linked(pipe, pos, step) \
-					or walked.has("%s>%s" % [pos, step]):
-				continue
-			var path: Array[Vector2i] = [pos]
-			var prev := pos
-			var cur := step
-			var dead_end := false
-			while not bus_tiles.has(cur):
-				path.append(cur)
-				var nxt := Vector2i(99999, 99999)
-				for o2: Vector2i in NEIGHBORS:
-					var cand: Vector2i = cur + o2
-					if cand != prev and pipe.has(cand) \
-							and PowerTopology.cable_linked(pipe, cur, cand):
-						nxt = cand
-						break
-				if nxt.x == 99999:
-					dead_end = true
-					break
-				prev = cur
-				cur = nxt
-			if dead_end:
-				continue
-			path.append(cur)
-			walked["%s>%s" % [pos, step]] = true
-			walked["%s>%s" % [cur, prev]] = true
-			if bus_tiles[pos] != bus_tiles[cur]:
-				raw_pipes.append({"a": bus_tiles[pos], "b": bus_tiles[cur], "path": path})
-	# service edges: every EXTRA building on a shared connection tile joins
-	# the first one over that tile (one-tile stub trunk)
-	var linked := {}
-	for pos: Vector2i in tile_buildings:
-		var ids: Array = tile_buildings[pos]
-		for i in range(1, ids.size()):
-			var pair := "%s|%s" % [ids[0], ids[i]]
-			if linked.has(pair):
-				continue
-			linked[pair] = true
-			var stub: Array[Vector2i] = [pos]
-			raw_pipes.append({"a": ids[0], "b": ids[i], "path": stub})
+	# 2. walk pipe runs between bus tiles + service edges (NetGraph, Phase 7)
+	var raw_pipes := NetGraph.run_edges(pipe, bus_tiles, tile_buildings)
 
 	# 3. reachability from the slack plant
 	var plant_ids: Array[String] = []
@@ -123,20 +66,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	if not has_plant:
 		return
 	var slack_id: String = plant_ids[0]
-	var adjacency := {}
-	for entry: Dictionary in raw_pipes:
-		for pair: Array in [[entry["a"], entry["b"]], [entry["b"], entry["a"]]]:
-			if not adjacency.has(pair[0]):
-				adjacency[pair[0]] = []
-			adjacency[pair[0]].append(pair[1])
-	var reachable := {slack_id: true}
-	var queue: Array = [slack_id]
-	while not queue.is_empty():
-		var key: Variant = queue.pop_back()
-		for neighbor: Variant in adjacency.get(key, []):
-			if not reachable.has(neighbor):
-				reachable[neighbor] = true
-				queue.append(neighbor)
+	var adjacency := NetGraph.adjacency(raw_pipes)
+	var reachable := NetGraph.bfs_from(adjacency, [slack_id])
 	for id: String in model.buildings:
 		if _relevant(model, id):
 			connected[id] = reachable.has(id)
@@ -262,29 +193,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 
 
 func _assign_houses(model: WorldModel) -> void:
-	var radius: int = BuildingDefs.get_def("heat_exchanger")["zone_radius"]
-	for pos: Vector2i in model.houses:
-		var best_zone := ""
-		var best_dist := 999
-		for zone_id: String in zones_info:
-			var info: Dictionary = zones_info[zone_id]
-			var dist: int = absi(pos.x - info["center"].x) + absi(pos.y - info["center"].y)
-			if dist <= radius and dist < best_dist:
-				best_dist = dist
-				best_zone = zone_id
-		if best_zone != "":
-			house_zone[pos] = best_zone
-			zones_info[best_zone]["houses"] += 1
-			zones_info[best_zone]["house_tiles"].append(pos)
-
-
-static func _degree(pipe: Dictionary, pos: Vector2i) -> int:
-	var degree := 0
-	for offset: Vector2i in NEIGHBORS:
-		var n := pos + offset
-		if pipe.has(n) and PowerTopology.cable_linked(pipe, pos, n):
-			degree += 1
-	return degree
+	NetGraph.assign_houses(model, zones_info, house_zone,
+		BuildingDefs.get_def("heat_exchanger")["zone_radius"])
 
 
 static func _junction_pos(key: Variant) -> Vector2i:

@@ -1996,5 +1996,21 @@
   "value": -50.0,
   "slack_id": "slack",
   "min_import_drop": 40.0
- }
+ },
+ "clamp_probe": {
+  "device": "bat1",
+  "p_kw": 99999.0,
+  "bound_kw": 100.0
+ },
+ "coupling_probe": {
+  "device": "cpl_heat",
+  "p_kw": 123.0,
+  "tolerance": 5.0
+ },
+ "soc_probe": {
+  "device": "bat1",
+  "soc": 0.33,
+  "tolerance": 0.25
+ },
+ "require_edges": true
 }

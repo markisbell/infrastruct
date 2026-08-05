@@ -104,77 +104,22 @@ static func build(model: WorldModel, tripped: Dictionary) -> PowerTopology:
 
 func _build(model: WorldModel, tripped: Dictionary) -> void:
 	# live cable set minus tripped tiles (value = line kind)
-	var cable := {}
-	for pos: Vector2i in model.cables:
-		if not tripped.has(pos):
-			cable[pos] = int(model.cables[pos])
+	var cable := NetGraph.live_layer(model.cables, tripped, true)
 
 	# 1. bus tiles: building connection points + junctions. A cable tile
 	# adjacent to SEVERAL buildings serves them ALL — the first id names the
 	# bus, the rest attach through short service edges below (first-wins
 	# used to silently orphan every later neighbor of a shared tile)
-	var tile_buildings := {}  # cable tile -> Array[String] (tapping buildings)
-	for id: String in model.buildings:
-		for n: Vector2i in connection_tiles(model, id, cable):
-			if not tile_buildings.has(n):
-				tile_buildings[n] = []
-			if not (tile_buildings[n] as Array).has(id):
-				tile_buildings[n].append(id)
+	var tile_buildings := NetGraph.tap_map(model, cable, "")
 	var bus_tiles := {}  # tile -> bus key (building id or "j:x,y")
 	for pos: Vector2i in cable:
 		if tile_buildings.has(pos):
 			bus_tiles[pos] = tile_buildings[pos][0]
-		elif _degree(cable, pos) >= 3 or _kind_transition(cable, pos):
+		elif NetGraph.degree(cable, pos) >= 3 or _kind_transition(cable, pos):
 			bus_tiles[pos] = "j:%d,%d" % [pos.x, pos.y]
 
-	# 2. walk lines between bus tiles
-	var raw_lines: Array[Dictionary] = []  # {a: key, b: key, path: Array[Vector2i]}
-	var walked := {}  # "x,y>x,y" directed segment dedupe
-	for pos: Vector2i in bus_tiles:
-		for offset: Vector2i in NEIGHBORS:
-			var step: Vector2i = pos + offset
-			if not cable.has(step) or not cable_linked(cable, pos, step):
-				continue
-			var seg_key := "%s>%s" % [pos, step]
-			if walked.has(seg_key):
-				continue
-			var path: Array[Vector2i] = [pos]
-			var prev := pos
-			var cur := step
-			var dead_end := false
-			while not bus_tiles.has(cur):
-				path.append(cur)
-				var nxt := Vector2i(99999, 99999)
-				for o2: Vector2i in NEIGHBORS:
-					var cand: Vector2i = cur + o2
-					if cand != prev and cable.has(cand) \
-							and cable_linked(cable, cur, cand):
-						nxt = cand
-						break
-				if nxt.x == 99999:
-					dead_end = true
-					break
-				prev = cur
-				cur = nxt
-			if dead_end:
-				continue  # stub cable to nowhere — ignored
-			path.append(cur)
-			walked["%s>%s" % [pos, step]] = true
-			walked["%s>%s" % [cur, prev]] = true
-			if bus_tiles[pos] != bus_tiles[cur]:
-				raw_lines.append({"a": bus_tiles[pos], "b": bus_tiles[cur], "path": path})
-	# service edges: every EXTRA building on a shared connection tile joins
-	# the first one over that tile (one-tile segment, the tile's line kind)
-	var linked := {}
-	for pos: Vector2i in tile_buildings:
-		var ids: Array = tile_buildings[pos]
-		for i in range(1, ids.size()):
-			var pair := "%s|%s" % [ids[0], ids[i]]
-			if linked.has(pair):
-				continue
-			linked[pair] = true
-			var stub: Array[Vector2i] = [pos]
-			raw_lines.append({"a": ids[0], "b": ids[i], "path": stub})
+	# 2. walk lines between bus tiles + service edges (NetGraph, Phase 7)
+	var raw_lines := NetGraph.run_edges(cable, bus_tiles, tile_buildings)
 
 	# 3. reachability from EVERY grid connection: each 110/20 kV station
 	# energizes its own island (parallel ext_grids — the backend maps every
@@ -186,23 +131,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	if not has_slack:
 		warnings.append("no grid connection — network unsolvable, everything unpowered")
 		return
-	var adjacency := {}
-	for line: Dictionary in raw_lines:
-		for pair: Array in [[line["a"], line["b"]], [line["b"], line["a"]]]:
-			if not adjacency.has(pair[0]):
-				adjacency[pair[0]] = []
-			adjacency[pair[0]].append(pair[1])
-	var reachable := {}
-	var queue: Array = []
-	for slack_id: String in slack_ids:
-		reachable[slack_id] = true
-		queue.append(slack_id)
-	while not queue.is_empty():
-		var key: Variant = queue.pop_back()
-		for neighbor: Variant in adjacency.get(key, []):
-			if not reachable.has(neighbor):
-				reachable[neighbor] = true
-				queue.append(neighbor)
+	var adjacency := NetGraph.adjacency(raw_lines)
+	var reachable := NetGraph.bfs_from(adjacency, slack_ids)
 	for id: String in model.buildings:
 		connected[id] = reachable.has(id)
 
@@ -301,29 +231,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 
 
 func _assign_houses(model: WorldModel) -> void:
-	for pos: Vector2i in model.houses:
-		var best_zone := ""
-		var best_dist := 999
-		for zone_id: String in zones_info:
-			var info: Dictionary = zones_info[zone_id]
-			var radius: int = BuildingDefs.get_def("substation")["zone_radius"]
-			var dist: int = absi(pos.x - info["center"].x) + absi(pos.y - info["center"].y)
-			if dist <= radius and dist < best_dist:
-				best_dist = dist
-				best_zone = zone_id
-		if best_zone != "":
-			house_zone[pos] = best_zone
-			zones_info[best_zone]["houses"] += 1
-			zones_info[best_zone]["house_tiles"].append(pos)
-
-
-static func _degree(cable: Dictionary, pos: Vector2i) -> int:
-	var degree := 0
-	for offset: Vector2i in NEIGHBORS:
-		var n := pos + offset
-		if cable.has(n) and cable_linked(cable, pos, n):
-			degree += 1
-	return degree
+	NetGraph.assign_houses(model, zones_info, house_zone,
+		BuildingDefs.get_def("substation")["zone_radius"])
 
 
 ## Overhead-to-underground joints become junction buses so each segment

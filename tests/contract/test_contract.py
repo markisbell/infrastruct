@@ -343,6 +343,15 @@ def test_contract(entry: dict, tmp_path: Path) -> None:
             status, body = _http_json("POST", base + "/gb/step", out_of_order)
             assert status == 409, \
                 f"out-of-order t over HTTP must be 409, got {status}: {body}"
+            # v1.md §4: the rejection names what WOULD be accepted
+            expected_pair = body.get("expected") if isinstance(body, dict) else None
+            if expected_pair is None and isinstance(body, dict) \
+                    and isinstance(body.get("detail"), dict):
+                expected_pair = body["detail"].get("expected")
+            assert (isinstance(expected_pair, list) and len(expected_pair) == 2
+                and [float(v) for v in expected_pair]
+                    == [float(last_req["t"]), float(last_req["t"]) + 1.0]), (
+                f"409 body must carry expected=[last_t, last_t+1]: {body}")
 
             ws.send(json.dumps(out_of_order))
             frame = json.loads(ws.recv())
@@ -399,6 +408,124 @@ def test_contract(entry: dict, tmp_path: Path) -> None:
                     f"only shed {drop:.1f} kW of slack import (need >= "
                     f"{probe_neg['min_import_drop']}) — backend appears to "
                     f"CLAMP signed power demand (v1.md §4 power note)")
+
+            # --- f3+. contract 1.1 probes (fixture-flagged where physics
+            # differ per backend; every step keeps the wire float shape) ----
+            extra_t = float(last_req["t"]) + (1.0 if probe_neg else 0.0)
+
+            clamp = fixture.get("clamp_probe")
+            if clamp:
+                # §4: a setpoint beyond bounds is CLAMPED with a violation,
+                # never an error; the realized output respects the bound
+                extra_t += 1.0
+                req = {"t": extra_t, "dt_s": last_req["dt_s"],
+                       "device_setpoints": {clamp["device"]:
+                           {"p_kw": float(clamp["p_kw"])}}}
+                status, result = _http_json("POST", base + "/gb/step", req)
+                assert status == 200 and result.get("status") in allowed, \
+                    f"clamp step must be data, got {status}: {result}"
+                assert "clamped" in json.dumps(result.get("violations", [])), \
+                    f"expected a 'clamped' violation: {result.get('violations')}"
+                realized = abs(float(
+                    result["devices"][clamp["device"]]["output_kw"]))
+                assert realized <= float(clamp["bound_kw"]) * 1.01, (
+                    f"clamped output {realized} exceeds the "
+                    f"{clamp['bound_kw']} kW bound")
+
+            coupling_probe = fixture.get("coupling_probe")
+            if coupling_probe:
+                # §4: coupling_in lands on the coupling_load device verbatim
+                extra_t += 1.0
+                req = {"t": extra_t, "dt_s": last_req["dt_s"],
+                       "coupling_in": {coupling_probe["device"]:
+                           {"p_kw": float(coupling_probe["p_kw"])}}}
+                status, result = _http_json("POST", base + "/gb/step", req)
+                assert status == 200, f"coupling step -> {status}: {result}"
+                drawn = float(
+                    result["devices"][coupling_probe["device"]]["output_kw"])
+                assert abs(drawn - float(coupling_probe["p_kw"])) \
+                    <= float(coupling_probe["tolerance"]), (
+                    f"coupling_load drew {drawn}, sent "
+                    f"{coupling_probe['p_kw']}")
+
+            # sample-and-hold (§4): a request with NO zone_demand at all is
+            # data — every zone keeps its previous value. The deep VALUE
+            # check is mock-only (hold_probe): a stateful real backend
+            # legitimately moves outputs on held boundaries (storage SoC
+            # bounds drain — observed: the fixture battery emptying shifted
+            # the slack 37 kW with zero new boundary data).
+            prev_result = None
+            hold_probe = fixture.get("hold_probe")
+            if hold_probe:
+                status, prev_result = _http_json(
+                    "GET", base + "/gb/result/latest")
+                assert status == 200
+            extra_t += 1.0
+            status, held = _http_json("POST", base + "/gb/step",
+                                      {"t": extra_t,
+                                       "dt_s": last_req["dt_s"]})
+            assert status == 200, \
+                f"zone-demand-less step must be data, got {status}: {held}"
+            assert held.get("status") in allowed, \
+                f"sample-and-hold step status {held.get('status')!r}"
+            _assert_schema(validator, held, "sample-and-hold result")
+            if hold_probe:
+                held_kw = float(held["devices"][hold_probe["device"]]["output_kw"])
+                prev_kw = float(
+                    prev_result["devices"][hold_probe["device"]]["output_kw"])
+                assert abs(held_kw - prev_kw) <= float(hold_probe["tolerance"]), (
+                    f"held {hold_probe['device']} moved {prev_kw} -> {held_kw} "
+                    f"without new boundary data")
+
+            if fixture.get("require_edges"):
+                # power results must carry solved edges — City's protection
+                # and capacity warnings starve silently without them
+                assert isinstance(last_result.get("edges"), dict) \
+                    and last_result["edges"], \
+                    "power result carries no 'edges' (contract 1.1)"
+
+            if fixture.get("strict_surface"):
+                # negative surface: a malformed topology is a 4xx with detail,
+                # never a crash or a 200
+                status, err = _http_json("POST", base + "/gb/net/reset",
+                                         {"contract": "1.1"})
+                assert 400 <= status < 500, \
+                    f"malformed topology -> {status}: {err}"
+
+            # --- f4. reset clears last_t; the next step may carry ANY t ----
+            # (§3.1 — exactly Orchestrator._recover's resume-at-current-step)
+            status, reset2 = _http_json("POST", base + "/gb/net/reset",
+                                        wire_topology)
+            assert status == 200 and reset2.get("ok") is True, \
+                f"re-reset failed: {status} {reset2}"
+            status, resumed = _http_json(
+                "POST", base + "/gb/step",
+                _floatify({"t": 777, "dt_s": int(last_req["dt_s"])}))
+            assert status == 200 and resumed.get("status") in allowed, \
+                f"post-reset arbitrary t must solve, got {status}: {resumed}"
+            assert float(resumed.get("t", -1)) == 777.0, \
+                f"t echo after reset: {resumed.get('t')}"
+
+            soc_probe = fixture.get("soc_probe")
+            if soc_probe:
+                # §3.1 storage note: reset accepts an optional soc param —
+                # the game replays SoC on every registration
+                soc_topology = json.loads(json.dumps(wire_topology))
+                for device in soc_topology["devices"]:
+                    if device["id"] == soc_probe["device"]:
+                        device.setdefault("params", {})["soc"] = \
+                            float(soc_probe["soc"])
+                status, reset3 = _http_json("POST", base + "/gb/net/reset",
+                                            soc_topology)
+                assert status == 200 and reset3.get("ok") is True
+                status, first = _http_json(
+                    "POST", base + "/gb/step",
+                    _floatify({"t": 0, "dt_s": int(last_req["dt_s"])}))
+                assert status == 200
+                soc = float(first["devices"][soc_probe["device"]]["soc"])
+                assert abs(soc - float(soc_probe["soc"])) \
+                    <= float(soc_probe["tolerance"]), (
+                    f"replayed soc {soc_probe['soc']} came back as {soc}")
 
             # --- g. patch round-trip + tolerant error ----------------------
             probe = fixture["patch_probe"]

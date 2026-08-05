@@ -238,8 +238,13 @@ def _fabricate(req: dict) -> dict:
             total_production += q
 
         elif kind in ("battery", "storage_heat"):
-            # Declared in v1, implemented in Phases 3/4 — idle with a plausible SoC.
-            devices_out[did] = {"output_kw": 0.0, "soc": 0.5, "detail": {}}
+            # Idle storage; the optional `soc` reset param (contract §3.1
+            # storage note — the game replays SoC on every registration) is
+            # echoed so the suite can pin the replay round-trip.
+            held_soc = float(dev.get("params", {}).get("soc", 0.5))
+            devices_out[did] = {"output_kw": 0.0,
+                                "soc": max(0.0, min(1.0, held_soc)),
+                                "detail": {}}
 
     total_demand = sum(state.zone_demand[zid] for zid in state.zones)
     for did in slack_ids:

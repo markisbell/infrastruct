@@ -537,7 +537,20 @@ DONE 2026-08-05 (logic only; panel-shell moves deferred): InspectorConfig
 tables + house-series builder as statics (game/scenes/hud/), CompassRose
 own file, Hud.popup_position + ProfileGraph.y_range statics,
 test_hud_components (placement clamping, tables, palette validation
-sweep, money format). GdUnit 202/202. Phase 4 DONE (2026-08-04):
+sweep, money format). Phase 7 DONE 2026-08-05 — the consolidation ran
+UNDER GOLDEN FILES: test_topology_goldens.gd pins the three builders'
+full output byte-for-byte over fixture cities (committed pre-refactor;
+delete a golden deliberately to re-baseline), then NetGraph
+(game/model/net_graph.gd) absorbed the triplicated walk/tap/BFS/degree/
+assign_houses machinery (builders 361/297/347 -> 271/208/255) and the
+goldens came back byte-identical; + test_water_booster (suction-faces-
+head, bypass warning, head preference) and test_demand_properties
+(seed independence, rot edges, zone-sum conservation). CONTRACT SUITE
+EXPANDED same day: 409 expected-pair, clamp/coupling/SoC-replay/
+sample-and-hold/reset-resume/require_edges/strict-surface probes
+(fixture-flagged; deep hold check is MOCK-ONLY — real storage moves
+outputs on held boundaries as SoC bounds drain). GdUnit 215/215, full
+battery 21/21, contract 4/4. Phase 4 DONE (2026-08-04):
 Orchestrator gained bridge_override/health_override/reset_for_test
 seams (in-process fakes bypass wire float coercion — the Python
 contract suite stays the wire authority); FakeCosimBridge +

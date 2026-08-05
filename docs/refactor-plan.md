@@ -238,7 +238,25 @@ and icons run-to-run; compare same-stage captures). GdUnit 202/202.
 - ProfileGraph: extract y-range/pad math, take telemetry by parameter
   instead of reading City — unit-test the range algorithm.
 
-## Phase 7 — topology consolidation (LAST: highest risk, ~1 wk)
+## Phase 7 — topology consolidation — DONE 2026-08-05
+
+7a: golden topology documents (test_topology_goldens.gd) over two
+fixture cities + a tripped variant — full builder output pinned
+byte-for-byte; committed BEFORE any change. 7b: NetGraph
+(game/model/net_graph.gd) absorbs the verbatim-triplicated machinery
+(live-layer masking, tap maps, the bus-to-bus run walk + service edges,
+BFS with the water booster's two-phase extension, degree, nearest-center
+assign_houses) under an explicit byte-stability contract; builders
+361/297/347 -> 271/208/255 lines keeping only per-network semantics.
+GOLDENS CAME BACK BYTE-IDENTICAL on the first post-rewire run. Plus
+test_water_booster.gd (5: head preference + device order, 4-bar
+pressurized fallback, suction-faces-head, bypassed-ring warning,
+two-tap scoped to water) and test_demand_properties.gd (5: world-seed
+independence, rot normalization, no-north roofs, exact zone-sum
+conservation, pack-less DHW fallback). Verified: GdUnit 215/215, FULL
+battery 21/21 against real solvers, contract suite 4/4.
+
+## Original phase-7 plan (for reference)
 
 - **Safety net first**: golden-file topo docs for 3–4 fixture cities
   captured BEFORE any change; diff after every commit.
@@ -253,7 +271,22 @@ and icons run-to-run; compare same-stage captures). GdUnit 202/202.
   world-seed independence of house sampling, rot normalization
   (negative rot!), pv fleet distribution never N-facing roofs.
 
-## Contract-suite expansion (Python; parallel track, anytime)
+## Contract-suite expansion — LANDED 2026-08-05 (with Phase 7)
+
+Landed: 409 body carries expected=[last_t, last_t+1] (flat, both mock
+and netzsim); clamp probe (violation-as-data + realized <= bound, power);
+coupling_in verbatim onto cpl_heat (power + mock); sample-and-hold step
+with NO zone_demand is data everywhere, deep VALUE check mock-only
+(storage SoC bounds legitimately move real outputs on held boundaries —
+the fixture battery emptying shifted the slack 37 kW); reset clears
+last_t + resume at t=777 (all backends); SoC replay at reset (mock now
+honors the §3.1 param, netzsim tolerance 0.25); require_edges for power
+fixtures; malformed-topology 4xx (mock strict_surface). Mock fixture
+gained bat1 + cpl_heat devices to host the probes. Still open from the
+original list: forced heat degraded tier, game-vs-mock integration run,
+water station-device schema pin (1.2 candidates).
+
+## Original contract-expansion list (for reference)
 
 Pin: signed power demand (post schema fix) · `status: failed` as data
 (HTTP 200, supplied→0) via a forcing fixture · forced heat `degraded`

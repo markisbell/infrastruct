@@ -13,7 +13,9 @@
     ],
     "devices": [
       {"id": "slack", "kind": "slack", "node": "b0", "params": {"vm_pu": 1.0}},
-      {"id": "gen1", "kind": "generator", "node": "b1", "params": {"p_max_kw": 500}}
+      {"id": "gen1", "kind": "generator", "node": "b1", "params": {"p_max_kw": 500}},
+      {"id": "bat1", "kind": "battery", "node": "b2", "params": {"e_kwh": 1000, "p_max_kw": 400}},
+      {"id": "cpl_heat", "kind": "coupling_load", "node": "b1", "params": {}}
     ]
   },
   "script": {
@@ -46,5 +48,10 @@
     "node": "b2",
     "params": {"p_max_kw": 50}
   },
-  "signed_demand_probe": {"zone": "z0", "value": -50.0, "slack_id": "slack", "min_import_drop": 150.0}
+  "signed_demand_probe": {"zone": "z0", "value": -50.0, "slack_id": "slack", "min_import_drop": 150.0},
+  "hold_probe": {"device": "slack", "tolerance": 0.001},
+  "coupling_probe": {"device": "cpl_heat", "p_kw": 123.0, "tolerance": 0.001},
+  "soc_probe": {"device": "bat1", "soc": 0.33, "tolerance": 0.001},
+  "require_edges": true,
+  "strict_surface": true
 }
