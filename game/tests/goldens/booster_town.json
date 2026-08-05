@@ -1,0 +1,282 @@
+{
+	"heat": {
+		"doc": {},
+		"warnings": [],
+		"zones_info": {}
+	},
+	"power": {
+		"connected": {},
+		"doc": {},
+		"has_slack": false,
+		"house_zone": {},
+		"line_tiles": {},
+		"trafo_subs": {},
+		"warnings": [
+			"no grid connection — network unsolvable, everything unpowered"
+		],
+		"zones_info": {}
+	},
+	"water": {
+		"doc": {
+			"contract": "1.0",
+			"devices": [
+				{
+					"id": "water_tower_1",
+					"kind": "water_tower",
+					"node": "wn_water_tower_1",
+					"params": {
+						"tower_height_m": 25.0,
+						"volume_m3": 200.0
+					}
+				},
+				{
+					"id": "pumping_station_2",
+					"kind": "water_pump",
+					"node": "wn_pumping_station_2",
+					"params": {
+						"eta": 0.6,
+						"head_m": 45.0,
+						"rated_m3_h": 20.0,
+						"station": "st_pumping_station_2"
+					}
+				}
+			],
+			"name": "city_water",
+			"native": {
+				"consumers": {
+					"consumers": [
+						{
+							"kind": "residential",
+							"mdot_kg_per_s": 0.01,
+							"name": "wz_water_station_3",
+							"node": "wn_water_station_3"
+						}
+					]
+				},
+				"environment": {
+					"resolution_minutes": 15,
+					"steps": 96,
+					"t_air_c": [
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0,
+						10.0
+					]
+				},
+				"network_structure": {
+					"junctions": [
+						{
+							"elevation_m": 325.0,
+							"geo": [
+								48.0004,
+								8.0004
+							],
+							"kind": "source",
+							"name": "wn_water_tower_1",
+							"pn_bar": 4.0
+						},
+						{
+							"elevation_m": 300.0,
+							"geo": [
+								48.0004,
+								8.0024
+							],
+							"kind": "node",
+							"name": "wn_pumping_station_2",
+							"pn_bar": 4.0
+						},
+						{
+							"elevation_m": 300.0,
+							"geo": [
+								48.0004,
+								8.0036
+							],
+							"kind": "node",
+							"name": "wn_pumping_station_2#dis",
+							"pn_bar": 4.0
+						},
+						{
+							"elevation_m": 300.0,
+							"geo": [
+								48.0004,
+								8.006
+							],
+							"kind": "consumer",
+							"name": "wn_water_station_3",
+							"pn_bar": 4.0
+						}
+					],
+					"name": "city_water"
+				},
+				"pipes": {
+					"pipes": [
+						{
+							"from_node": "wn_water_tower_1",
+							"inner_diameter_mm": 150.0,
+							"k_mm": 0.1,
+							"length_km": 0.125,
+							"to_node": "wn_pumping_station_2"
+						},
+						{
+							"from_node": "wn_pumping_station_2#dis",
+							"inner_diameter_mm": 150.0,
+							"k_mm": 0.1,
+							"length_km": 0.15,
+							"to_node": "wn_water_station_3"
+						}
+					]
+				},
+				"supply": {
+					"stations": [
+						{
+							"control": {
+								"mode": "manual",
+								"running": true
+							},
+							"curve": [
+								[
+									0.0,
+									2.0
+								],
+								[
+									20.0,
+									1.2
+								],
+								[
+									40.0,
+									0.05
+								]
+							],
+							"from_node": "wn_pumping_station_2",
+							"name": "st_pumping_station_2",
+							"to_node": "wn_pumping_station_2#dis"
+						}
+					],
+					"supplies": [
+						{
+							"kind": "ext_grid",
+							"name": "head",
+							"node": "wn_water_tower_1",
+							"p_bar": 0.5
+						}
+					]
+				}
+			},
+			"network_kind": "water",
+			"steps_per_day": 96,
+			"zones": [
+				{
+					"consumer": "wz_water_station_3",
+					"id": "wz_water_station_3"
+				}
+			]
+		},
+		"warnings": [],
+		"zones_info": {
+			"wz_water_station_3": {
+				"center": "(15, 1)",
+				"house_tiles": [
+					"(10, 4)",
+					"(11, 4)",
+					"(12, 4)",
+					"(13, 4)",
+					"(14, 4)"
+				],
+				"houses": 5,
+				"sub": "water_station_3"
+			}
+		}
+	}
+}
