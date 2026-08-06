@@ -29,6 +29,9 @@ const TOOL_KEYS := {
 	KEY_N: CityView.Tool.WELL,
 	KEY_P: CityView.Tool.PUMP,
 	KEY_O: CityView.Tool.WATER_TOWER,
+	KEY_X: CityView.Tool.ZONE_COMMERCIAL,
+	KEY_D: CityView.Tool.CHARGING,
+	KEY_Z: CityView.Tool.SUBSTATION_XL,
 }
 
 var view: CityView
@@ -410,6 +413,12 @@ func _open_tile_inspector(category: String, pos: Vector2i) -> void:
 		return
 	var anchor := view.tiles_screen_rect([pos])
 	match category:
+		"commercial":
+			var built := InspectorConfig.commercial_config(pos,
+				int(City.model.commercial.get(pos, 1)), City.current_t / 96,
+				City.weather)
+			_show_config(built["config"], built["subtitle"], anchor)
+			return
 		"house":
 			var built := InspectorConfig.house_config(pos, City.current_t / 96,
 				City.weather, City.topo.house_zone.get(pos, ""))

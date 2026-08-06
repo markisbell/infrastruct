@@ -41,6 +41,15 @@ const DEFS := {
 		"size": Vector2i(1, 1), "cost": 45_000, "device": "storage_heat", "network": "heat",
 		"params": {"e_kwh": 500.0, "p_max_kw": 100.0}, "color": Color(0.75, 0.55, 0.3),
 	},
+	"charging_park": {
+		# DC fast-charging hub (highway service area / urban hub): eight
+		# 175-kW CCS stalls behind its OWN MV connection — the spiky
+		# multi-car coincidence is a ZONE of its own in the solver doc
+		# (PowerTopology "cp_<id>"), not a device; income per delivered kWh
+		"size": Vector2i(2, 2), "cost": 95_000, "device": "", "network": "power",
+		"params": {"stalls": 8, "stall_kw": 175.0},
+		"color": Color(0.2, 0.75, 0.85),
+	},
 	"grid_connection": {
 		# the 110/20 kV interface to the transmission grid — 20 MVA (user
 		# correction). Cost is gameplay-priced, not utility-priced.
@@ -101,6 +110,7 @@ const LINE_OVERHEAD := 1     # pole-and-wire Freileitung — cheap, visible
 const LINE_UNDERGROUND := 2  # buried cable — pricier, out of sight
 
 const COSTS := {"road": 40, "overhead_line": 120, "cable": 320, "zone": 10,
+	"zone_commercial": 25,
 	"heat_pipe": 350, "heat_pipe_buried": 600,
 	"water_pipe": 180, "water_pipe_buried": 400}
 
@@ -109,6 +119,7 @@ const COSTS := {"road": 40, "overhead_line": 120, "cable": 320, "zone": 10,
 ## positive margins and growth widens them).
 const UPKEEP_DAY := {
 	"substation": 5.0, "heat_exchanger": 6.0, "water_station": 5.0,
+	"charging_park": 25.0,
 	"boiler_plant": 30.0, "chp_plant": 50.0, "heat_pump_plant": 25.0,
 	"heat_storage": 8.0, "grid_connection": 20.0, "gas_plant": 40.0,
 	"wind_farm": 12.0, "solar_park": 15.0, "battery": 12.0,

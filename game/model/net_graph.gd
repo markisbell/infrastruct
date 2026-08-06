@@ -149,6 +149,8 @@ static func assign_houses(model: WorldModel, zones_info: Dictionary,
 		var best_dist := 999
 		for zone_id: String in zones_info:
 			var info: Dictionary = zones_info[zone_id]
+			if info.has("charging"):
+				continue  # a charging park's MV zone hosts no lots
 			var dist: int = absi(pos.x - info["center"].x) \
 				+ absi(pos.y - info["center"].y)
 			if dist <= radius and dist < best_dist:
@@ -158,3 +160,27 @@ static func assign_houses(model: WorldModel, zones_info: Dictionary,
 			house_zone[pos] = best_zone
 			zones_info[best_zone]["houses"] += 1
 			zones_info[best_zone]["house_tiles"].append(pos)
+
+
+## Commercial lots join the nearest zone center like houses (commercial
+## pass 2026-08-06) — but the commercial_tiles key is only ADDED where
+## lots exist, so towns without commercial paint keep their zones_info
+## byte-identical (the goldens pin it).
+static func assign_commercial(model: WorldModel, zones_info: Dictionary,
+		radius: int) -> void:
+	for pos: Vector2i in model.commercial:
+		var best_zone := ""
+		var best_dist := 999
+		for zone_id: String in zones_info:
+			var info: Dictionary = zones_info[zone_id]
+			if info.has("charging"):
+				continue
+			var dist: int = absi(pos.x - info["center"].x) \
+				+ absi(pos.y - info["center"].y)
+			if dist <= radius and dist < best_dist:
+				best_dist = dist
+				best_zone = zone_id
+		if best_zone != "":
+			if not zones_info[best_zone].has("commercial_tiles"):
+				zones_info[best_zone]["commercial_tiles"] = []
+			(zones_info[best_zone]["commercial_tiles"] as Array).append(pos)

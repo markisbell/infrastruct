@@ -78,6 +78,14 @@ pump's power draw) from one solver into the next step of the other.
   day's shape is: overcast skies visibly dim rooftop and park dispatch alike.
   Sunny noon exports; the battery peak-shaves against its own moving average;
   gas covers the residual.
+- **Commercial customers.** Paint commercial zones and industry moves in on
+  its own — but only where the substation has headroom, which is what the
+  1000-kVA station is for. Three breeds with real signatures: mechanical
+  production (electricity-hungry, two shifts), food production (process
+  heat that doesn't care about July, serious water), and malls (retail
+  hours, Sunday closing). Charging parks put eight 175-kW fast chargers
+  behind one MV connection — genuinely spiky megawatt load that bills
+  every delivered kWh.
 - **Power islands.** A district with no grid connection stays alive if it has
   a grid-forming source — a battery inverter or a gas plant; wind and solar
   alone are grid-following and stay dark. The former becomes that island's

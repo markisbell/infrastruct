@@ -37,7 +37,10 @@ const STD_TYPES := {
 ## Substation trafo element fields from its kVA rating: pandapower catalog
 ## std types down to 0.25 MVA; BELOW that, explicit physical parameters
 ## (typical distribution-trafo values) — the scenario/smoke hook for
-## deliberately undersized village stations.
+## deliberately undersized village stations. ABOVE the 0.63 catalog top
+## (the 1000-kVA industrial station, commercial pass 2026-08-06) the
+## catalog carries no 20/0.4 type — explicit typical 1-MVA oil-trafo
+## parameters (vk 6 %, the DIN low-loss class).
 static func trafo_fields(rating_kva: float) -> Dictionary:
 	if rating_kva < 250.0:
 		return {"sn_mva": rating_kva / 1000.0, "vn_hv_kv": MV_KV, "vn_lv_kv": 0.4,
@@ -46,7 +49,10 @@ static func trafo_fields(rating_kva: float) -> Dictionary:
 		return {"std_type": "0.25 MVA 20/0.4 kV"}
 	if rating_kva <= 400.0:
 		return {"std_type": "0.4 MVA 20/0.4 kV"}
-	return {"std_type": "0.63 MVA 20/0.4 kV"}
+	if rating_kva <= 630.0:
+		return {"std_type": "0.63 MVA 20/0.4 kV"}
+	return {"sn_mva": rating_kva / 1000.0, "vn_hv_kv": MV_KV, "vn_lv_kv": 0.4,
+		"vk_percent": 6.0, "vkr_percent": 1.05, "pfe_kw": 1.1, "i0_percent": 0.19}
 
 var doc := {}                    # contract topology document ({} if no slack)
 var line_tiles := {}             # "L<idx>" -> Array[Vector2i] (path incl. endpoints)
@@ -206,6 +212,23 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		if isl != "":
 			zones_info[zone_id]["island"] = isl
 			(islands[isl]["zones"] as Array).append(zone_id)
+	# CHARGING PARKS (commercial pass 2026-08-06): each connected park is
+	# its OWN MV zone — eight 175-kW stalls behind one connection, a
+	# megawatt-class spiky load the boundary feeds per session
+	# (DemandModel.charging_park_kw). Inside an island the EMS sheds it
+	# like any zone.
+	for park_id: String in model.buildings_of_kind("charging_park"):
+		if not connected.get(park_id, false):
+			continue
+		var cp_zone := "cp_" + park_id
+		zones.append({"id": cp_zone, "node": _bus_name(park_id)})
+		zones_info[cp_zone] = {"sub": park_id, "houses": 0,
+			"bus": _bus_name(park_id), "house_tiles": [], "connected": true,
+			"charging": true, "center": model.buildings[park_id]["anchor"]}
+		var park_isl: String = island_of.get(park_id, "")
+		if park_isl != "":
+			zones_info[cp_zone]["island"] = park_isl
+			(islands[park_isl]["zones"] as Array).append(cp_zone)
 	_assign_houses(model)
 
 	var devices: Array[Dictionary] = []
@@ -307,6 +330,8 @@ func _detect_islands(model: WorldModel, adjacency: Dictionary,
 
 func _assign_houses(model: WorldModel) -> void:
 	NetGraph.assign_houses(model, zones_info, house_zone,
+		BuildingDefs.get_def("substation")["zone_radius"])
+	NetGraph.assign_commercial(model, zones_info,
 		BuildingDefs.get_def("substation")["zone_radius"])
 
 

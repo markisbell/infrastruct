@@ -59,6 +59,7 @@ static func make(kind: String) -> Node3D:
 		"well": return _make_well()
 		"pumping_station": return _make_pumping_station()
 		"water_tower": return _make_water_tower()
+		"charging_park": return _make_charging_park()
 	return null
 
 
@@ -830,3 +831,25 @@ static func _make_grid_connection() -> Node3D:
 	node.add_child(box(Vector3(0.36, 0.04, 0.32), Color(0.5, 0.22, 0.2),
 		Vector3(-0.6, 0.28, -0.55)))
 	return node
+
+
+## DC fast-charging hub (commercial pass 2026-08-06): a white canopy on
+## slim columns over two stall rows — the highway service-area look —
+## with a battery-buffer cabinet at the back.
+static func _make_charging_park() -> Node3D:
+	var park := Node3D.new()
+	park.add_child(box(Vector3(1.8, 0.04, 1.6), Color(0.32, 0.33, 0.36),
+		Vector3(0.5, 0.02, 0.5)))          # asphalt pad (2x2 footprint)
+	park.add_child(box(Vector3(1.7, 0.06, 0.7), Color(0.95, 0.95, 0.97),
+		Vector3(0.5, 0.62, 0.5)))          # the canopy
+	for i in 4:
+		park.add_child(box(Vector3(0.07, 0.6, 0.07), Color(0.75, 0.76, 0.8),
+			Vector3(-0.2 + 0.47 * i, 0.3, 0.5)))
+	for i in 4:                            # stall dispensers, both rows
+		park.add_child(box(Vector3(0.12, 0.3, 0.1), Color(0.2, 0.75, 0.85),
+			Vector3(-0.1 + 0.4 * i, 0.15, 0.24)))
+		park.add_child(box(Vector3(0.12, 0.3, 0.1), Color(0.2, 0.75, 0.85),
+			Vector3(-0.1 + 0.4 * i, 0.15, 0.76)))
+	park.add_child(box(Vector3(0.5, 0.42, 0.3), Color(0.85, 0.87, 0.9),
+		Vector3(1.15, 0.21, 1.15)))        # buffer/trafo cabinet
+	return park

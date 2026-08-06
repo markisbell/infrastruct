@@ -10,7 +10,7 @@ extends Node3D
 enum Tool { NONE, ROAD, ZONE, CABLE, SUBSTATION, GAS, WIND, SOLAR, BATTERY, GRID,
 	BULLDOZE, PIPE, HEAT_SUB, BOILER, CHP, HEATPUMP, HEATSTORE,
 	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER, UCABLE, REPAIR,
-	BURIED_PIPE, BURIED_WATER }
+	BURIED_PIPE, BURIED_WATER, ZONE_COMMERCIAL, CHARGING, SUBSTATION_XL }
 
 const TOOL_BUILDING := {
 	Tool.SUBSTATION: "substation", Tool.GAS: "gas_plant", Tool.WIND: "wind_farm",
@@ -20,6 +20,7 @@ const TOOL_BUILDING := {
 	Tool.HEATSTORE: "heat_storage",
 	Tool.WATER_SUB: "water_station", Tool.WELL: "well",
 	Tool.PUMP: "pumping_station", Tool.WATER_TOWER: "water_tower",
+	Tool.CHARGING: "charging_park",
 }
 
 const KENNEY := "res://assets/kenney/"
@@ -66,6 +67,7 @@ var _ghost_disc: MeshInstance3D
 ## release to build — red from the first blockage on (user-specified UX)
 const PATH_TOOL_BUILD := {
 	Tool.ROAD: "road", Tool.ZONE: "zone",
+	Tool.ZONE_COMMERCIAL: "zone_commercial",
 	Tool.CABLE: "cable_overhead", Tool.UCABLE: "cable_buried",
 	Tool.PIPE: "heat", Tool.BURIED_PIPE: "heat_buried",
 	Tool.WATER_PIPE: "water", Tool.BURIED_WATER: "water_buried",
@@ -73,6 +75,7 @@ const PATH_TOOL_BUILD := {
 ## ghost tint per path tool (the element's own color language, faded)
 const PATH_TOOL_COLOR := {
 	Tool.ROAD: Color(0.45, 0.45, 0.5), Tool.ZONE: Color(0.45, 0.8, 0.4),
+	Tool.ZONE_COMMERCIAL: Color(0.45, 0.55, 0.9),
 	Tool.CABLE: Color(0.45, 0.36, 0.28), Tool.UCABLE: Color(0.36, 0.33, 0.29),
 	Tool.PIPE: PIPE_SUPPLY_COLOR, Tool.BURIED_PIPE: Color(0.36, 0.33, 0.29),
 	Tool.WATER_PIPE: WATER_PIPE_COLOR, Tool.BURIED_WATER: Color(0.36, 0.33, 0.29),
@@ -97,6 +100,7 @@ var _pipes := {}
 var _water_pipes := {}
 var _zones := {}
 var _houses := {}
+var _commercial := {}
 var _buildings := {}
 var _rings := {}          # zone/slack overlay rings
 var _cursor: MeshInstance3D
@@ -485,15 +489,21 @@ func redraw() -> void:
 	_diff(_pipes, model.heat_pipes, _make_pipe)
 	_diff(_water_pipes, model.water_pipes, _make_water_pipe)
 	_diff(_houses, model.houses, _make_house)
+	_diff(_commercial, model.commercial, _make_commercial)
 	_diff(_buildings, model.buildings, _make_building)
 	# zoned lots that cannot take a house right now (no same-height road,
 	# a line across, paved over) glow amber instead of green — cliff-locked
 	# zoning used to stall growth with no visible reason (_flat caches the
 	# two materials, so this pass only swaps references)
 	for pos: Vector2i in _zones:
-		var dead: bool = not model.houses.has(pos) and not model.lot_buildable(pos)
+		var zone_kind: int = int(model.zoning.get(pos, WorldModel.ZONE_RESIDENTIAL))
+		var occupied: bool = model.houses.has(pos) or model.commercial.has(pos)
+		var dead: bool = not occupied and not model.lot_buildable(pos, zone_kind)
+		var live_color := Color(0.45, 0.8, 0.4, 0.10) \
+			if zone_kind == WorldModel.ZONE_RESIDENTIAL \
+			else Color(0.45, 0.55, 0.9, 0.12)
 		(_zones[pos] as MeshInstance3D).material_override = _flat(
-			Color(0.95, 0.55, 0.12, 0.22) if dead else Color(0.45, 0.8, 0.4, 0.10), true)
+			Color(0.95, 0.55, 0.12, 0.22) if dead else live_color, true)
 	# neighbor-dependent pieces refresh in place. When City hands us the
 	# tiles it touched, re-orient only those + neighbors — the full pass is
 	# O(city) per placed tile and stalled drags ~36 ms on a modest town.
@@ -572,7 +582,7 @@ func _rebuild_terrain() -> void:
 	# heights moved under everything: flush all layers so _diff recreates
 	# them at the new ground levels (matters after loading a save)
 	for layer: Dictionary in [_roads, _cables, _pipes, _water_pipes, _zones,
-			_houses, _buildings, _rings, _range_discs]:
+			_houses, _commercial, _buildings, _rings, _range_discs]:
 		for key: Variant in layer:
 			if is_instance_valid(layer[key]):
 				layer[key].queue_free()
@@ -940,6 +950,46 @@ func _orient_surface_pipe(pos: Vector2i, node: Node3D, layer: Dictionary,
 	else:
 		node.add_child(_box(Vector3(0.17, 0.17, 0.17), WATER_PIPE_COLOR,
 			Vector3(0, PIPE_HEIGHT, 0)))
+
+
+## One commercial lot's building (commercial pass 2026-08-06): three
+## unmistakable silhouettes — the grey sawtooth hall (general
+## production), the hall with the food plant's silo + stack, the glassy
+## mall block. Procedural like the plant models; scale fits one lot.
+func _make_commercial(pos: Vector2i) -> Node3D:
+	var lot := Node3D.new()
+	var ctype: int = int(City.model.commercial.get(pos, 1))
+	match ctype:
+		WorldModel.COMMERCIAL_FOOD:
+			lot.add_child(BuildingModels.box(Vector3(0.8, 0.3, 0.62),
+				Color(0.82, 0.8, 0.74), Vector3(-0.03, 0.15, 0.0)))
+			var silo := MeshInstance3D.new()
+			var silo_mesh := CylinderMesh.new()
+			silo_mesh.top_radius = 0.11
+			silo_mesh.bottom_radius = 0.11
+			silo_mesh.height = 0.62
+			silo.mesh = silo_mesh
+			silo.position = Vector3(0.34, 0.31, 0.22)
+			silo.material_override = BuildingModels.flat(Color(0.88, 0.88, 0.9))
+			lot.add_child(silo)
+			lot.add_child(BuildingModels.box(Vector3(0.05, 0.5, 0.05),
+				Color(0.75, 0.3, 0.25), Vector3(0.3, 0.42, -0.22)))
+		WorldModel.COMMERCIAL_MALL:
+			lot.add_child(BuildingModels.box(Vector3(0.86, 0.34, 0.7),
+				Color(0.45, 0.62, 0.78), Vector3(0.0, 0.17, 0.0)))
+			lot.add_child(BuildingModels.box(Vector3(0.88, 0.05, 0.72),
+				Color(0.92, 0.9, 0.85), Vector3(0.0, 0.37, 0.0)))
+			lot.add_child(BuildingModels.box(Vector3(0.3, 0.1, 0.06),
+				Color(0.95, 0.75, 0.2), Vector3(0.0, 0.2, 0.36)))
+		_:
+			lot.add_child(BuildingModels.box(Vector3(0.84, 0.28, 0.66),
+				Color(0.62, 0.64, 0.68), Vector3(0.0, 0.14, 0.0)))
+			for i in 3:
+				lot.add_child(BuildingModels.box(Vector3(0.84, 0.09, 0.14),
+					Color(0.5, 0.52, 0.58),
+					Vector3(0.0, 0.32, -0.2 + 0.22 * i)))
+	lot.position = _center(pos)
+	return lot
 
 
 func _make_house(pos: Vector2i) -> Node3D:
@@ -1512,6 +1562,8 @@ func _apply_tool(pos: Vector2i) -> void:
 			var id: String = City.model.building_tiles.get(pos, "")
 			if id != "":
 				building_clicked.emit(id)
+			elif City.model.commercial.has(pos):
+				tile_infra_clicked.emit("commercial", pos)
 			elif City.model.houses.has(pos):
 				tile_infra_clicked.emit("house", pos)
 			elif City.model.cables.has(pos):
@@ -1544,6 +1596,9 @@ func _apply_tool(pos: Vector2i) -> void:
 			City.build_water_pipe(pos, BuildingDefs.LINE_UNDERGROUND)
 		Tool.BULLDOZE:
 			City.bulldoze(pos)
+		Tool.SUBSTATION_XL:
+			City.place_substation_xl(pos, _ghost_rot, _ghost_flip)
+			_painting = false
 		_:
 			if TOOL_BUILDING.has(tool):
 				City.place_building(TOOL_BUILDING[tool], pos, _ghost_rot, {}, _ghost_flip)

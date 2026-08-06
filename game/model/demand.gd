@@ -32,6 +32,7 @@ static func reset_caches() -> void:
 	weather = null
 	_pv_order.clear()
 	_profile_cache = {}
+	_commercial_cache = {}
 	_pack = {}
 	_pack_state = 0
 
@@ -385,3 +386,177 @@ const WATER_HOURLY_V1: Array[float] = [
 	1.30, 1.10, 0.95, 0.95, 1.05, 1.30,
 	1.60, 1.75, 1.45, 1.05, 0.70, 0.45,
 ]
+
+
+# ─── COMMERCIAL/INDUSTRIAL consumers (commercial pass 2026-08-06, user
+# feature): three lot types on commercial paint. The user's demand matrix:
+#   1 general production (mechanical): HIGH elec, low heat, low water
+#   2 food production: HIGH heat even in summer (PROCESS heat, not
+#     weather), HIGH water, medium elec
+#   3 mall/retail: HIGH elec + water, medium heat (mostly space)
+# Draws = design kW x shift shape (day-kind aware: two-shift production,
+# retail opening hours, German Sunday closing) x a deterministic per-lot
+# scale sample. Heat splits process (season-blind, follows the shift)
+# from space (temperature-coupled); water follows the shift. ───
+
+const COMMERCIAL_SPECS := {
+	1: {"label": "General production", "elec_kw": 220.0, "heat_kw": 30.0,
+		"water_m3h": 0.4, "process_frac": 0.3, "weekend": [0.35, 0.15]},
+	2: {"label": "Food production", "elec_kw": 110.0, "heat_kw": 160.0,
+		"water_m3h": 3.0, "process_frac": 0.9, "weekend": [0.85, 0.7]},
+	3: {"label": "Mall", "elec_kw": 170.0, "heat_kw": 70.0,
+		"water_m3h": 2.0, "process_frac": 0.15, "weekend": [1.15, 0.15]},
+}
+
+static var _commercial_cache := {}
+
+
+## Deterministic per-lot business sample (individuality parity with
+## house_profile): a size scale — the type itself lives in
+## WorldModel.commercial (chosen at spawn).
+static func commercial_profile(pos: Vector2i) -> Dictionary:
+	if not _commercial_cache.has(pos):
+		var rng := RandomNumberGenerator.new()
+		rng.seed = int(pos.x) * 83492791 + int(pos.y) * 52859
+		_commercial_cache[pos] = {"scale": 0.75 + 0.5 * rng.randf()}
+	return _commercial_cache[pos]
+
+
+## Shift shape 0..~1.1 by lot type and day kind. Production runs two
+## shifts (06-22) with a night standby; the mall keeps retail hours with
+## an after-work peak and the German Sunday closing (weekend multipliers
+## per spec — food production runs seven days).
+static func commercial_shift(ctype: int, t: int) -> float:
+	var spec: Dictionary = COMMERCIAL_SPECS.get(ctype, COMMERCIAL_SPECS[1])
+	var h := float(t % STEPS_PER_DAY) / 4.0
+	var shape: float
+	if ctype == 3:  # retail hours
+		if h < 8.0 or h >= 21.0:
+			shape = 0.1
+		elif h < 10.0:
+			shape = 0.1 + 0.9 * (h - 8.0) / 2.0
+		elif h < 16.0:
+			shape = 1.0
+		elif h < 19.0:
+			shape = 1.1  # after-work peak
+		else:
+			shape = 1.1 - (h - 19.0) / 2.0
+	else:  # two-shift production
+		if h < 5.0 or h >= 23.0:
+			shape = 0.15
+		elif h < 6.0:
+			shape = 0.15 + 0.85 * (h - 5.0)
+		elif h < 14.0:
+			shape = 1.0
+		elif h < 22.0:
+			shape = 0.85
+		else:
+			shape = 0.85 - 0.7 * (h - 22.0)
+	var kind := day_kind(t)
+	if kind == "saturday":
+		shape *= float(spec["weekend"][0])
+	elif kind == "sunday":
+		shape *= float(spec["weekend"][1])
+	return shape
+
+
+static func commercial_kw(ctype: int, pos: Vector2i, t: int) -> float:
+	var spec: Dictionary = COMMERCIAL_SPECS.get(ctype, COMMERCIAL_SPECS[1])
+	return float(spec["elec_kw"]) * commercial_shift(ctype, t) \
+		* float(commercial_profile(pos)["scale"])
+
+
+## Process heat follows the shift year-round (a dairy steams in July);
+## the space share follows the outdoor temperature like homes do.
+static func commercial_heat_kw(ctype: int, pos: Vector2i, t: int,
+		temp_c: float) -> float:
+	var spec: Dictionary = COMMERCIAL_SPECS.get(ctype, COMMERCIAL_SPECS[1])
+	var process := float(spec["process_frac"])
+	var space_factor := clampf((16.0 - temp_c) / 30.0, 0.0, 1.0)
+	return float(spec["heat_kw"]) \
+		* (process * commercial_shift(ctype, t)
+			+ (1.0 - process) * space_factor) \
+		* float(commercial_profile(pos)["scale"])
+
+
+static func commercial_water_m3h(ctype: int, pos: Vector2i, t: int) -> float:
+	var spec: Dictionary = COMMERCIAL_SPECS.get(ctype, COMMERCIAL_SPECS[1])
+	return float(spec["water_m3h"]) * commercial_shift(ctype, t) \
+		* float(commercial_profile(pos)["scale"])
+
+
+## The growth gate's expectation: a lot's worst-case electric draw.
+static func commercial_peak_kw(ctype: int) -> float:
+	var spec: Dictionary = COMMERCIAL_SPECS.get(ctype, COMMERCIAL_SPECS[1])
+	return float(spec["elec_kw"]) * 1.25 * 1.1  # max scale x sat-peak shape
+
+
+## Zone sums (physics tier): the boundary sees the actual sampled lots.
+static func commercial_sum_kw(tiles: Array, types: Dictionary, t: int) -> float:
+	var total := 0.0
+	for pos: Vector2i in tiles:
+		total += commercial_kw(int(types.get(pos, 1)), pos, t)
+	return total
+
+
+static func commercial_heat_sum_kw(tiles: Array, types: Dictionary, t: int,
+		temp_c: float) -> float:
+	var total := 0.0
+	for pos: Vector2i in tiles:
+		total += commercial_heat_kw(int(types.get(pos, 1)), pos, t, temp_c)
+	return total
+
+
+static func commercial_water_sum_m3h(tiles: Array, types: Dictionary,
+		t: int) -> float:
+	var total := 0.0
+	for pos: Vector2i in tiles:
+		total += commercial_water_m3h(int(types.get(pos, 1)), pos, t)
+	return total
+
+
+# ─── CHARGING PARK (commercial pass): a DC fast-charging hub — eight
+# 175-kW stalls behind one MV connection. Occupancy follows a traveler/
+# commuter day curve; each stall books deterministic 30-min sessions
+# (hash-seeded per stall+window) at a tapered CC/CV power draw. The sum
+# is genuinely SPIKY — exactly what a megawatt-class charging site does
+# to a distribution grid. ───
+
+const CHARGE_SESSION_STEPS := 2  # one session bucket = 30 min
+
+
+## Stall-occupancy probability by hour: commuter shoulders + a broad
+## travel day, Sunday-return evening bump, thin nights.
+static func charge_occupancy(t: int) -> float:
+	var h := float(t % STEPS_PER_DAY) / 4.0
+	var base: float
+	if h < 6.0:
+		base = 0.05
+	elif h < 9.0:
+		base = 0.05 + (h - 6.0) / 3.0 * 0.45
+	elif h < 19.0:
+		base = 0.5 + 0.15 * sin((h - 9.0) / 10.0 * PI)
+	elif h < 23.0:
+		base = 0.5 - (h - 19.0) / 4.0 * 0.4
+	else:
+		base = 0.1
+	if day_kind(t) == "sunday" and h >= 15.0 and h < 21.0:
+		base = minf(base + 0.2, 0.9)  # the Sunday-evening return wave
+	return base
+
+
+## Solved-boundary demand of one park at t: per-stall session decisions,
+## deterministic per (park id, stall, 30-min window).
+static func charging_park_kw(id: String, t: int, stalls: int,
+		stall_kw: float) -> float:
+	var occupancy := charge_occupancy(t)
+	var window := t / CHARGE_SESSION_STEPS
+	var total := 0.0
+	for stall in stalls:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = id.hash() * 40503 + stall * 2654435761 + window * 97
+		if rng.randf() < occupancy:
+			# tapered draw: not every car sustains the full 175 kW — the
+			# CC/CV mix lands sessions between 55 and 100 % of the stall
+			total += stall_kw * (0.55 + 0.45 * rng.randf())
+	return total

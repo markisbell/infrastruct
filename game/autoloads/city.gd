@@ -248,10 +248,12 @@ func build_road(pos: Vector2i) -> bool:
 		and model.set_road(pos) and _after_build(false)
 
 
-func build_zone(pos: Vector2i) -> bool:
+func build_zone(pos: Vector2i, kind: int = WorldModel.ZONE_RESIDENTIAL) -> bool:
 	dirty_tiles[pos] = true
-	return model.can_set_zone(pos) and _paid(BuildingDefs.COSTS["zone"]) \
-		and model.set_zone(pos) and _after_build(false)
+	var cost_key := "zone" if kind == WorldModel.ZONE_RESIDENTIAL \
+		else "zone_commercial"
+	return model.can_set_zone(pos) and _paid(BuildingDefs.COSTS[cost_key]) \
+		and model.set_zone(pos, kind) and _after_build(false)
 
 
 ## kind: LINE_OVERHEAD (default — poles and wires) or LINE_UNDERGROUND
@@ -302,6 +304,7 @@ func place_building(kind: String, anchor: Vector2i, rot: int = 0,
 const PATH_BUILDS := {
 	"road": {"cost": "road"},
 	"zone": {"cost": "zone"},
+	"zone_commercial": {"cost": "zone_commercial"},
 	"cable_overhead": {"cost": "overhead_line", "kind": BuildingDefs.LINE_OVERHEAD},
 	"cable_buried": {"cost": "cable", "kind": BuildingDefs.LINE_UNDERGROUND},
 	"heat": {"cost": "heat_pipe", "kind": BuildingDefs.LINE_OVERHEAD},
@@ -364,6 +367,8 @@ func build_path(build: String, tiles: Array[Vector2i]) -> int:
 				ok = build_road(tiles[i])
 			"zone":
 				ok = build_zone(tiles[i])
+			"zone_commercial":
+				ok = build_zone(tiles[i], WorldModel.ZONE_COMMERCIAL)
 			"cable_overhead", "cable_buried":
 				ok = build_cable(tiles[i], spec["kind"])
 			"heat", "heat_buried":
@@ -385,7 +390,7 @@ func _path_duplicate(build: String, pos: Vector2i) -> bool:
 	match build:
 		"road":
 			return model.roads.has(pos)
-		"zone":
+		"zone", "zone_commercial":
 			return model.zoning.has(pos)
 		"cable_overhead", "cable_buried":
 			return int(model.cables.get(pos, -1)) == int(spec["kind"])
@@ -401,7 +406,7 @@ func _path_can_set(build: String, pos: Vector2i) -> bool:
 	match build:
 		"road":
 			return model.can_set_road(pos)
-		"zone":
+		"zone", "zone_commercial":
 			return model.can_set_zone(pos)
 		"cable_overhead", "cable_buried":
 			return model.can_set_cable(pos, spec["kind"])
@@ -453,6 +458,9 @@ func bulldoze(pos: Vector2i) -> bool:
 	if model.water_pipes.has(pos):
 		model.remove_water_pipe(pos)
 		return _after_build(true)
+	if model.commercial.has(pos):
+		model.remove_commercial(pos)
+		return _after_build(false)
 	if model.houses.has(pos):
 		model.remove_house(pos)
 		return _after_build(false)
@@ -485,6 +493,25 @@ func _paid(cost: int) -> bool:
 ## drag stall the stress smoke measured at ~36 ms/tile on a 47-house town).
 var dirty_tiles := {}
 var _batching := false
+
+
+## The 1000-kVA industrial Ortsnetzstation (commercial pass 2026-08-06):
+## the SAME substation kind with a rating override — every zone/trafo
+## mechanism applies unchanged — at the bigger station's price.
+const SUBSTATION_XL_COST := 26_000
+const SUBSTATION_XL_KVA := 1000.0
+
+
+func place_substation_xl(anchor: Vector2i, rot: int = 0,
+		flip: bool = false) -> String:
+	if not model.can_place_building("substation", anchor) \
+			or not _paid(SUBSTATION_XL_COST):
+		return ""
+	var id := model.place_building("substation", anchor, rot,
+		{"rating_kva": SUBSTATION_XL_KVA}, flip)
+	if id != "":
+		_after_build(true)
+	return id
 
 
 func _after_build(topology_relevant: bool) -> bool:
@@ -628,7 +655,10 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 		var temp := float(weather.sample(t)["temp_c"])
 		for zone_id: String in heat_topo.zones_info:
 			out[zone_id] = {"value": snappedf(DemandModel.heat_zone_sum_kw(
-				heat_topo.zones_info[zone_id]["house_tiles"], t, temp), 0.1)}
+				heat_topo.zones_info[zone_id]["house_tiles"], t, temp)
+				+ DemandModel.commercial_heat_sum_kw(
+					heat_topo.zones_info[zone_id].get("commercial_tiles", []),
+					model.commercial, t, temp), 0.1)}
 		return out
 	if network == "water":
 		var temp_w := float(weather.sample(t)["temp_c"])
@@ -637,6 +667,9 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 			# the network solves the sag, PDD weakens the neighbors
 			out[zone_id] = {"value": snappedf(DemandModel.water_zone_sum_m3h(
 				water_topo.zones_info[zone_id]["house_tiles"], t, temp_w)
+				+ DemandModel.commercial_water_sum_m3h(
+					water_topo.zones_info[zone_id].get("commercial_tiles", []),
+					model.commercial, t)
 				+ event_system.extra_water_demand_m3h(zone_id, t), 0.001)}
 		return out
 	for zone_id: String in topo.zones_info:
@@ -652,9 +685,27 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 				str(topo.zones_info[zone_id].get("island", "")), zone_id):
 			out[zone_id] = {"value": 0.0}
 			continue
-		out[zone_id] = {"value": DemandModel.zone_sum_kw(
-			topo.zones_info[zone_id]["house_tiles"], t)}
+		out[zone_id] = {"value": _zone_power_kw(zone_id, t)}
 	return out
+
+
+## One power zone's boundary draw: sampled households + commercial lots
+## (physics tier), or a charging park's per-session sum (commercial pass
+## 2026-08-06) — get_zone_demand, the dispatch total and the island EMS
+## all read the same number.
+func _zone_power_kw(zone_id: String, t: int) -> float:
+	var info: Dictionary = topo.zones_info[zone_id]
+	if info.has("charging"):
+		var park_id: String = info["sub"]
+		if event_system.is_down(park_id, t):
+			return 0.0
+		var park_params := model.building_params(park_id)
+		return DemandModel.charging_park_kw(park_id, t,
+			int(park_params.get("stalls", 8)),
+			float(park_params.get("stall_kw", 175.0)))
+	return DemandModel.zone_sum_kw(info["house_tiles"], t) \
+		+ DemandModel.commercial_sum_kw(info.get("commercial_tiles", []),
+			model.commercial, t)
 
 
 func get_device_setpoints(network: String, t: int) -> Dictionary:
@@ -671,7 +722,7 @@ func get_device_setpoints(network: String, t: int) -> Dictionary:
 				or tripped_substations.has(topo.zones_info[zone_id]["sub"]) \
 				or str(topo.zones_info[zone_id].get("island", "")) != "":
 			continue
-		total_demand += DemandModel.zone_sum_kw(topo.zones_info[zone_id]["house_tiles"], t)
+		total_demand += _zone_power_kw(zone_id, t)
 	var out := {}
 	var renewable := 0.0
 	var n_batteries := 0
@@ -760,7 +811,10 @@ func _heat_setpoints(t: int) -> Dictionary:
 	var total_demand := 0.0
 	for zone_id: String in heat_topo.zones_info:
 		total_demand += DemandModel.heat_zone_sum_kw(
-			heat_topo.zones_info[zone_id]["house_tiles"], t, temp)
+			heat_topo.zones_info[zone_id]["house_tiles"], t, temp) \
+			+ DemandModel.commercial_heat_sum_kw(
+				heat_topo.zones_info[zone_id].get("commercial_tiles", []),
+				model.commercial, t, temp)
 	for device: Dictionary in heat_topo.doc.get("devices", []):
 		var def_kind: String = device["kind"]
 		var down := event_system.is_down(device["id"], t)
@@ -921,12 +975,21 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 	# economy: delivered kWh earn the tariff; the slack settles wholesale;
 	# the gas plant burns fuel for what it actually produced
 	var income := 0.0
+	var charging_income := 0.0
 	for zone_id: String in topo.zones_info:
-		if zone_supplied.get(zone_id, false):
-			income += EconomyBooks.delivered_elec_eur(DemandModel.zone_sum_kw(
-				topo.zones_info[zone_id]["house_tiles"], t))
+		if not zone_supplied.get(zone_id, false):
+			continue
+		if topo.zones_info[zone_id].has("charging"):
+			# delivered charging kWh at the charging tariff (the energy was
+			# bought via the slack settlement — the spread is the margin)
+			charging_income += EconomyBooks.charging_eur(
+				_zone_power_kw(zone_id, t))
+		else:
+			income += EconomyBooks.delivered_elec_eur(_zone_power_kw(zone_id, t))
 	if income > 0.0:
 		_econ_apply("income_elec", income)
+	if charging_income > 0.0:
+		_econ_apply("income_charging", charging_income)
 	for slack_id: String in model.buildings_of_kind("grid_connection"):
 		var import_kw := float(result.get("devices", {})
 			.get(slack_id, {}).get("output_kw", 0.0))
@@ -945,8 +1008,7 @@ func _on_step_completed(network: String, t: int, result: Dictionary) -> void:
 		if not zone_result.is_empty():
 			_telemetry_put("v:" + zone_id, t,
 				_num_or(zone_result.get("detail", {}).get("v_pu"), NAN))
-		_telemetry_put("d:" + zone_id, t, DemandModel.zone_sum_kw(
-			topo.zones_info[zone_id]["house_tiles"], t))
+		_telemetry_put("d:" + zone_id, t, _zone_power_kw(zone_id, t))
 	# district trafo loading comes SOLVED from the contract T-edges
 	for edge_id: String in topo.trafo_subs:
 		var entry: Dictionary = result.get("edges", {}).get(edge_id, {})
@@ -988,8 +1050,7 @@ func _update_islands(t: int, result: Dictionary) -> void:
 		var params := model.building_params(former)
 		var zone_kw := {}
 		for zone_id: String in island["zones"]:
-			zone_kw[zone_id] = DemandModel.zone_sum_kw(
-				topo.zones_info[zone_id]["house_tiles"], t)
+			zone_kw[zone_id] = _zone_power_kw(zone_id, t)
 		var renew := 0.0
 		var gas_max := 0.0
 		for dev_id: String in island["devices"]:
@@ -1119,7 +1180,10 @@ func _on_heat_step(t: int, result: Dictionary) -> void:
 	for zone_id: String in heat_topo.zones_info:
 		if heat_zone_supplied.get(zone_id, false):
 			income += EconomyBooks.heat_income_eur(DemandModel.heat_zone_sum_kw(
-				heat_topo.zones_info[zone_id]["house_tiles"], t, temp))
+				heat_topo.zones_info[zone_id]["house_tiles"], t, temp)
+				+ DemandModel.commercial_heat_sum_kw(
+					heat_topo.zones_info[zone_id].get("commercial_tiles", []),
+					model.commercial, t, temp))
 	if income > 0.0:
 		_econ_apply("income_heat", income)
 	for kind: String in ["boiler_plant", "chp_plant"]:
@@ -1217,7 +1281,10 @@ func _on_water_step(t: int, result: Dictionary) -> void:
 		if result.get("status", "failed") == "failed":
 			fraction = 0.0
 		income += EconomyBooks.water_income_eur(DemandModel.water_zone_sum_m3h(
-			water_topo.zones_info[zone_id]["house_tiles"], t, temp_w), fraction)
+			water_topo.zones_info[zone_id]["house_tiles"], t, temp_w)
+			+ DemandModel.commercial_water_sum_m3h(
+				water_topo.zones_info[zone_id].get("commercial_tiles", []),
+				model.commercial, t), fraction)
 	if income > 0.0:
 		_econ_apply("income_water", income)
 	state_changed.emit()
@@ -1443,8 +1510,15 @@ func _grow(t: int) -> void:
 		return
 	var capacity: int = BuildingDefs.get_def("substation")["house_capacity"]
 	var radius: int = BuildingDefs.get_def("substation")["zone_radius"]
+	# commercial growth (commercial pass 2026-08-06): slower than housing
+	# and headroom-gated — industry only comes where the substation can
+	# actually carry it (what the 1000-kVA station is for)
+	if t % maxi(interval * 4, 1) == 0 and _try_spawn_commercial(radius):
+		return
 	for zone_id: String in topo.zones_info:
 		var info: Dictionary = topo.zones_info[zone_id]
+		if info.has("charging"):
+			continue  # a park's MV zone hosts no lots
 		if not zone_supplied.get(zone_id, false) or info["houses"] >= capacity:
 			continue
 		# try candidates in order and trust spawn_house's verdict — a stale
@@ -1454,6 +1528,38 @@ func _grow(t: int) -> void:
 				_refresh_topo_assignment()
 				world_changed.emit()
 				return  # one house per growth tick, city-wide
+
+
+## One commercial lot per attempt, city-wide: the candidate joins the
+## zone only if the substation's rating still covers the expected peak —
+## existing houses (~1.8 kW each, the station-sizing figure), the lots
+## already there, and the newcomer's own design draw. The type is a
+## deterministic hash of the lot (general/food/mall).
+func _try_spawn_commercial(radius: int) -> bool:
+	for zone_id: String in topo.zones_info:
+		var info: Dictionary = topo.zones_info[zone_id]
+		if info.has("charging") or not zone_supplied.get(zone_id, false):
+			continue
+		var rating := float(model.building_params(info["sub"])
+			.get("rating_kva", BuildingDefs.get_def("substation")
+				.get("rating_kva", 630.0)))
+		var expected := float(info["houses"]) * 1.8
+		for pos: Vector2i in info.get("commercial_tiles", []):
+			expected += DemandModel.commercial_peak_kw(
+				int(model.commercial.get(pos, 1)))
+		for pos: Vector2i in model.spawn_candidates(info["center"], radius,
+				WorldModel.ZONE_COMMERCIAL):
+			var ctype: int = 1 + absi(int(pos.x) * 31 + int(pos.y) * 17) % 3
+			if expected + DemandModel.commercial_peak_kw(ctype) > 0.9 * rating:
+				continue  # not enough power from this substation
+			if model.spawn_commercial(pos, ctype):
+				_refresh_topo_assignment()
+				log_event("commercial", "info",
+					"%s opened — the substation can carry it" % str(
+					DemandModel.COMMERCIAL_SPECS[ctype]["label"]))
+				world_changed.emit()
+				return true
+	return false
 
 
 func _supply_margin_ok() -> bool:

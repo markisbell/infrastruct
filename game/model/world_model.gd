@@ -7,12 +7,22 @@ extends RefCounted
 
 const SCHEMA_VERSION := 5
 
+## Zone paint kinds + auto-spawned commercial lot types (commercial pass
+## 2026-08-06): industry grows on COMMERCIAL paint, gated by substation
+## headroom (City owns the gate; DemandModel owns the per-type draws).
+const ZONE_RESIDENTIAL := 1
+const ZONE_COMMERCIAL := 2
+const COMMERCIAL_GENERAL := 1  # mechanical production: high elec, low heat/water
+const COMMERCIAL_FOOD := 2     # food production: high heat (process!) + water
+const COMMERCIAL_MALL := 3     # retail: high elec + water, medium heat
+
 var terrain := Terrain.new()         # per-tile heights (v5; seed 0 = flat)
 var cables: Dictionary = {}          # Vector2i -> int (kind; 1 = LV cable)
 var heat_pipes: Dictionary = {}      # Vector2i -> int (kind; 1 = DH pipe pair, v3)
 var water_pipes: Dictionary = {}     # Vector2i -> int (kind; 1 = water main, v4)
 var roads: Dictionary = {}           # Vector2i -> true
-var zoning: Dictionary = {}          # Vector2i -> int (1 = residential)
+var zoning: Dictionary = {}          # Vector2i -> int (ZONE_* kind)
+var commercial: Dictionary = {}      # Vector2i -> int (COMMERCIAL_* type; auto-spawned)
 var houses: Dictionary = {}          # Vector2i -> {"level": int}
 var buildings: Dictionary = {}       # id (String) -> {"kind": String, "anchor": Vector2i}
 ## Tiles the bulldozer cleared of environment props (trees/stones are
@@ -178,8 +188,11 @@ func remove_zone(pos: Vector2i) -> void:
 ## Lines may legally cross ZONED land, but a house must never grow on top
 ## of one (playtest-monkey finding); road access needs the same terrain
 ## height (no driveway up a cliff — a mismatch stalled a real town).
-func lot_buildable(pos: Vector2i) -> bool:
-	return zoning.has(pos) and not houses.has(pos) and not roads.has(pos) \
+## `kind` (commercial pass 2026-08-06): a lot only takes what its PAINT
+## allows — houses on residential, industry on commercial.
+func lot_buildable(pos: Vector2i, kind: int = ZONE_RESIDENTIAL) -> bool:
+	return zoning.get(pos, 0) == kind and not houses.has(pos) \
+		and not commercial.has(pos) and not roads.has(pos) \
 		and not cables.has(pos) and not heat_pipes.has(pos) \
 		and not water_pipes.has(pos) and _adjacent_to_road(pos)
 
@@ -193,6 +206,20 @@ func spawn_house(pos: Vector2i) -> bool:
 
 func remove_house(pos: Vector2i) -> void:
 	houses.erase(pos)
+
+
+## A commercial lot hosts ONE business of a COMMERCIAL_* type (spawned by
+## growth like houses, but on commercial paint and gated by the zone
+## substation's headroom — City owns that gate).
+func spawn_commercial(pos: Vector2i, ctype: int) -> bool:
+	if not lot_buildable(pos, ZONE_COMMERCIAL):
+		return false
+	commercial[pos] = ctype
+	return true
+
+
+func remove_commercial(pos: Vector2i) -> void:
+	commercial.erase(pos)
 
 
 func place_building(kind: String, anchor: Vector2i, rot: int = 0,
@@ -247,12 +274,13 @@ func _adjacent_to_road(pos: Vector2i) -> bool:
 
 ## Free zoned tiles adjacent to a road within `radius` of `center` — house
 ## spawn candidates (growth + zoning tools).
-func spawn_candidates(center: Vector2i, radius: int) -> Array[Vector2i]:
+func spawn_candidates(center: Vector2i, radius: int,
+		kind: int = ZONE_RESIDENTIAL) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	for pos: Vector2i in zoning:
 		if absi(pos.x - center.x) + absi(pos.y - center.y) > radius:
 			continue
-		if lot_buildable(pos):
+		if lot_buildable(pos, kind):
 			out.append(pos)
 	out.sort()  # deterministic order for seeded growth
 	return out
@@ -296,6 +324,11 @@ func check_invariants() -> Array[String]:
 	for pos: Vector2i in houses:
 		if not zoning.has(pos):
 			problems.append("house without zoning at %s" % pos)
+	for pos: Vector2i in commercial:
+		if zoning.get(pos, 0) != ZONE_COMMERCIAL:
+			problems.append("commercial lot without commercial zoning at %s" % pos)
+		if houses.has(pos):
+			problems.append("commercial lot on a house at %s" % pos)
 	for pos: Vector2i in zoning:
 		if terrain.is_water(pos):
 			problems.append("zone on water at %s" % pos)
@@ -319,6 +352,7 @@ func to_json() -> String:
 		"roads": _dict_to_keys(roads),
 		"zoning": _dict_to_keys(zoning),
 		"houses": _dict_to_keys(houses),
+		"commercial": _dict_to_keys(commercial),  # additive (old saves lack it)
 		"buildings": _buildings_out(),
 		"deco_cleared": _dict_to_keys(deco_cleared),  # additive (old saves lack it)
 		"next_building_id": next_building_id,
@@ -341,6 +375,7 @@ static func from_json(text: String) -> WorldModel:
 	model.roads = _keys_to_dict(dict.get("roads", {}), TYPE_BOOL)
 	model.zoning = _keys_to_dict(dict.get("zoning", {}), TYPE_INT)
 	model.houses = _keys_to_dict(dict.get("houses", {}), TYPE_DICTIONARY)
+	model.commercial = _keys_to_dict(dict.get("commercial", {}), TYPE_INT)
 	model.deco_cleared = _keys_to_dict(dict.get("deco_cleared", {}), TYPE_BOOL)
 	model.next_building_id = int(dict.get("next_building_id", 1))
 	for id: String in dict.get("buildings", {}):

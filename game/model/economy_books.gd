@@ -8,6 +8,7 @@ extends RefCounted
 ## --smoke=economy, commit the regenerated CSV with it.
 
 const TARIFF_ELEC_KWH := 0.35     # income per kWh actually delivered
+const TARIFF_CHARGE_KWH := 0.38   # DC fast charging per kWh (commercial pass)
 const TARIFF_HEAT_KWH := 0.16
 const TARIFF_WATER_M3 := 3.0
 const BASE_FEE_HOUSE_DAY := 0.4   # Grundgebühr per connected household
@@ -99,6 +100,13 @@ func reset() -> void:
 ## rooftop-PV zone exports (negative net load) and nothing is sold.
 static func delivered_elec_eur(net_kw: float) -> float:
 	return maxf(0.0, net_kw) * STEP_H * TARIFF_ELEC_KWH
+
+
+## A charging park bills every delivered kWh at the charging tariff; the
+## energy itself was bought via the slack settlement below — the spread
+## is the site operator's margin (commercial pass 2026-08-06).
+static func charging_eur(kw: float) -> float:
+	return maxf(0.0, kw) * STEP_H * TARIFF_CHARGE_KWH
 
 
 ## The slack settles wholesale: positive import buys, negative sells.

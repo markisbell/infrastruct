@@ -67,6 +67,15 @@ static func config_for(kind: String, id: String, model: WorldModel,
 				"base_zero": true, "y": "State of charge [%]", "limits": [],
 				"series": [{"key": "soc:" + id, "label": "SoC",
 					"color": Color(0.62, 0.44, 0.86)}]}
+		"charging_park":
+			var stalls := int(model.building_params(id).get("stalls", 8))
+			var stall_kw := float(model.building_params(id).get("stall_kw", 175.0))
+			return {"title": "Charging park (%d x %.0f kW)" % [stalls, stall_kw],
+				"unit": "kW", "dec": 0, "base_zero": true, "y": "Site load [kW]",
+				"limits": [{"value": stalls * stall_kw, "label": "all stalls",
+					"color": Color(0.95, 0.3, 0.25)}],
+				"series": [{"key": "d:cp_" + id, "label": "Load",
+					"color": Color(0.2, 0.75, 0.85)}]}
 		"heat_exchanger":
 			return {"title": "Heat exchanger", "unit": "°C", "dec": 1,
 				"base_zero": false, "y": "Supply temperature [°C]",
@@ -160,3 +169,42 @@ static func house_config(pos: Vector2i, day: int, weather: WeatherSystem,
 				"values": water_l, "values_prev": water_l_prev}]},
 		},
 		"subtitle": tags if zone != "" else tags + " · no substation coverage"}
+
+
+## One commercial lot's panel (commercial pass 2026-08-06): the sampled
+## business's three curves — electricity, heat (process + space split is
+## visible in summer: a food plant still steams), water on the secondary
+## axis. Deterministic like the house panel; no per-lot telemetry exists.
+static func commercial_config(pos: Vector2i, ctype: int, day: int,
+		weather: WeatherSystem) -> Dictionary:
+	var spec: Dictionary = DemandModel.COMMERCIAL_SPECS.get(ctype,
+		DemandModel.COMMERCIAL_SPECS[1])
+	var elec: Array[float] = []
+	var elec_prev: Array[float] = []
+	var heat: Array[float] = []
+	var water_m3: Array[float] = []
+	for i in 96:
+		var t0 := day * 96 + i
+		var t1 := maxi(day - 1, 0) * 96 + i
+		elec.append(DemandModel.commercial_kw(ctype, pos, t0))
+		elec_prev.append(DemandModel.commercial_kw(ctype, pos, t1))
+		heat.append(DemandModel.commercial_heat_kw(ctype, pos, t0,
+			weather.temp_c(t0)))
+		water_m3.append(DemandModel.commercial_water_m3h(ctype, pos, t0))
+	var scale := float(DemandModel.commercial_profile(pos)["scale"])
+	return {"config": {"title": str(spec["label"]),
+		"unit": "kW", "dec": 1, "base_zero": true,
+		"y": "This business [kW]", "limits": [],
+		"series": [
+			{"label": "Electricity", "color": Color(0.95, 0.68, 0.21),
+				"values": elec, "values_prev": elec_prev},
+			{"label": "Heat", "color": Color(0.9, 0.35, 0.25),
+				"values": heat},
+		],
+		"secondary": {"unit": "m3/h", "dec": 2, "base_zero": true,
+			"y": "Water [m3/h]", "limits": [],
+			"series": [{"label": "Water", "color": Color(0.25, 0.75, 0.5),
+				"values": water_m3}]},
+		},
+		"subtitle": "%s x%.2f · (%d, %d)" % [str(spec["label"]), scale,
+			pos.x, pos.y]}

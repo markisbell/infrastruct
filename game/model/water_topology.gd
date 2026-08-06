@@ -242,6 +242,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 func _assign_houses(model: WorldModel) -> void:
 	NetGraph.assign_houses(model, zones_info, house_zone,
 		BuildingDefs.get_def("water_station")["zone_radius"])
+	NetGraph.assign_commercial(model, zones_info,
+		BuildingDefs.get_def("water_station")["zone_radius"])
 
 
 static func _junction_pos(key: Variant) -> Vector2i:

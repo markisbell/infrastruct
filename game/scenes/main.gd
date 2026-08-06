@@ -81,6 +81,7 @@ const SMOKES := {
 	"region": "res://smokes/region.gd",
 	"buriedoverload": "res://smokes/buriedoverload.gd",
 	"island": "res://smokes/island.gd",
+	"commercial": "res://smokes/commercial.gd",
 }
 
 

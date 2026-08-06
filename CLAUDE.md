@@ -172,6 +172,47 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   (`city_view._drift_clouds` visible-prefix), so sky and dispatch agree.
   City injects `DemandModel.weather` at _ready/scenario-reset/save-load
   (static — uninjected unit tests keep the legacy hash day pick).
+- **COMMERCIAL CONSUMERS (2026-08-06, user feature — "the fun part")**:
+  industry grows on COMMERCIAL zone paint (`WorldModel.ZONE_COMMERCIAL`,
+  additive "commercial" save key, tool X) the way houses grow on
+  residential — but gated on SUBSTATION HEADROOM
+  (`City._try_spawn_commercial`: expected peak = houses×1.8 kW + lots'
+  design peaks ≤ 0.9×rating_kva; the gate needs a SUPPLIED zone, i.e. a
+  solved step — the smoke's first red run proved it). Three lot types
+  (`DemandModel.COMMERCIAL_SPECS`, deterministic per-lot 0.75-1.25 scale
+  sample, type hash-picked at spawn): 1 GENERAL production (220 kW elec /
+  low heat / low water, two-shift curve, weekend dips), 2 FOOD production
+  (110 kW elec / 160 kW HEAT of which 90 % PROCESS — a dairy steams in
+  July, the smoke pins ≥80 % of winter draw at 24 °C / 3 m³ h water,
+  runs 7 days), 3 MALL (170 kW elec / 2 m³ h water / 70 kW mostly-space
+  heat, retail hours, German Sunday closing). Sums ride the zone
+  boundaries on ALL THREE networks (`commercial_tiles` on zones_info —
+  key only ADDED when lots exist, goldens stay byte-identical;
+  assign_commercial next to assign_houses in all three builders) and
+  bill the same tariffs. 1000-kVA XL SUBSTATION
+  (`City.place_substation_xl`, tool Z, €26k): same substation kind with
+  a rating_kva override — no catalog 20/0.4 type above 0.63, so
+  `trafo_fields` >630 emits explicit typical 1-MVA params (vk 6 %).
+  CHARGING PARK (tool D, 2x2, €95k): eight 175-kW DC stalls behind its
+  OWN MV connection — PowerTopology emits it as zone `cp_<id>` (flagged
+  `charging`; assign_houses/growth skip it; islands shed it like any
+  zone), demand = `DemandModel.charging_park_kw` (hash-seeded 30-min
+  stall sessions × tapered 55-100 % draw on a traveler/commuter
+  occupancy curve incl. the Sunday-return wave), delivered kWh bill
+  `income_charging` at 0.38 €/kWh (EconomyBooks.charging_eur —
+  FIRST-PASS pricing, no balancing run yet; the economy smoke town has
+  no park so the CSV contract is untouched). Inspector: commercial lots
+  open a house-style 3-curve panel (`InspectorConfig.commercial_config`),
+  the park graphs its `d:cp_*` telemetry vs the all-stalls cap (the d:
+  telemetry now carries the FULL zone draw via `City._zone_power_kw` —
+  houses + commercial + charging). Renderer: three procedural lot
+  silhouettes (sawtooth hall / silo+stack / glass mall) + canopy park
+  model; commercial paint tints blue, kind-aware dead-lot overlay.
+  Suites: test_commercial (8); `--smoke=commercial` pins gate, XL-vs-630
+  admission, summer process heat, charging sessions + income on the real
+  solvers. NOT YET: industry satisfaction/abandonment (they only bill),
+  commercial growth needs no heat/water service, charging-price
+  balancing, palette thumbnails for the new tools (monogram fallback).
 - **Battery = peak shaving ALWAYS** (user direction): discharge net load
   above its one-day EMA (`City._peak_ema`, alpha 1/96), recharge below;
   gas covers the residual AFTER the battery pass.
@@ -373,6 +414,7 @@ use the Linux paths — on Windows substitute `Godot_v4.7.1-stable_win64_console
 #        playtest (monkey player; optional --seed=N for fuzz sweeps)
 #        boosterblackout savemidevent region buriedoverload (2026-08-05)
 #        island (power islands: curtail -> night shed -> restore)
+#        commercial (industry types + XL substation + charging park)
 # resilience + cosim-kill are NOT standalone — an external wrapper must kill
 # the backend (bare runs report saw_down/down_event false and fail):
 tests/e2e/resilience_smoke.sh && tests/e2e/cosim_kill_recovery.sh
