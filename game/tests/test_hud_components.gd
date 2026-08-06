@@ -123,3 +123,17 @@ func test_palette_table_is_consistent() -> void:
 				.override_failure_message(label + ": duplicate hotkey").is_false()
 			keys_seen[item["key"]] = true
 	hud.free()
+
+
+func test_speed_key_action_covers_layouts() -> void:
+	# US =/+ key, the German dedicated + key, the numpad, and the pure
+	# typed-character fallback for any other layout
+	assert_str(Hud.speed_key_action(KEY_EQUAL, 61)).is_equal("faster")
+	assert_str(Hud.speed_key_action(KEY_PLUS, 43)).is_equal("faster")
+	assert_str(Hud.speed_key_action(KEY_KP_ADD, 43)).is_equal("faster")
+	assert_str(Hud.speed_key_action(0, 43)).is_equal("faster")
+	assert_str(Hud.speed_key_action(KEY_MINUS, 45)).is_equal("slower")
+	assert_str(Hud.speed_key_action(KEY_KP_SUBTRACT, 45)).is_equal("slower")
+	assert_str(Hud.speed_key_action(0, 45)).is_equal("slower")
+	assert_str(Hud.speed_key_action(KEY_A, 97)).is_equal("")
+	assert_str(Hud.speed_key_action(KEY_SPACE, 32)).is_equal("")

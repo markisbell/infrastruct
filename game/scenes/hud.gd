@@ -963,9 +963,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_refresh_breakdown()
 	elif key.keycode == KEY_SPACE:
 		GameClock.speed = 1.0 if GameClock.speed == 0.0 else 0.0
-	elif key.keycode == KEY_EQUAL or key.keycode == KEY_KP_ADD:
+	elif speed_key_action(key.keycode, key.unicode) == "faster":
 		GameClock.speed = clampf(GameClock.speed * 2.0 if GameClock.speed > 0.0 else 1.0, 0.0, 32.0)
-	elif key.keycode == KEY_MINUS or key.keycode == KEY_KP_SUBTRACT:
+	elif speed_key_action(key.keycode, key.unicode) == "slower":
 		GameClock.speed = maxf(GameClock.speed / 2.0, 0.25)
 	elif key.keycode == KEY_V:
 		view.overlays_visible = not view.overlays_visible
@@ -977,6 +977,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		view.rotate_ghost()
 	elif key.keycode == KEY_F:
 		view.flip_ghost()
+
+
+## Layout-proof speed-key classification (user report 2026-08-06: on a
+## German keyboard the dedicated + key emits KEY_PLUS — the old
+## KEY_EQUAL-or-KP_ADD match was the US =/+ convention, so speed-up was
+## dead on laptops without a numpad). Match the keycode families AND the
+## TYPED character, so any layout's +/- works regardless of which
+## physical key produces it.
+static func speed_key_action(keycode: int, unicode: int) -> String:
+	if keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD] or unicode == 43:  # "+"
+		return "faster"
+	if keycode in [KEY_MINUS, KEY_KP_SUBTRACT] or unicode == 45:  # "-"
+		return "slower"
+	return ""
 
 
 static func _fmt_money(value: int) -> String:
