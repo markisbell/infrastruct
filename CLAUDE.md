@@ -623,11 +623,15 @@ recovery, error frames, failed escalation) + test_sidecar_launch.gd (4
 cases over the new static build_launch_command/translate_python_path —
 both OS branches testable on Linux). GdUnit 176/176.
 
-Releases on GitHub: v0.8.0 + v0.8.1 (verified Windows installers) and
-v0.8.2 (the Linux tarball, built + verified from a fresh extraction; a
-0.8.2 Windows installer still needs a Windows machine; everything after
-v0.8.2 is unreleased on main — a v0.8.3 bundling the visual/systems day
-is the natural next release). Phase 8 delivered: envelope v4 (trips,
+Releases on GitHub: v0.8.0 + v0.8.1 (verified Windows installers),
+v0.8.2 (Linux tarball) and v0.8.3 (2026-08-06, Linux tarball 561 MB —
+the two feature weeks: demand/visual/terrain days, refactor phases 1-7,
+POWER ISLANDS M1-M4 + contract 1.2, the +/- layout fix; built natively
+per §5, verified from a fresh extraction with all three FROZEN solvers
+handshaking contract 1.2; bigger than 0.8.2 because numba is now
+genuinely collected — 0.8.2 shipped without it. A 0.8.3 Windows
+installer still needs a Windows machine — v0.8.1 stays the newest
+Windows build). Phase 8 delivered: envelope v4 (trips,
 econ books, event-system state incl. RNG position, device SoC survive
 loads), SoC replay on every registration (heatstorage smoke pins
 0.79→0.79), drag stalls halved, `WorldModel.check_invariants`, Windows
