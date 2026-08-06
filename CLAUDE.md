@@ -214,9 +214,22 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   open a house-style 3-curve panel (`InspectorConfig.commercial_config`),
   the park graphs its `d:cp_*` telemetry vs the all-stalls cap (the d:
   telemetry now carries the FULL zone draw via `City._zone_power_kw` —
-  houses + commercial + charging). Renderer: three procedural lot
-  silhouettes (sawtooth hall / silo+stack / glass mall) + canopy park
-  model; commercial paint tints blue, kind-aware dead-lot overlay.
+  houses + commercial + charging). Renderer (overhaul
+  2026-08-06, user request): commercial lots are KENNEY models now —
+  city-kit-industrial b/e/m (general), f/n (food — the rooftop process
+  tanks), city-kit-COMMERCIAL h/i/k (retail storefronts; kit added to
+  assets, CC0 like the rest, 3.7 MB GLB set), deterministic per-tile
+  variants + face-the-road exactly like houses
+  (city_view.COMMERCIAL_VARIANTS); the pick ran through the --gallery
+  art picker (its committed candidate list IS the shipped set; gallery
+  now sets the clock to daylight and lost its stale pre-phase-5
+  _make_transfer_station call — it had been silently broken since).
+  Commercial paint tints blue, kind-aware dead-lot overlay. GALLERY/
+  SCREENSHOT gotcha: NEW .glb files need a --headless --import pass
+  before any windowed run can load them, and when Vulkan wedges after
+  rapid windowed create/destroy cycles (VkResult -3, survives process
+  death), --rendering-method gl_compatibility --rendering-driver
+  opengl3 still renders for model review.
   Suites: test_commercial (8); `--smoke=commercial` pins gate, XL-vs-630
   admission, summer process heat, charging sessions + income on the real
   solvers. NOT YET: industry satisfaction/abandonment (they only bill),

@@ -898,7 +898,8 @@ func _thumbnail_scene(tool: CityView.Tool) -> Node3D:
 			pad.mesh = pad_mesh
 			pad.material_override = view._flat(Color(0.45, 0.55, 0.9))
 			lot.add_child(pad)
-			lot.add_child(BuildingModels.commercial_lot(1))
+			lot.add_child(view._instance_glb(
+				"city-kit-industrial/Models/GLB format/building-m.glb", 0.8))
 			return lot
 		CityView.Tool.CABLE:
 			return view._pole_visual()

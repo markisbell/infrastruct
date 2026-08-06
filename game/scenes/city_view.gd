@@ -953,12 +953,35 @@ func _orient_surface_pipe(pos: Vector2i, node: Node3D, layer: Dictionary,
 			Vector3(0, PIPE_HEIGHT, 0)))
 
 
-## One commercial lot's building — the shared BuildingModels silhouettes
-## (the hud thumbnails render the same statics).
+## Kenney models per lot type (overhaul 2026-08-06, user request:
+## city-kit-industrial for the producers, city-kit-commercial for
+## retail — both CC0 like every other kit). Variants are deterministic
+## per tile, exactly the house convention.
+const COMMERCIAL_VARIANTS := {
+	1: ["city-kit-industrial/Models/GLB format/building-b.glb",
+		"city-kit-industrial/Models/GLB format/building-e.glb",
+		"city-kit-industrial/Models/GLB format/building-m.glb"],
+	2: ["city-kit-industrial/Models/GLB format/building-f.glb",
+		"city-kit-industrial/Models/GLB format/building-n.glb"],
+	3: ["city-kit-commercial/Models/GLB format/building-h.glb",
+		"city-kit-commercial/Models/GLB format/building-i.glb",
+		"city-kit-commercial/Models/GLB format/building-k.glb"],
+}
+
+
 func _make_commercial(pos: Vector2i) -> Node3D:
-	var lot := BuildingModels.commercial_lot(
-		int(City.model.commercial.get(pos, 1)))
+	var variants: Array = COMMERCIAL_VARIANTS.get(
+		int(City.model.commercial.get(pos, 1)), COMMERCIAL_VARIANTS[1])
+	var lot := _instance_glb(
+		variants[abs(pos.x * 73856093 ^ pos.y * 19349663) % variants.size()], 0.85)
 	lot.position = _center(pos)
+	# face the serving road, like houses do
+	var directions: Array[Vector2i] = [Vector2i(0, 1), Vector2i(1, 0),
+		Vector2i(0, -1), Vector2i(-1, 0)]
+	for i in 4:
+		if City.model.roads.has(pos + directions[i]):
+			lot.rotation_degrees.y = [0.0, 90.0, 180.0, 270.0][i]
+			break
 	return lot
 
 
