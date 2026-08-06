@@ -185,7 +185,8 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	# only connected zones enter the solver doc.
 	var transformers: Array[Dictionary] = []
 	var zones: Array[Dictionary] = []
-	for sub_id: String in model.buildings_of_kind("substation"):
+	for sub_id: String in model.buildings_of_kind("substation") \
+			+ model.buildings_of_kind("substation_xl"):
 		var zone_id := "z_" + sub_id
 		var is_conn: bool = connected.get(sub_id, false)
 		zones_info[zone_id] = {"sub": sub_id, "houses": 0, "bus": "",
@@ -193,9 +194,11 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			"connected": is_conn, "center": model.buildings[sub_id]["anchor"]}
 		if not is_conn:
 			continue
-		# per-building params_override wins (scenario/smoke hook), else the def
+		# per-building params_override wins (scenario/smoke hook), else the
+		# BUILDING'S OWN def (substation 630 / substation_xl 1000)
 		var rating: float = float(model.building_params(sub_id).get("rating_kva",
-			BuildingDefs.get_def("substation").get("rating_kva", 630.0)))
+			BuildingDefs.get_def(model.buildings[sub_id]["kind"])
+				.get("rating_kva", 630.0)))
 		var lv_name := "lv_%s" % sub_id
 		var edge_id := "T%d" % transformers.size()
 		var spec := {"name": edge_id, "hv_bus": bus_index[sub_id],

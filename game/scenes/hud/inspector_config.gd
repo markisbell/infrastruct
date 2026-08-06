@@ -29,7 +29,7 @@ static func config_for(kind: String, id: String, model: WorldModel,
 				"base_zero": false, "y": "Import / export [kW]", "limits": limits,
 				"series": [{"key": "dev:" + id, "label": "Import",
 					"color": Color(0.95, 0.45, 0.3)}]}
-		"substation":
+		"substation", "substation_xl":
 			return {"title": "Substation 20/0.4 kV (%.0f kVA)"
 					% float(model.building_params(id).get("rating_kva",
 						BuildingDefs.get_def(kind).get("rating_kva", 630.0))),

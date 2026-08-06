@@ -21,6 +21,7 @@ const TOOL_BUILDING := {
 	Tool.WATER_SUB: "water_station", Tool.WELL: "well",
 	Tool.PUMP: "pumping_station", Tool.WATER_TOWER: "water_tower",
 	Tool.CHARGING: "charging_park",
+	Tool.SUBSTATION_XL: "substation_xl",
 }
 
 const KENNEY := "res://assets/kenney/"
@@ -952,42 +953,11 @@ func _orient_surface_pipe(pos: Vector2i, node: Node3D, layer: Dictionary,
 			Vector3(0, PIPE_HEIGHT, 0)))
 
 
-## One commercial lot's building (commercial pass 2026-08-06): three
-## unmistakable silhouettes — the grey sawtooth hall (general
-## production), the hall with the food plant's silo + stack, the glassy
-## mall block. Procedural like the plant models; scale fits one lot.
+## One commercial lot's building — the shared BuildingModels silhouettes
+## (the hud thumbnails render the same statics).
 func _make_commercial(pos: Vector2i) -> Node3D:
-	var lot := Node3D.new()
-	var ctype: int = int(City.model.commercial.get(pos, 1))
-	match ctype:
-		WorldModel.COMMERCIAL_FOOD:
-			lot.add_child(BuildingModels.box(Vector3(0.8, 0.3, 0.62),
-				Color(0.82, 0.8, 0.74), Vector3(-0.03, 0.15, 0.0)))
-			var silo := MeshInstance3D.new()
-			var silo_mesh := CylinderMesh.new()
-			silo_mesh.top_radius = 0.11
-			silo_mesh.bottom_radius = 0.11
-			silo_mesh.height = 0.62
-			silo.mesh = silo_mesh
-			silo.position = Vector3(0.34, 0.31, 0.22)
-			silo.material_override = BuildingModels.flat(Color(0.88, 0.88, 0.9))
-			lot.add_child(silo)
-			lot.add_child(BuildingModels.box(Vector3(0.05, 0.5, 0.05),
-				Color(0.75, 0.3, 0.25), Vector3(0.3, 0.42, -0.22)))
-		WorldModel.COMMERCIAL_MALL:
-			lot.add_child(BuildingModels.box(Vector3(0.86, 0.34, 0.7),
-				Color(0.45, 0.62, 0.78), Vector3(0.0, 0.17, 0.0)))
-			lot.add_child(BuildingModels.box(Vector3(0.88, 0.05, 0.72),
-				Color(0.92, 0.9, 0.85), Vector3(0.0, 0.37, 0.0)))
-			lot.add_child(BuildingModels.box(Vector3(0.3, 0.1, 0.06),
-				Color(0.95, 0.75, 0.2), Vector3(0.0, 0.2, 0.36)))
-		_:
-			lot.add_child(BuildingModels.box(Vector3(0.84, 0.28, 0.66),
-				Color(0.62, 0.64, 0.68), Vector3(0.0, 0.14, 0.0)))
-			for i in 3:
-				lot.add_child(BuildingModels.box(Vector3(0.84, 0.09, 0.14),
-					Color(0.5, 0.52, 0.58),
-					Vector3(0.0, 0.32, -0.2 + 0.22 * i)))
+	var lot := BuildingModels.commercial_lot(
+		int(City.model.commercial.get(pos, 1)))
 	lot.position = _center(pos)
 	return lot
 
@@ -1596,9 +1566,6 @@ func _apply_tool(pos: Vector2i) -> void:
 			City.build_water_pipe(pos, BuildingDefs.LINE_UNDERGROUND)
 		Tool.BULLDOZE:
 			City.bulldoze(pos)
-		Tool.SUBSTATION_XL:
-			City.place_substation_xl(pos, _ghost_rot, _ghost_flip)
-			_painting = false
 		_:
 			if TOOL_BUILDING.has(tool):
 				City.place_building(TOOL_BUILDING[tool], pos, _ghost_rot, {}, _ghost_flip)

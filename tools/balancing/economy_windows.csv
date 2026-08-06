@@ -1,9 +1,9 @@
 category,winter_2d,summer_2d,blackout_1d
-cost_fuel,-299.18,-127.41,-156.99
+cost_fuel,-299.18,-127.37,-156.99
 cost_grid,-37.30,-27.58,-5.68
 cost_upkeep,-333.73,-333.73,-169.46
 income_base,19.30,19.30,9.80
 income_elec,362.32,288.33,0.00
 income_feedin,197.80,597.27,86.58
-income_heat,349.70,76.91,180.42
+income_heat,349.70,76.97,180.42
 income_water,32.07,37.56,16.14

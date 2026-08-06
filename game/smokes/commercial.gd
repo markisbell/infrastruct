@@ -20,7 +20,9 @@ func run() -> void:
 	City.place_building("grid_connection", Vector2i(6, 4))
 	for x in range(8, 31):
 		City.build_cable(Vector2i(x, 5))
-	var xl_id := City.place_substation_xl(Vector2i(12, 6))
+	# City.place_building returns success, not the id (the parse-error
+	# lesson: this smoke never re-ran to completion after the XL batch)
+	var xl_ok := City.place_building("substation_xl", Vector2i(12, 6))
 	City.place_building("substation", Vector2i(28, 6))
 	City.place_building("charging_park", Vector2i(22, 3))
 	# commercial paint: a strip per zone, roads for lot access
@@ -40,8 +42,9 @@ func run() -> void:
 		City.build_water_pipe(Vector2i(x, 17))
 	City.place_building("water_station", Vector2i(15, 17))
 
-	check("xl_placed", xl_id != "")
-	check("xl_rating", float(City.model.building_params(xl_id)
+	check("xl_placed", xl_ok)
+	var xl_id: String = City.model.buildings_of_kind("substation_xl")[0]
+	check("xl_rating", float(BuildingDefs.get_def("substation_xl")
 		.get("rating_kva", 0.0)) == 1000.0)
 
 	# one FOOD plant pinned where ALL THREE zones cover it (the summer-heat

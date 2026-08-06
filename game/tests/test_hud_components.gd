@@ -137,3 +137,24 @@ func test_speed_key_action_covers_layouts() -> void:
 	assert_str(Hud.speed_key_action(0, 45)).is_equal("slower")
 	assert_str(Hud.speed_key_action(KEY_A, 97)).is_equal("")
 	assert_str(Hud.speed_key_action(KEY_SPACE, 32)).is_equal("")
+
+
+func test_build_menu_tabs_carry_every_item() -> void:
+	# the tabbed palette (2026-08-06) must never drop a tile: each
+	# category row carries exactly its items, every tool is mapped to its
+	# category, and exactly one row is visible after the initial show
+	var hud := Hud.new()
+	hud._make_build_menu()
+	var visible_rows := 0
+	for category: Dictionary in hud._build_items():
+		var row: HBoxContainer = hud._tab_rows[category["cat"]]
+		assert_int(row.get_child_count()) \
+			.override_failure_message(str(category["cat"]) + " row lost tiles") \
+			.is_equal((category["items"] as Array).size())
+		if row.visible:
+			visible_rows += 1
+		for item: Dictionary in category["items"]:
+			assert_str(str(hud._tool_category.get(item["tool"], ""))) \
+				.is_equal(str(category["cat"]))
+	assert_int(visible_rows).is_equal(1)
+	hud.free()

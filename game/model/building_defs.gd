@@ -17,6 +17,16 @@ const DEFS := {
 		"color": Color(0.25, 0.75, 0.85), "zone_radius": 12, "house_capacity": 150,
 		"rating_kva": 630.0,
 	},
+	"substation_xl": {
+		# the industrial Ortsnetzstation (commercial pass 2026-08-06): a
+		# REAL first-class kind — 1000 kVA of 20/0.4 kV headroom, the
+		# station that makes commercial zones viable. Same coverage as
+		# the 630; trafo_fields emits explicit 1-MVA params (no catalog
+		# 20/0.4 type above 0.63).
+		"size": Vector2i(1, 1), "cost": 26_000, "device": "", "network": "power",
+		"color": Color(0.2, 0.6, 0.9), "zone_radius": 12, "house_capacity": 150,
+		"rating_kva": 1000.0,
+	},
 	"heat_exchanger": {
 		"size": Vector2i(1, 1), "cost": 15_000, "device": "", "network": "heat",
 		"color": Color(0.85, 0.45, 0.2), "zone_radius": 12, "house_capacity": 40,
@@ -118,7 +128,8 @@ const COSTS := {"road": 40, "overhead_line": 120, "cable": 320, "zone": 10,
 ## tools/balancing/economy.md — sized so a ~25-house town runs thin-but-
 ## positive margins and growth widens them).
 const UPKEEP_DAY := {
-	"substation": 5.0, "heat_exchanger": 6.0, "water_station": 5.0,
+	"substation": 5.0, "substation_xl": 8.0,
+	"heat_exchanger": 6.0, "water_station": 5.0,
 	"charging_park": 25.0,
 	"boiler_plant": 30.0, "chp_plant": 50.0, "heat_pump_plant": 25.0,
 	"heat_storage": 8.0, "grid_connection": 20.0, "gas_plant": 40.0,

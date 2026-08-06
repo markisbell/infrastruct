@@ -57,6 +57,9 @@ func _build_items() -> Array:
 			{"tool": CityView.Tool.ZONE, "label": "Residential zone", "mono": "Zn", "key": "2",
 				"color": Color(0.45, 0.8, 0.4), "cost": BuildingDefs.COSTS["zone"],
 				"desc": "Paint building land. Houses appear when a powered substation covers it and people are happy."},
+			{"tool": CityView.Tool.ZONE_COMMERCIAL, "label": "Commercial zone", "mono": "Cz", "key": "X",
+				"color": Color(0.45, 0.55, 0.9), "cost": BuildingDefs.COSTS["zone_commercial"],
+				"desc": "Paint industrial land. Factories, food plants and malls move in on their own - but only where the substation has the headroom to carry them."},
 		]},
 		{"cat": "Electricity", "items": [
 			{"tool": CityView.Tool.CABLE, "label": "Overhead line", "mono": "Oh", "key": "3",
@@ -83,6 +86,12 @@ func _build_items() -> Array:
 			{"tool": CityView.Tool.BATTERY, "label": "Battery", "mono": "Ba", "key": "8",
 				"kind": "battery",
 				"desc": "1 MWh / 400 kW. Peak shaving: discharges load spikes, recharges in the valleys."},
+			{"tool": CityView.Tool.SUBSTATION_XL, "label": "Substation 1 MVA", "mono": "S+", "key": "Z",
+				"kind": "substation_xl",
+				"desc": "The industrial Ortsnetzstation: a 1000-kVA transformer with the headroom commercial customers need. Same coverage as the 630."},
+			{"tool": CityView.Tool.CHARGING, "label": "Charging park", "mono": "Cp", "key": "D",
+				"kind": "charging_park",
+				"desc": "Eight 175-kW DC fast chargers behind one MV connection. Spiky megawatt-class load - and it bills every delivered kWh."},
 		]},
 		{"cat": "Heat", "items": [
 			{"tool": CityView.Tool.PIPE, "label": "Heat pipe", "mono": "Hp", "key": "H",
@@ -195,6 +204,16 @@ func _ready() -> void:
 
 # ─── build menu (palette) ───
 
+## Tabbed palette (user request 2026-08-06 — 28 tiles outgrew the single
+## all-categories row): a slim tab row on top, ONE tile row below showing
+## the active category. Hotkeys stay global and auto-switch the tab so
+## the pressed highlight is never hidden.
+var _tab_buttons := {}   # cat name -> Button
+var _tab_rows := {}      # cat name -> HBoxContainer
+var _tool_category := {} # CityView.Tool -> cat name
+var _tab_group := ButtonGroup.new()
+
+
 func _make_build_menu() -> void:
 	_build_menu = PanelContainer.new()
 	_build_menu.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -202,24 +221,53 @@ func _make_build_menu() -> void:
 	_build_menu.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_build_menu.offset_bottom = -10.0
 	add_child(_build_menu)
-	var columns := HBoxContainer.new()
-	columns.add_theme_constant_override("separation", 14)
-	_build_menu.add_child(columns)
+	var stack := VBoxContainer.new()
+	stack.add_theme_constant_override("separation", 4)
+	_build_menu.add_child(stack)
+	var tab_row := HBoxContainer.new()
+	tab_row.add_theme_constant_override("separation", 2)
+	tab_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	stack.add_child(tab_row)
 	for category: Dictionary in _build_items():
-		var col := VBoxContainer.new()
-		var header := Label.new()
-		header.text = category["cat"]
-		header.add_theme_font_size_override("font_size", 11)
-		header.modulate = Color(1, 1, 1, 0.65)
-		col.add_child(header)
+		var cat: String = category["cat"]
+		# rows live directly in the VBox: hidden children are excluded
+		# from container layout, so the panel auto-sizes to tabs + the
+		# ACTIVE row (an overlapping plain Control collapsed the panel —
+		# anchored children carry no minimum size)
 		var tile_row := HBoxContainer.new()
 		tile_row.add_theme_constant_override("separation", 4)
-		col.add_child(tile_row)
+		tile_row.alignment = BoxContainer.ALIGNMENT_CENTER
+		tile_row.visible = false
 		for item: Dictionary in category["items"]:
 			tile_row.add_child(_make_tile(item))
-		columns.add_child(col)
-		if category["cat"] != "Service":
-			columns.add_child(VSeparator.new())
+			_tool_category[item["tool"]] = cat
+		stack.add_child(tile_row)
+		_tab_rows[cat] = tile_row
+		var tab := Button.new()
+		tab.text = cat
+		tab.toggle_mode = true
+		tab.button_group = _tab_group
+		tab.focus_mode = Control.FOCUS_NONE
+		tab.add_theme_font_size_override("font_size", 12)
+		tab.pressed.connect(func() -> void: _show_category(cat))
+		tab_row.add_child(tab)
+		_tab_buttons[cat] = tab
+	# screenshot-mode probe (the REGION_SHOT pattern): PALETTE_TAB=<cat>
+	# opens that tab so its tiles can be verified visually
+	var probe := OS.get_environment("PALETTE_TAB")
+	_show_category(probe if _tab_rows.has(probe)
+		else str((_build_items()[0] as Dictionary)["cat"]))
+
+
+func _show_category(cat: String) -> void:
+	for name: String in _tab_rows:
+		(_tab_rows[name] as HBoxContainer).visible = name == cat
+	if _tab_buttons.has(cat):
+		(_tab_buttons[cat] as Button).set_pressed_no_signal(true)
+	# NO manual size fiddling: Control.size keeps the TOP-LEFT fixed and
+	# extends DOWNWARD (clipped the tile row off-screen once) — the
+	# bottom-center anchor preset + grow directions re-fit the panel
+	# around the active row on their own
 
 
 func _make_tile(item: Dictionary) -> Button:
@@ -842,6 +890,16 @@ func _thumbnail_scene(tool: CityView.Tool) -> Node3D:
 				"city-kit-suburban/Models/GLB format/building-type-a.glb", 0.8)
 			lot.add_child(house)
 			return lot
+		CityView.Tool.ZONE_COMMERCIAL:
+			var lot := Node3D.new()
+			var pad := MeshInstance3D.new()
+			var pad_mesh := PlaneMesh.new()
+			pad_mesh.size = Vector2(1.1, 1.1)
+			pad.mesh = pad_mesh
+			pad.material_override = view._flat(Color(0.45, 0.55, 0.9))
+			lot.add_child(pad)
+			lot.add_child(BuildingModels.commercial_lot(1))
+			return lot
 		CityView.Tool.CABLE:
 			return view._pole_visual()
 		CityView.Tool.UCABLE:
@@ -918,6 +976,10 @@ func _select_tool(tool: CityView.Tool) -> void:
 	_tool_label.text = "Tool: %s%s" % [item.get("label", "none"), hint]
 	if _tool_buttons.has(tool):
 		(_tool_buttons[tool] as Button).set_pressed_no_signal(true)
+	# a hotkey may select a tool on a hidden tab — follow it so the
+	# pressed highlight is always visible
+	if _tool_category.has(tool):
+		_show_category(str(_tool_category[tool]))
 
 
 func _refresh() -> void:

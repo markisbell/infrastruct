@@ -190,10 +190,19 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   key only ADDED when lots exist, goldens stay byte-identical;
   assign_commercial next to assign_houses in all three builders) and
   bill the same tariffs. 1000-kVA XL SUBSTATION
-  (`City.place_substation_xl`, tool Z, €26k): same substation kind with
-  a rating_kva override — no catalog 20/0.4 type above 0.63, so
-  `trafo_fields` >630 emits explicit typical 1-MVA params (vk 6 %).
-  CHARGING PARK (tool D, 2x2, €95k): eight 175-kW DC stalls behind its
+  (kind `substation_xl`, tool Z, €26k — user correction: a FIRST-CLASS
+  construction tile, not a params-override special path; the wrapper
+  approach even mis-refunded bulldozing at the 630's price): own def
+  (rating_kva 1000, upsized model), both substation kinds define zones
+  (`buildings_of_kind("substation") + ..._xl` — appended, so existing
+  towns stay byte-identical; rating fallback reads the BUILDING'S OWN
+  def), no catalog 20/0.4 type above 0.63 so `trafo_fields` >630 emits
+  explicit typical 1-MVA params (vk 6 %).
+  CHARGING PARK (tool D, 2x2, €95k; dispensers rebuilt by eye after the
+  user's Sketchfab reference "EV Charging Station" f5ccea28f9c2 — white
+  monolith on dark plinth, front screen, TEAL glow strips
+  [BuildingModels.glow: emissive but SHADED], CCS handle + cable loop):
+  eight 175-kW DC stalls behind its
   OWN MV connection — PowerTopology emits it as zone `cp_<id>` (flagged
   `charging`; assign_houses/growth skip it; islands shed it like any
   zone), demand = `DemandModel.charging_park_kw` (hash-seeded 30-min
@@ -388,6 +397,17 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   `zones_info[...]["house_tiles"]`, profile cache in DemandModel) — the
   transformer sees real EV coincidence, not the smooth mean. The
   *_demand_* expectation functions remain for reference/tests/fallbacks.
+  TABBED PALETTE (2026-08-06, user request — 28 tiles outgrew the one
+  all-categories row, ~1400 px at 1600 wide): slim tab row (City ·
+  Electricity · Heat · Water · Service) + ONE centered tile row for the
+  active tab (~510 px); hotkeys stay global and auto-switch the tab so
+  the pressed highlight is never hidden; rows live DIRECTLY in the VBox
+  (hidden children leave the layout — an overlapping plain Control
+  carried no minimum size, and a manual `size` reset extended the panel
+  DOWNWARD off-screen: Control.size keeps the top-left fixed, the
+  bottom-center anchor preset + grow directions do the re-fit on their
+  own — each cost a screenshot loop). test_hud_components pins that no
+  tab row ever drops a tile.
   Smokes recalibrated for sampled variance: maintenance grid override
   140 kW, drought tower 0.5 m³ + 9 h window + dry-phase (not end-instant)
   assertion — calibrated smokes must assert WINDOW properties, samples
@@ -468,6 +488,17 @@ re-verified green).
 
 ## 6. Conventions & gotchas (each cost a debugging session)
 
+- **python-batch edits MUST `assert old in s` per hunk** (2026-08-06):
+  three palette entries "landed" as silent str.replace no-ops (tab-vs-
+  space mismatch) and EVERY gate stayed green — the palette tests check
+  consistency, not presence, and smokes never open the palette; the USER
+  caught it in play. The Edit tool verifies matches; python batches must
+  assert. Companion trap: a passing consistency test over a data table
+  says nothing about the table being COMPLETE. Second half of the same
+  incident: a batch-edited SMOKE (bool-vs-String parse error) "ran"
+  three times as exit 124/143 — every kill was misread as
+  infrastructure noise. A timed-out run has NO verdict: a gate only
+  counts when its one JSON line actually printed.
 - **GDScript lambdas capture scalars BY VALUE** — mutate Dictionaries instead.
 - **JSON wire: every number arrives as float** (Godot stringify makes 1 → 1.0);
   backends accept zero-fraction floats (`_as_int`), the contract suite pins it

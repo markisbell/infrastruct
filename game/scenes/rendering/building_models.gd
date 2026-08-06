@@ -30,6 +30,20 @@ static func flat(color: Color, transparent: bool = false,
 	return _material_cache[key]
 
 
+## Emissive accent material (the EV dispenser's teal glow strips —
+## SHADED, so it never blooms at night like the unshaded overlays did).
+static func glow(color: Color) -> StandardMaterial3D:
+	var key := "glow|" + color.to_html()
+	if not _material_cache.has(key):
+		var material := StandardMaterial3D.new()
+		material.albedo_color = color
+		material.emission_enabled = true
+		material.emission = color
+		material.emission_energy_multiplier = 1.6
+		_material_cache[key] = material
+	return _material_cache[key]
+
+
 static func box(size: Vector3, color: Color, offset: Vector3) -> MeshInstance3D:
 	var mesh_box := MeshInstance3D.new()
 	var mesh := BoxMesh.new()
@@ -46,6 +60,7 @@ static func make(kind: String) -> Node3D:
 	match kind:
 		"gas_plant": return _make_gas_plant()
 		"substation": return _make_substation()
+		"substation_xl": return _make_substation_xl()
 		"wind_farm": return _make_wind_farm()
 		"solar_park": return _make_solar_park()
 		"battery": return _make_battery()
@@ -833,23 +848,118 @@ static func _make_grid_connection() -> Node3D:
 	return node
 
 
-## DC fast-charging hub (commercial pass 2026-08-06): a white canopy on
-## slim columns over two stall rows — the highway service-area look —
-## with a battery-buffer cabinet at the back.
+## The 1000-kVA industrial station: the substation model scaled up with
+## a second cooling-fin bank — unmistakably the bigger machine.
+static func _make_substation_xl() -> Node3D:
+	var station := _make_substation()
+	station.scale = Vector3(1.18, 1.25, 1.18)
+	station.add_child(box(Vector3(0.3, 0.34, 0.1), Color(0.5, 0.54, 0.6),
+		Vector3(0.0, 0.24, -0.42)))
+	return station
+
+
+## One EV dispenser rebuilt by eye after the user's Sketchfab reference
+## (EV Charging Station, f5ccea28f9c2…): white monolith on a dark
+## rounded plinth, big dark front screen, TEAL glow strips edging plinth
+## and pillar, white CCS handle with a black cable loop on the right.
+static func ev_dispenser() -> Node3D:
+	var unit := Node3D.new()
+	var teal := Color(0.25, 0.9, 0.95)
+	# plinth: dark slab with the glowing skirt strip
+	unit.add_child(box(Vector3(0.2, 0.03, 0.14), Color(0.13, 0.14, 0.16),
+		Vector3(0.0, 0.015, 0.0)))
+	var skirt := box(Vector3(0.21, 0.012, 0.15), teal, Vector3(0.0, 0.032, 0.0))
+	skirt.material_override = glow(teal)
+	unit.add_child(skirt)
+	# the white pillar + dark top cap
+	unit.add_child(box(Vector3(0.14, 0.42, 0.09), Color(0.93, 0.94, 0.95),
+		Vector3(0.0, 0.25, 0.0)))
+	unit.add_child(box(Vector3(0.15, 0.035, 0.1), Color(0.13, 0.14, 0.16),
+		Vector3(0.0, 0.475, 0.0)))
+	# front screen (dark inset, slightly proud)
+	unit.add_child(box(Vector3(0.1, 0.2, 0.012), Color(0.06, 0.07, 0.09),
+		Vector3(0.0, 0.31, 0.048)))
+	# teal edge strips: both vertical front edges + the top rim
+	for edge_x in [-0.072, 0.072]:
+		var strip := box(Vector3(0.012, 0.42, 0.012), teal,
+			Vector3(edge_x, 0.25, 0.042))
+		strip.material_override = glow(teal)
+		unit.add_child(strip)
+	var rim := box(Vector3(0.15, 0.012, 0.012), teal, Vector3(0.0, 0.462, 0.048))
+	rim.material_override = glow(teal)
+	unit.add_child(rim)
+	# CCS handle (white nub) + black cable loop on the right flank
+	unit.add_child(box(Vector3(0.03, 0.06, 0.03), Color(0.92, 0.93, 0.94),
+		Vector3(0.085, 0.3, 0.02)))
+	var cable := MeshInstance3D.new()
+	var loop := TorusMesh.new()
+	loop.inner_radius = 0.035
+	loop.outer_radius = 0.055
+	cable.mesh = loop
+	cable.rotation_degrees.x = 90.0
+	cable.position = Vector3(0.085, 0.18, 0.0)
+	cable.material_override = flat(Color(0.1, 0.1, 0.12))
+	unit.add_child(cable)
+	return unit
+
+
+## DC fast-charging hub (commercial pass 2026-08-06): eight dispensers
+## rebuilt after the user's reference on an asphalt pad in two bays,
+## with the buffer/trafo cabinet at the back corner.
 static func _make_charging_park() -> Node3D:
 	var park := Node3D.new()
 	park.add_child(box(Vector3(1.8, 0.04, 1.6), Color(0.32, 0.33, 0.36),
 		Vector3(0.5, 0.02, 0.5)))          # asphalt pad (2x2 footprint)
-	park.add_child(box(Vector3(1.7, 0.06, 0.7), Color(0.95, 0.95, 0.97),
-		Vector3(0.5, 0.62, 0.5)))          # the canopy
+	# bay markings: pale stripes the cars nose up to
 	for i in 4:
-		park.add_child(box(Vector3(0.07, 0.6, 0.07), Color(0.75, 0.76, 0.8),
-			Vector3(-0.2 + 0.47 * i, 0.3, 0.5)))
-	for i in 4:                            # stall dispensers, both rows
-		park.add_child(box(Vector3(0.12, 0.3, 0.1), Color(0.2, 0.75, 0.85),
-			Vector3(-0.1 + 0.4 * i, 0.15, 0.24)))
-		park.add_child(box(Vector3(0.12, 0.3, 0.1), Color(0.2, 0.75, 0.85),
-			Vector3(-0.1 + 0.4 * i, 0.15, 0.76)))
+		park.add_child(box(Vector3(0.02, 0.005, 0.55), Color(0.8, 0.8, 0.78),
+			Vector3(-0.25 + 0.42 * i + 0.21, 0.045, 0.5)))
+	for i in 4:                            # dispensers, both rows face out
+		var top := ev_dispenser()
+		top.position = Vector3(-0.04 + 0.42 * i, 0.04, 0.28)
+		top.rotation_degrees.y = 180.0
+		park.add_child(top)
+		var bottom := ev_dispenser()
+		bottom.position = Vector3(-0.04 + 0.42 * i, 0.04, 0.72)
+		park.add_child(bottom)
 	park.add_child(box(Vector3(0.5, 0.42, 0.3), Color(0.85, 0.87, 0.9),
 		Vector3(1.15, 0.21, 1.15)))        # buffer/trafo cabinet
 	return park
+
+
+## The three commercial-lot silhouettes (commercial pass; also the
+## palette thumbnail for the commercial-zone tool): sawtooth hall /
+## silo+stack food plant / glassy mall. Statics so the renderer and the
+## hud share one source.
+static func commercial_lot(ctype: int) -> Node3D:
+	var lot := Node3D.new()
+	match ctype:
+		2:  # food production
+			lot.add_child(box(Vector3(0.8, 0.3, 0.62),
+				Color(0.82, 0.8, 0.74), Vector3(-0.03, 0.15, 0.0)))
+			var silo := MeshInstance3D.new()
+			var silo_mesh := CylinderMesh.new()
+			silo_mesh.top_radius = 0.11
+			silo_mesh.bottom_radius = 0.11
+			silo_mesh.height = 0.62
+			silo.mesh = silo_mesh
+			silo.position = Vector3(0.34, 0.31, 0.22)
+			silo.material_override = flat(Color(0.88, 0.88, 0.9))
+			lot.add_child(silo)
+			lot.add_child(box(Vector3(0.05, 0.5, 0.05),
+				Color(0.75, 0.3, 0.25), Vector3(0.3, 0.42, -0.22)))
+		3:  # mall
+			lot.add_child(box(Vector3(0.86, 0.34, 0.7),
+				Color(0.45, 0.62, 0.78), Vector3(0.0, 0.17, 0.0)))
+			lot.add_child(box(Vector3(0.88, 0.05, 0.72),
+				Color(0.92, 0.9, 0.85), Vector3(0.0, 0.37, 0.0)))
+			lot.add_child(box(Vector3(0.3, 0.1, 0.06),
+				Color(0.95, 0.75, 0.2), Vector3(0.0, 0.2, 0.36)))
+		_:  # general production
+			lot.add_child(box(Vector3(0.84, 0.28, 0.66),
+				Color(0.62, 0.64, 0.68), Vector3(0.0, 0.14, 0.0)))
+			for i in 3:
+				lot.add_child(box(Vector3(0.84, 0.09, 0.14),
+					Color(0.5, 0.52, 0.58),
+					Vector3(0.0, 0.32, -0.2 + 0.22 * i)))
+	return lot

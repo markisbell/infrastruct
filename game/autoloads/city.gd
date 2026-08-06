@@ -495,25 +495,6 @@ var dirty_tiles := {}
 var _batching := false
 
 
-## The 1000-kVA industrial Ortsnetzstation (commercial pass 2026-08-06):
-## the SAME substation kind with a rating override — every zone/trafo
-## mechanism applies unchanged — at the bigger station's price.
-const SUBSTATION_XL_COST := 26_000
-const SUBSTATION_XL_KVA := 1000.0
-
-
-func place_substation_xl(anchor: Vector2i, rot: int = 0,
-		flip: bool = false) -> String:
-	if not model.can_place_building("substation", anchor) \
-			or not _paid(SUBSTATION_XL_COST):
-		return ""
-	var id := model.place_building("substation", anchor, rot,
-		{"rating_kva": SUBSTATION_XL_KVA}, flip)
-	if id != "":
-		_after_build(true)
-	return id
-
-
 func _after_build(topology_relevant: bool) -> bool:
 	if topology_relevant:
 		_topo_dirty = true
@@ -1541,8 +1522,8 @@ func _try_spawn_commercial(radius: int) -> bool:
 		if info.has("charging") or not zone_supplied.get(zone_id, false):
 			continue
 		var rating := float(model.building_params(info["sub"])
-			.get("rating_kva", BuildingDefs.get_def("substation")
-				.get("rating_kva", 630.0)))
+			.get("rating_kva", BuildingDefs.get_def(
+				model.buildings[info["sub"]]["kind"]).get("rating_kva", 630.0)))
 		var expected := float(info["houses"]) * 1.8
 		for pos: Vector2i in info.get("commercial_tiles", []):
 			expected += DemandModel.commercial_peak_kw(
