@@ -229,7 +229,13 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   before any windowed run can load them, and when Vulkan wedges after
   rapid windowed create/destroy cycles (VkResult -3, survives process
   death), --rendering-method gl_compatibility --rendering-driver
-  opengl3 still renders for model review.
+  opengl3 still renders for model review. RESOLVED 2026-08-07: the
+  wedge was a FATAL GPU driver fault (kernel log: Xid 31 MMU fault +
+  Xid 154 "Node Reboot Required" + uvm fatal 0x60), preceded by
+  i915/NVIDIA fence timeouts on the PRIME path — 595-OPEN driver,
+  installed 2026-08-02. Only a reboot recovers; the game (Forward+)
+  cannot start until then while nvidia-smi keeps answering. If it
+  recurs, try the proprietary (non-open) driver variant.
   Suites: test_commercial (8); `--smoke=commercial` pins gate, XL-vs-630
   admission, summer process heat, charging sessions + income on the real
   solvers. NOT YET: industry satisfaction/abandonment (they only bill),
