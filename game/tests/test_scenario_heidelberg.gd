@@ -160,6 +160,17 @@ func test_streets_are_continuous_not_dotted() -> void:
 	assert_float(float(health["largest"]) / float(health["tiles"])) \
 		.override_failure_message("no dominant street network") \
 		.is_greater(0.6)
+	# SHAPE, the half that topology cannot see (user: "the streets just do
+	# not look right"). The grid has no diagonal road piece, so any street
+	# off the axes renders as a staircase of corners; at 51 % corner tiles
+	# it read as a sawtooth ribbon rather than a road. Axis-snapping the
+	# import brings it to ~20 %. This ceiling is the visual gate.
+	assert_int(health["bend_pct"]) \
+		.override_failure_message("streets are mostly corners — a sawtooth, not a road") \
+		.is_less_equal(30)
+	assert_int(health["blobs"]) \
+		.override_failure_message("too much solid 2x2 asphalt — blobs, not streets") \
+		.is_less(500)
 
 
 func test_road_health_detects_a_dotted_network() -> void:

@@ -391,6 +391,35 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   (REGION_SHOT family) and print SCENARIO_STATS (tile counts, buildings
   per kind, road_health) — prebuilds are hand-authored coordinates and
   want eyeballing.
+  **STREET SHAPE IS ITS OWN PROPERTY, AND TOPOLOGY CANNOT SEE IT** (user:
+  "the streets just do not look right"). The grid has NO diagonal road
+  piece — the Kenney kit ships 54 road models but its `slant` pieces are
+  ramps and `curve` is a smooth 90°, and the renderer picks each piece
+  from its ORTHOGONAL neighbours — so a street at any angle but 0/90°
+  can only be a staircase of alternating corners. Measured: HALF of all
+  two-neighbour tiles were corners, mean straight run 3.5 tiles, 727
+  solid 2x2 asphalt blocks (parallel OSM ways colliding at 25 m/tile).
+  Connectivity was perfect the whole time. Fix (user's call — it trades
+  Heidelberg's organic diagonals for readable streets, the compromise the
+  genre makes): Douglas-Peucker at 1.5 tiles then SNAP EVERY SEGMENT onto
+  its nearer axis (`STREET_SIMPLIFY_TOL` / `STREET_SNAP_DEG` in
+  Scenarios), plus `_hd_thin_roads` for the 2x2 blobs. Bends 51 % → 20 %,
+  blobs 727 → 388, components 17 → 14.
+  TRAP inside the fix: snapping CHAINS, so each way drifts off the
+  endpoints it SHARES with the streets it meets — the first version
+  scored beautifully on shape and tore the network from 17 components
+  into 85. `snap_way` re-anchors on the true endpoint; one short
+  reconnecting leg per way buys back every junction.
+  TOOLING, and the actual answer to "what can we do so you build better
+  streets": `tools/terrain/streetlab.py` rasterises the OSM extract,
+  SCORES the shape (bend %, mean straight run, 2x2 blobs, junctions AND
+  components) and draws the raster as text — 0.1 s per variant, no engine,
+  no GPU. Every earlier check was tile topology or a 40-second windowed
+  screenshot at district zoom; neither can see a sawtooth. `road_health`
+  now returns `bend_pct` and `blobs` too, and test_scenario_heidelberg
+  gates bends ≤30 % and blobs <500. Keep the lab's pipeline in step with
+  Scenarios' — a lab that disagrees with the shipped code is worse than
+  none.
   **STREETS MUST BE 4-CONNECTED** (user report: streets "unconnected or
   … circular bumps"): rounding an interpolated line gives an 8-CONNECTED
   raster, where a diagonal step leaves two tiles touching only at a

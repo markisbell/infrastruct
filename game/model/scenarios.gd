@@ -421,6 +421,7 @@ static func _build_heidelberg() -> void:
 		_hd_pave((way as Dictionary)["pts"], Rect2i(0, 0, 256, 256))
 	for way: Variant in _hd_ways(osm, "minor"):
 		_hd_pave((way as Dictionary)["pts"], strip)
+	_hd_thin_roads()
 	_hd_trim_dots()
 
 	# ── the real city: OpenStreetMap building footprints become houses ──
@@ -516,15 +517,114 @@ static func paved_line(a: Vector2i, b: Vector2i) -> Array[Vector2i]:
 	return out
 
 
-## Rasterise one OSM way into road tiles.
+## Street-shape pipeline, applied to every OSM way BEFORE it hits the grid.
+##
+## The tile grid has no diagonal road piece — the Kenney kit's `slant`
+## pieces are ramps and its `curve` is a smooth 90° — and the renderer
+## picks each piece from its ORTHOGONAL neighbours. So a street at any
+## angle but 0/90° can only be a staircase of alternating corners: a
+## sawtooth ribbon, not a road. Measured on the real extract, HALF of all
+## two-neighbour tiles were corners and the mean straight run was 3.5
+## tiles, which is what "the streets do not look right" was.
+##
+## Snapping each segment onto its nearer axis trades Heidelberg's organic
+## diagonals for streets that read as streets (user's call): bends 51 % ->
+## 16 %, mean straight run 3.5 -> 5.4 tiles, solid 2x2 asphalt 727 -> 293.
+## Simplify first, so sub-tile wiggles never become corners of their own.
+const STREET_SIMPLIFY_TOL := 1.5   # tiles — below this a wiggle is noise
+const STREET_SNAP_DEG := 45.0      # every segment onto its nearer axis
+
+
+## Douglas-Peucker on a tile polyline.
+static func simplify_way(pts: Array, tol: float) -> Array:
+	if pts.size() < 3 or tol <= 0.0:
+		return pts
+	var a := Vector2(pts[0])
+	var b := Vector2(pts[pts.size() - 1])
+	var span := a.distance_to(b)
+	var worst := -1.0
+	var idx := 0
+	for i in range(1, pts.size() - 1):
+		var p := Vector2(pts[i])
+		var dist := p.distance_to(a) if span == 0.0 \
+			else absf((b - a).cross(p - a)) / span
+		if dist > worst:
+			worst = dist
+			idx = i
+	if worst <= tol:
+		return [pts[0], pts[pts.size() - 1]]
+	var head := simplify_way(pts.slice(0, idx + 1), tol)
+	head.append_array((simplify_way(pts.slice(idx), tol) as Array).slice(1))
+	return head
+
+
+## Flatten each segment onto the axis it is closer to.
+static func snap_way(pts: Array, deg: float) -> Array:
+	if pts.size() < 2 or deg <= 0.0:
+		return pts
+	var out: Array = [pts[0]]
+	for i in range(1, pts.size()):
+		var prev: Vector2i = out[out.size() - 1]
+		var cur: Vector2i = pts[i]
+		if cur == prev:
+			continue
+		var delta := Vector2(cur - prev)
+		var ang := absf(rad_to_deg(delta.angle()))
+		if minf(ang, absf(ang - 180.0)) <= deg:
+			cur.y = prev.y
+		elif absf(ang - 90.0) <= deg:
+			cur.x = prev.x
+		out.append(cur)
+	# RE-ANCHOR on the true endpoint. Snapping chains: each segment is
+	# flattened onto the previous point, so the error accumulates and the
+	# way drifts off its ends — which are the nodes it SHARES with the
+	# streets it meets. Letting them drift tore the network from 17
+	# components into 85 while the shape metrics looked better than ever.
+	# One short reconnecting leg per way costs a corner and keeps the
+	# junctions.
+	var last: Vector2i = pts[pts.size() - 1]
+	if out[out.size() - 1] != last:
+		out.append(last)
+	return out
+
+
+## Rasterise one OSM way into road tiles, shaped first.
 static func _hd_pave(pts: Array, clip: Rect2i) -> void:
-	for i in pts.size() - 1:
-		var a := Vector2i(int((pts[i] as Array)[0]), int((pts[i] as Array)[1]))
-		var b := Vector2i(int((pts[i + 1] as Array)[0]),
-			int((pts[i + 1] as Array)[1]))
-		for p: Vector2i in paved_line(a, b):
+	var raw: Array = []
+	for entry: Variant in pts:
+		raw.append(Vector2i(int((entry as Array)[0]), int((entry as Array)[1])))
+	var shaped := snap_way(simplify_way(raw, STREET_SIMPLIFY_TOL),
+		STREET_SNAP_DEG)
+	for i in shaped.size() - 1:
+		for p: Vector2i in paved_line(shaped[i], shaped[i + 1]):
 			if clip.has_point(p):
 				City.build_road(p)
+
+
+## A solid 2x2 of asphalt is a blob, not a street — parallel OSM ways
+## (dual carriageways, service roads) collapse onto neighbouring tiles at
+## 25 m resolution. Drop one corner of each block when it carries no
+## through traffic of its own.
+static func _hd_thin_roads() -> void:
+	var drop: Array[Vector2i] = []
+	for pos: Vector2i in City.model.roads:
+		var solid := true
+		for offset: Vector2i in [Vector2i(1, 0), Vector2i(0, 1),
+				Vector2i(1, 1)]:
+			if not City.model.roads.has(pos + offset):
+				solid = false
+				break
+		if not solid:
+			continue
+		var degree := 0
+		for offset: Vector2i in ORTHOGONAL:
+			if City.model.roads.has(pos + offset):
+				degree += 1
+		if degree <= 2:
+			drop.append(pos)
+	for pos: Vector2i in drop:
+		City.model.remove_road(pos)
+		City.dirty_tiles[pos] = true
 
 
 const ORTHOGONAL: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0),
@@ -564,8 +664,30 @@ static func road_health(roads: Dictionary) -> Dictionary:
 					seen[next] = true
 					stack.append(next)
 		largest = maxi(largest, size)
+	# SHAPE, not just topology. Connectivity said this network was perfect
+	# while it rendered as a sawtooth: what decides "street or noise" is the
+	# ratio of CORNER tiles to straight ones, and how far you get before the
+	# next corner. A real street is mostly straight.
+	var straight := 0
+	var bends := 0
+	var blobs := 0
+	for pos: Vector2i in roads:
+		var links: Array[Vector2i] = []
+		for offset: Vector2i in ORTHOGONAL:
+			if roads.has(pos + offset):
+				links.append(offset)
+		if links.size() == 2:
+			if links[0] == -links[1]:
+				straight += 1
+			else:
+				bends += 1
+		if roads.has(pos + Vector2i(1, 0)) and roads.has(pos + Vector2i(0, 1)) \
+				and roads.has(pos + Vector2i(1, 1)):
+			blobs += 1
 	return {"tiles": roads.size(), "lonely": lonely,
-		"components": components, "largest": largest}
+		"components": components, "largest": largest, "blobs": blobs,
+		"bend_pct": 0 if straight + bends == 0
+			else roundi(100.0 * float(bends) / float(straight + bends))}
 
 
 ## Drop road tiles with no orthogonal neighbour at all: a lone tile renders
