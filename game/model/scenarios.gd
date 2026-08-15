@@ -533,7 +533,8 @@ static func paved_line(a: Vector2i, b: Vector2i) -> Array[Vector2i]:
 ## 16 %, mean straight run 3.5 -> 5.4 tiles, solid 2x2 asphalt 727 -> 293.
 ## Simplify first, so sub-tile wiggles never become corners of their own.
 const STREET_SIMPLIFY_TOL := 1.5   # tiles — below this a wiggle is noise
-const STREET_SNAP_DEG := 45.0      # every segment onto its nearer axis
+const STREET_SNAP_DEG := 0.0      # 0 = keep the real angles; the diagonal
+                                  # renderer draws them as smooth bands now
 
 
 ## Douglas-Peucker on a tile polyline.
@@ -758,6 +759,13 @@ static func road_health(roads: Dictionary) -> Dictionary:
 	# while it rendered as a sawtooth: what decides "street or noise" is the
 	# ratio of CORNER tiles to straight ones, and how far you get before the
 	# next corner. A real street is mostly straight.
+	# Bends INSIDE a diagonal band are not a defect: the renderer replaces
+	# that whole staircase with one straight 45° ribbon, so the eye never
+	# sees the corners. Only uncovered corners count.
+	var covered := {}
+	for path: Array in LineSpecs.diagonal_runs(roads):
+		for pos: Vector2i in path:
+			covered[pos] = true
 	var straight := 0
 	var bends := 0
 	var blobs := 0
@@ -769,7 +777,7 @@ static func road_health(roads: Dictionary) -> Dictionary:
 				links.append(offset)
 		if links.size() == 1:
 			stubs += 1     # a dead end renders as a capped "loose end"
-		if links.size() == 2:
+		if links.size() == 2 and not covered.has(pos):
 			if links[0] == -links[1]:
 				straight += 1
 			else:

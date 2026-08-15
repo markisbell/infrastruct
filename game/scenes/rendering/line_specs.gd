@@ -185,3 +185,175 @@ static func pipe_spec(model: WorldModel, pos: Vector2i, layer: Dictionary,
 		elif network_taps_here(model, pos + d, network, pos):
 			taps.append(i)
 	return {"kind": kind, "links": links, "taps": taps}
+
+
+# ─── diagonal streets ───
+#
+# A 4-connected raster cannot express a diagonal street: consecutive tiles
+# share an EDGE, so the road enters and leaves through edge midpoints and
+# must turn 90° inside every tile — which is exactly what `road-bend`
+# draws, and why a 45° street renders as a sawtooth. Measured on the real
+# Heidelberg import, bend share is set by the street's ANGLE alone and is
+# scale-invariant: 45° is 100 % corners at any tile size, so no amount of
+# extra resolution fixes it.
+#
+# The fix is to stop drawing those tiles individually. A maximal run of
+# consecutive BEND tiles IS a diagonal street, and the renderer replaces it
+# with one straight band of road-straight pieces rotated to the run's angle
+# — same art, correct direction. The model is untouched: roads stay
+# 4-connected, so topology, lot_buildable and every gameplay rule are
+# unaffected. This is purely what the eye sees.
+
+## Fewest consecutive bends worth straightening. A genuine single corner is
+## a corner; four in a row is a staircase pretending to be a street.
+const DIAGONAL_MIN_TILES := 3
+
+
+static func road_links(roads: Dictionary, pos: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0),
+			Vector2i(0, 1), Vector2i(0, -1)]:
+		if roads.has(pos + offset):
+			out.append(offset)
+	return out
+
+
+## Exactly two road neighbours, perpendicular to each other.
+static func is_bend(roads: Dictionary, pos: Vector2i) -> bool:
+	var links := road_links(roads, pos)
+	return links.size() == 2 and links[0] != -links[1]
+
+
+## Maximal staircase runs, each returned as an ORDERED path of tiles.
+## A run qualifies when it is a simple path of bend tiles, at least
+## `min_tiles` long, and MONOTONE — every x step the same sign and every y
+## step the same sign. Monotonicity is what separates a diagonal street
+## from a zigzag that doubles back on itself; a band drawn along the latter
+## would cut the corner and miss its own tiles.
+static func diagonal_runs(roads: Dictionary,
+		min_tiles: int = DIAGONAL_MIN_TILES) -> Array:
+	var runs: Array = []
+	var seen := {}
+	for start: Vector2i in roads:
+		if seen.has(start) or not _is_through(roads, start):
+			continue
+		# The component is every THROUGH tile (degree 2, bend or straight)
+		# reachable from here. Restricting it to bends only caught pure 45°
+		# staircases and left every medium-angle street — those jog with
+		# straights between their corners, which is most of a real city.
+		var component := {start: true}
+		var stack: Array[Vector2i] = [start]
+		seen[start] = true
+		while not stack.is_empty():
+			var cur: Vector2i = stack.pop_back()
+			for offset: Vector2i in road_links(roads, cur):
+				var q: Vector2i = cur + offset
+				if not component.has(q) and _is_through(roads, q):
+					component[q] = true
+					seen[q] = true
+					stack.append(q)
+		if component.size() < min_tiles:
+			continue
+		var path := _bend_path(roads, component)
+		if path.size() < min_tiles:
+			continue
+		# CUT the chain into maximal straight-ish diagonal pieces rather
+		# than judging it whole: a through-chain runs from junction to
+		# junction and a real street bends along the way, so testing the
+		# whole thing for straightness rejected nearly all of them.
+		var i := 0
+		while i + min_tiles <= path.size():
+			var last_good := -1
+			var j := i + min_tiles - 1
+			while j < path.size():
+				var candidate: Array = path.slice(i, j + 1)
+				if not (_is_monotone(candidate) and _hugs_line(candidate)):
+					break
+				last_good = j
+				j += 1
+			if last_good < 0:
+				i += 1
+				continue
+			var piece: Array = path.slice(i, last_good + 1)
+			var corners := 0
+			for pos: Vector2i in piece:
+				if is_bend(roads, pos):
+					corners += 1
+			# two corners minimum: one jog is a corner, not a diagonal
+			if corners >= 2:
+				runs.append(piece)
+			i = last_good + 1
+	return runs
+
+
+## Exactly two road neighbours — a tile the street passes THROUGH, whether
+## it turns there or not.
+static func _is_through(roads: Dictionary, pos: Vector2i) -> bool:
+	return road_links(roads, pos).size() == 2
+
+
+## Does every tile sit within half a tile of the straight line from the
+## first to the last? A raster of a straight street always does; a curving
+## one does not, and a band drawn across it would cut the corner and leave
+## its own tiles uncovered.
+static func _hugs_line(path: Array) -> bool:
+	var a := Vector2(path[0])
+	var b := Vector2(path[path.size() - 1])
+	var span := a.distance_to(b)
+	if span < 1.0:
+		return false
+	for pos: Vector2i in path:
+		if absf((b - a).cross(Vector2(pos) - a)) / span > 0.75:
+			return false
+	return true
+
+
+## Order a component of bend tiles into a path, walking from an end. A
+## component that is not a simple path (a junction of staircases, a loop)
+## comes back short and is skipped by the caller.
+static func _bend_path(roads: Dictionary, component: Dictionary) -> Array:
+	var ends: Array[Vector2i] = []
+	for pos: Vector2i in component:
+		var inside := 0
+		for offset: Vector2i in road_links(roads, pos):
+			if component.has(pos + offset):
+				inside += 1
+		if inside == 1:
+			ends.append(pos)
+		elif inside > 2:
+			return []          # a branch: not one street
+	if ends.size() != 2:
+		return []              # a loop, or an isolated tile
+	ends.sort()                # deterministic: lowest tile starts the walk
+	var path: Array[Vector2i] = [ends[0]]
+	var previous := Vector2i(2147483647, 2147483647)
+	var current: Vector2i = ends[0]
+	while path.size() <= component.size():
+		var stepped := false
+		for offset: Vector2i in road_links(roads, current):
+			var q: Vector2i = current + offset
+			if q != previous and component.has(q):
+				previous = current
+				current = q
+				path.append(current)
+				stepped = true
+				break
+		if not stepped:
+			break
+	return path if path.size() == component.size() else []
+
+
+static func _is_monotone(path: Array) -> bool:
+	var sx := 0
+	var sy := 0
+	for i in path.size() - 1:
+		var step: Vector2i = path[i + 1] - path[i]
+		if step.x != 0:
+			if sx != 0 and signi(step.x) != sx:
+				return false
+			sx = signi(step.x)
+		if step.y != 0:
+			if sy != 0 and signi(step.y) != sy:
+				return false
+			sy = signi(step.y)
+	return sx != 0 and sy != 0   # a straight line is not a diagonal

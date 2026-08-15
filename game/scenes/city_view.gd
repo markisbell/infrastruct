@@ -484,9 +484,12 @@ func redraw() -> void:
 	# neighbor-dependent pieces refresh in place. When City hands us the
 	# tiles it touched, re-orient only those + neighbors — the full pass is
 	# O(city) per placed tile and stalled drags ~36 ms on a modest town.
+	# diagonal bands first: they decide which tiles draw no piece at all,
+	# and a changed run set moves tiles well outside the dirty ring
+	var diagonals_changed := _rebuild_diagonal_roads()
 	var dirty: Dictionary = City.dirty_tiles
 	City.dirty_tiles = {}
-	if dirty.is_empty():
+	if dirty.is_empty() or diagonals_changed:
 		for pos: Vector2i in _roads:
 			_orient_road(pos, _roads[pos])
 		for pos: Vector2i in _cables:
@@ -716,8 +719,85 @@ func _make_road(pos: Vector2i) -> Node3D:
 	return node  # child mesh set by _orient_road
 
 
+# ─── diagonal streets: one band instead of a staircase of corners ───
+
+var _diag_nodes := {}    # run key -> Node3D holding the rotated pieces
+var _diag_tiles := {}    # tile -> true, the tiles a band already covers
+
+
+## Replace each maximal staircase with a straight band of road-straight
+## pieces rotated to its angle. Spaced one unit apart along the run, the
+## 1x1 pieces meet edge to edge and read as a continuous 45° road in the
+## SAME art as the rest of the network — no new asset, no procedural
+## asphalt that would not match. Returns true when the set of runs changed,
+## because then tiles outside the dirty ring need re-orienting too.
+func _rebuild_diagonal_roads() -> bool:
+	var wanted := {}
+	_diag_tiles.clear()
+	var terrain: Terrain = City.model.terrain
+	for path: Array in LineSpecs.diagonal_runs(City.model.roads):
+		# a staircase climbing a hillside stays a staircase: one flat band
+		# would sink into the slope
+		var level := terrain.height(path[0])
+		var flat := true
+		for pos: Vector2i in path:
+			if terrain.height(pos) != level:
+				flat = false
+				break
+		if not flat:
+			continue
+		wanted["%s>%s" % [path[0], path[path.size() - 1]]] = path
+		for pos: Vector2i in path:
+			_diag_tiles[pos] = true
+	var changed := false
+	for key: Variant in _diag_nodes.keys():
+		if not wanted.has(key):
+			_diag_nodes[key].queue_free()
+			_diag_nodes.erase(key)
+			changed = true
+	for key: Variant in wanted:
+		if not _diag_nodes.has(key):
+			var node := _make_diagonal_road(wanted[key])
+			add_child(node)
+			_diag_nodes[key] = node
+			changed = true
+	return changed
+
+
+func _make_diagonal_road(path: Array) -> Node3D:
+	var node := Node3D.new()
+	var from := _center(path[0])
+	var to := _center(path[path.size() - 1])
+	var span := to - from
+	var length := span.length()
+	if length <= 0.0:
+		return node
+	var forward := span / length
+	# road-straight is measured E-W (see the --roadtest natives), and Godot
+	# +yaw is CCW, so mapping +X onto the run direction is atan2(-z, x)
+	var yaw := atan2(-forward.z, forward.x)
+	var count: int = maxi(1, roundi(length))
+	for i in count:
+		var piece := _instance_glb(
+			"city-kit-roads/Models/GLB format/road-straight.glb", 1.0)
+		piece.position = from + forward * (length * (float(i) + 0.5)
+			/ float(count))
+		piece.rotation.y = yaw
+		node.add_child(piece)
+	return node
+
+
 ## Piece/orientation decisions live in LineSpecs (Phase-5 extraction).
 func _orient_road(pos: Vector2i, node: Node3D) -> void:
+	if _diag_tiles.has(pos):
+		# a band already covers this tile — drawing the bend underneath
+		# would poke the sawtooth back out through the road surface
+		if node.get_meta("piece", "") == "diagonal":
+			return
+		node.set_meta("piece", "diagonal")
+		for child in node.get_children():
+			child.queue_free()
+		return
 	var pick := LineSpecs.road_piece(LineSpecs.road_mask(City.model, pos))
 	var wanted: String = "%s|%d" % [pick[0], pick[1]]
 	if node.get_meta("piece", "") == wanted:

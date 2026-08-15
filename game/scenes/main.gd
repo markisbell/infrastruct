@@ -307,6 +307,7 @@ func _take_screenshot() -> void:
 			"cable_health": Scenarios.road_health(City.model.cables),
 			"heat_health": Scenarios.road_health(City.model.heat_pipes),
 			"water_health": Scenarios.road_health(City.model.water_pipes),
+			"diag_runs": LineSpecs.diagonal_runs(City.model.roads).size(),
 			"orphans": _orphan_devices(),
 			"topology": _topology_report()}))
 		get_tree().quit(0)

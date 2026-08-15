@@ -134,3 +134,69 @@ func test_pipe_spec_single_building_tap() -> void:
 		taps += (LineSpecs.pipe_spec(model, Vector2i(x, 5),
 			model.water_pipes, "water")["taps"] as Array).size()
 	assert_int(taps).is_equal(1)
+
+
+# ─── diagonal streets ───
+
+func _roads(tiles: Array) -> Dictionary:
+	var out := {}
+	for pos: Vector2i in tiles:
+		out[pos] = true
+	return out
+
+
+func test_diagonal_run_found_on_a_staircase() -> void:
+	# The whole point: a 45° street rasterised 4-connected is a chain of
+	# corners, and the renderer draws one straight band over it instead of
+	# a bend per tile. Five steps of a staircase, plus a stub at each end
+	# so the run has somewhere to start and stop.
+	var tiles: Array = [Vector2i(0, 0)]
+	var cur := Vector2i(0, 0)
+	for i in 5:
+		cur += Vector2i(1, 0)
+		tiles.append(cur)
+		cur += Vector2i(0, 1)
+		tiles.append(cur)
+	var runs := LineSpecs.diagonal_runs(_roads(tiles))
+	assert_int(runs.size()).is_equal(1)
+	# the run must be ordered and contiguous, or the band is drawn wrong
+	var path: Array = runs[0]
+	assert_int(path.size()).is_greater_equal(LineSpecs.DIAGONAL_MIN_TILES)
+	for i in path.size() - 1:
+		var step: Vector2i = path[i + 1] - path[i]
+		assert_int(absi(step.x) + absi(step.y)).is_equal(1)
+
+
+func test_straight_and_single_corner_are_left_alone() -> void:
+	# an axis-aligned street is already drawn correctly by road-straight
+	var straight: Array = []
+	for x in 10:
+		straight.append(Vector2i(x, 0))
+	assert_array(LineSpecs.diagonal_runs(_roads(straight))).is_empty()
+	# and ONE corner is a corner, not a diagonal — road-bend is right there
+	var elbow: Array = []
+	for x in 6:
+		elbow.append(Vector2i(x, 0))
+	for y in range(1, 6):
+		elbow.append(Vector2i(5, y))
+	assert_array(LineSpecs.diagonal_runs(_roads(elbow))).is_empty()
+
+
+func test_a_zigzag_that_doubles_back_is_not_a_diagonal() -> void:
+	# monotonicity is what separates a street from a switchback: a band
+	# drawn end-to-end across this would cut the corner and miss its tiles
+	var zigzag: Array = [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1),
+		Vector2i(2, 1), Vector2i(2, 2), Vector2i(1, 2), Vector2i(1, 3),
+		Vector2i(0, 3), Vector2i(0, 4)]
+	for run: Array in LineSpecs.diagonal_runs(_roads(zigzag)):
+		var sx := 0
+		var sy := 0
+		for i in run.size() - 1:
+			var step: Vector2i = run[i + 1] - run[i]
+			if step.x != 0:
+				assert_bool(sx == 0 or signi(step.x) == sx).is_true()
+				sx = signi(step.x)
+			if step.y != 0:
+				assert_bool(sy == 0 or signi(step.y) == sy).is_true()
+				sy = signi(step.y)
+	

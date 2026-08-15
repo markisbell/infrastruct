@@ -410,6 +410,31 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   scored beautifully on shape and tore the network from 17 components
   into 85. `snap_way` re-anchors on the true endpoint; one short
   reconnecting leg per way buys back every junction.
+  **DIAGONAL STREET RENDERER (2026-08-15, user request) — and it REPLACES
+  the axis snap rather than joining it.** `LineSpecs.diagonal_runs` finds
+  maximal monotone through-chains that hug a straight line, and CityView
+  draws each as one band of `road-straight` pieces rotated to its angle,
+  spaced a unit apart so the 1x1 pieces meet edge to edge — same art as
+  the rest of the network, no new asset, no procedural asphalt that would
+  not match. Purely visual: roads stay 4-CONNECTED, so topology,
+  lot_buildable and every gameplay rule are untouched. With it,
+  `STREET_SNAP_DEG` went back to 0 and Heidelberg keeps its REAL angles:
+  368 runs, uncovered bends 20 % — the same visual quality as the snapped
+  grid but organic instead of Manhattan.
+  Design notes worth keeping: the band must be drawn ALONG THE RUN, never
+  per tile — 4-connected tiles share an EDGE, so consecutive tile centres
+  zigzag and per-tile diagonals would still sawtooth. Detection went
+  through three shapes before it worked: bends-only components caught pure
+  45° staircases and missed every medium-angle street (73 runs, 46 %
+  uncovered); whole through-chains failed the straightness test wholesale
+  because a real street bends somewhere along its length (26 runs, 46 %);
+  the answer is to CUT each chain greedily into maximal straight-ish
+  pieces (280 runs at min 4, 368 at min 3). `road_health`'s bend_pct now
+  EXCLUDES tiles inside a band — a corner nobody can see is not a defect,
+  and gating the raw count would have failed a render that looks right.
+  test_line_specs pins the detector: a staircase yields one contiguous
+  ordered run, a straight and a single elbow yield none, and a switchback
+  never yields a non-monotone run.
   **BUBBLES, RINGS AND LOOSE ENDS** (user, after the snap landed). Named
   precisely by `LineSpecs.road_piece`: mask 0 draws `road-end-round` (a
   literal round cap — the bubble), masks 1/2/4/8 draw `road-end` (the
