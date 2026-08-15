@@ -317,8 +317,159 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
 - **Scenarios**: sandbox / tutorial (9 steps) / greenfield / inherited grid
   (20-kW relic, loses by misery untouched) / energy transition / off-grid
   village (battery-formed island, win by growing it happy while staying
-  off-grid); difficulty scales growth/events/money. Prebuilds run BEFORE
-  the start budget lands.
+  off-grid) / HEIDELBERG (reference city); difficulty scales
+  growth/events/money. Prebuilds run BEFORE the start budget lands.
+- **HEIDELBERG REFERENCE CITY (2026-08-14, user request: "build the city
+  Heidelberg… as a reference for further investigations")** — the largest
+  prebuild we ship and the first one drawn from reality rather than
+  invented. `game/data/terrain/heidelberg.json` (fetched with the existing
+  `tools/terrain/fetch_region.py`, centre 49.4100 N / 8.7000 E = the Alte
+  Brücke, **478 m relief → 41 levels, 11.7 m/level** — steeper than
+  schwarzwald). Tile coordinates come from real lat/lon through the SAME
+  Web Mercator math the fetcher uses, so districts sit where they sit:
+  Altstadt pinched between the Neckar and the Königstuhl (level 37 vs the
+  valley's 1), Bergheim, Weststadt, Hauptbahnhof, Südstadt, and across the
+  river Neuenheim and Handschuhsheim. Infrastructure follows the real
+  city's SHAPE: MV and district heat arrive FROM THE WEST (Heidelberg's DH
+  is largely GKM Mannheim waste heat plus the Pfaffengrund biomass plant —
+  its Energie- und Zukunftsspeicher is the heat store beside the CHP; the
+  real energy park lies just outside the 6.4 km window, so the west map
+  edge stands in for it), drinking water comes from Rhine-plain well
+  fields by the river, and the pressure tower sits on the Königstuhl slope
+  at level 13 (=65 m head) the way Heidelberg's Hochbehälter do.
+  LESSONS, all of which cost a pass: (1) hand-picked lat/lon for the river
+  in the GORGE kept landing on the Königstuhl slope — the city stretch is
+  anchored on the three real BRIDGE crossings (a bridge is by definition
+  on the river, and the Rhine plain is far too flat for the DEM to reveal
+  a channel) while the gorge SNAPS to the baked DEM's valley floor.
+  (2) REAL STREETS AND REAL BUILDINGS, since 2026-08-14 (user request):
+  `game/data/terrain/heidelberg_osm.json` is an OpenStreetMap extract
+  (Overpass, projected through the SAME Mercator math as the DEM) — 992
+  arterial ways + 1 398 minor ways + 1 532 Altstadt/Neuenheim building
+  footprints. The invented street grid is gone: the city is paved from
+  the real arterials map-wide (~3 300 tiles) PLUS the minor lanes inside
+  the footprint strip only (arterials alone leave 78 % of buildings with
+  no street in reach; every minor way in the window would add 5 800 tiles,
+  a third of the map), and one house is seated per real footprint.
+  **LICENCE: OSM is ODbL — attribution and share-alike ride with that
+  file.** The DEM (AWS/SRTM) is not; if the ODbL is unwanted in-repo the
+  street geometry has to be hand-redrawn from OSM as a reference, the way
+  the Sketchfab-referenced models were. Two mechanical lessons: a footprint
+  centroid rounds ONTO the lane beside it 24 % of the time (a 25 m tile is
+  coarser than a Heidelberg street), so `_hd_lot_near` steps a building to
+  its first free neighbour instead of dropping it; and UTILITIES GO DOWN
+  BEFORE THE STREETS — a road may be paved over a buried trench but never
+  over a building, and laying the streets first silently swallowed the
+  pumping station and a well, leaving a water network with no source.
+  Supply seating walks the corridor INDEPENDENTLY PER KIND: with 3 300
+  tiles of real street the four seats beside a corridor tile are often all
+  asphalt, and a shared walk let the substation take the last free tile
+  and left the city with two heat exchangers instead of twenty. (3) Corridors are
+  BURIED and that is not cosmetic: a SURFACE line cannot cross a road at
+  all, so an overhead trunk could never enter a district; buried MV, heat
+  and water share the street cross-section the way they really do.
+  (4) The first pass zoned ~2100 tiles but supplied only 6 substations, so
+  92 % of the city was land that could never grow — a substation's radius
+  12 / 150 houses is about a real Ortsnetzstation, so a CITY needs a ROW
+  of them (now ~14, one per ~20 tiles of street). **THE HEADLINE FINDING:
+  there are no river BRIDGES and water blocks every kind of construction,
+  so the Neckar cuts the map in two and the north bank had to be built as
+  its OWN network with its OWN 110/20 kV infeed.** That is defensible
+  (Neuenheim really is fed from other substations) but it is a workaround,
+  not a model — bridges are the unlock that would make this one city, and
+  test_scenario_heidelberg pins the 2-infeed consequence so it changes
+  deliberately. Scale is compressed: ~814 houses (53 % of the real
+  footprints; the rest are courtyard/backland buildings, or lost to the
+  utility trenches that claim their trench first) stand in for a core of
+  tens of thousands of households — the game's zone model is a town model.
+  VERIFIED ON THE REAL SOLVERS: `--smoke=scenarios` phase F registers the
+  city and converges on all three networks with 28 supplied zones, 34
+  substations, 20 heat exchangers — a city-scale model, not just a town,
+  closes. Suites:
+  test_scenario_heidelberg (6). `SCENARIO_SHOT=<id>` +
+  `SCENARIO_FOCUS=x,y,zoom` env probes render any prebuilt scenario
+  (REGION_SHOT family) and print SCENARIO_STATS (tile counts, buildings
+  per kind, road_health) — prebuilds are hand-authored coordinates and
+  want eyeballing.
+  **STREETS MUST BE 4-CONNECTED** (user report: streets "unconnected or
+  … circular bumps"): rounding an interpolated line gives an 8-CONNECTED
+  raster, where a diagonal step leaves two tiles touching only at a
+  CORNER — and the road renderer picks each piece from its ORTHOGONAL
+  neighbours, so every such step drew two dead-end caps. The OSM import
+  shipped 97 fully isolated tiles and 803 diagonal dead ends out of 3 600
+  (22 %). `Scenarios.paved_line` inserts the elbow tile (+650 tiles,
+  `lonely` 97→0), and `_hd_trim_dots` drops single-tile ways that are
+  below map resolution. `Scenarios.road_health(roads)` reports
+  {tiles, lonely, components, largest} — a shattered network still looks
+  fine in a tile COUNT, so the component count is the signal. Pinned by
+  test_scenario_heidelberg: paved_line is 4-connected for six segment
+  shapes incl. exact 45°, the city has 0 lonely tiles / ≤30 components /
+  a >60 % dominant network, AND road_health itself is shown to FAIL on a
+  synthetic diagonal chain (a detector that cannot fail is not a test).
+  **THE HEAT MODEL HAS EXACTLY ONE PRODUCER** (found placing Heidelberg's
+  real Stadtwerke plants, user request): `HeatTopology` emits ONE
+  producer — the slack — and takes the whole network's flow temperature
+  from THAT plant's kind (`heat_topology.gd:182`); every other plant
+  sitting at a degree-1 leaf is rewritten into a `bypass_` CONSUMER stub
+  (:160), so extra heat plants are scenery, not supply. The slack is
+  `plant_ids.sort()[0]`, i.e. chosen by ID STRING: "boiler_plant" sorts
+  before "chp_plant", so ONE boiler anywhere silently drops the entire
+  city from 85 °C to 66 °C — on a 487-pipe network the far ends stop
+  being servable and frames come back `failed` (heat converged 9-in-9 →
+  5, with failures). Heidelberg therefore ships NO boiler_plant and
+  models Heizwerk Mitte as a CHP. Same limit kills a SECOND district
+  heating system: the north bank cannot have its own (it BFSes from the
+  single slack and drops the rest — "only the slack plant's network is
+  solved"), so the real gas Heizkraftwerk Heidelberg is modelled as a
+  plain gas_plant. Power grew `grid_forming` islands for exactly this;
+  heat has no equivalent, and that is the next contract candidate.
+  **"MOST THERMAL UNITS ARE NOT CONNECTED" (user report, 2026-08-14) —
+  and it was NOT the buried-crossing rule.** Buried lines of different
+  networks already share a tile: `_other_lines_conflict` blocks a buried
+  entry only against a SURFACE one, which is why the corridors carry
+  cable+heat+water on identical tiles. What actually severed things was
+  that A LINE MAY NOT CROSS A BUILDING. Three separate cuts, each found
+  by asking the BUILDERS rather than counting tiles:
+  (1) the Energiepark heat tie-in ran along y=151 straight through the
+  grid connection's 2x2 footprint at (26,151)/(27,151), cutting the SLACK
+  plant off the trunk — HeatTopology fell back to a 2-exchanger island
+  and dropped the 273-tile main network. **It converged 9 frames out of 9
+  the whole time, because a tiny network solves perfectly: CONVERGENCE
+  NEVER IMPLIED COVERAGE**, and heat_pipes tile counts looked healthy.
+  (2) supply trios seated inside the corridor loop severed the corridors
+  laid after them; the build is now three strict phases — every validated
+  BUILDING, then every trench, then the seated trios (then streets, then
+  houses). (3) the well feeder ran 12 tiles down the middle of the Neckar
+  (y=101 is inside a 5-wide channel centred near y=99 there), so both
+  wells sat on their own network; it detours to y=103 and keeps the
+  3-tile river bonus. Result: heat zones 2 → 20, water 18 → 20, power 35,
+  ZERO builder warnings, no orphan devices.
+  **THE SINGLE PRODUCER MUST BE CENTRAL.** Once the network was genuinely
+  connected the physics bit: an 85 °C slack at the WEST MAP EDGE fed a
+  6.75 km network whose far exchangers arrived at 54, 35, 20, finally
+  10 °C (`t_supply_low` on eight zones, then `failed`). The producer moved
+  to Heizwerk Mitte in the middle of town and Südstadt came off district
+  heating entirely — which is also what the real city does, its DH
+  concentrating on Bergheim/Weststadt/Altstadt/Neuenheim. Heat now
+  converges 6 frames in 9; the far Altstadt still runs cool, and that is
+  a true result rather than a bug: real Heidelberg holds temperature with
+  SEVERAL feed-in points and the contract allows exactly one.
+  DIAGNOSTICS that made this findable, all in SCENARIO_STATS:
+  `Scenarios.road_health()` per LAYER (cable/heat/water, not just roads),
+  `_orphan_devices()` (a building with no line of its own network
+  touching it, by id and tile) and `_topology_report()` (what the three
+  builders actually KEEP — zones + their own warnings). Pinned by
+  test_scenario_heidelberg: all three builders report no warnings AND
+  every heat exchanger / water station / substation becomes a zone. The
+  gap between "built" and "reachable" is where this class of bug lives.
+  SMOKE GATE LESSON: phase F asserted `converged >= 1` per network and
+  happily reported ok while heat ran 2 frames in 9 — the gate now demands
+  >= 6, and the phase runs at 8x instead of 60x because a city-scale heat
+  model does not solve inside a 60x step (the orchestrator allows one
+  in-flight step per network, so the rest were SKIPS, not failures; the
+  smoke also reports `heidelberg_why` — status/violations of the first
+  non-converged frames — because a bare converged-count says a city is
+  broken but never where).
 - **REAL-DEM TERRAIN + SMOOTH RELIEF (2026-08-02, user request: "looks
   like Minecraft")**: `Terrain.load_region(name)` swaps the noise HEIGHTS
   for a baked real region (`game/data/terrain/<name>.json` — AWS/Mapzen
@@ -371,6 +522,18 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   blocked tiles). DEAD-LOT overlay (2026-08-02): zoned lots that can't
   take a house RIGHT NOW (no same-height road — cliff edges!, a line
   across, paved over) tint AMBER instead of green;
+  LOT RULE LOOSENED (2026-08-14, user call — the one-house-touching-the-
+  street rule "makes things too complicated"): a lot may now sit
+  `ROAD_REACH` = 3 tiles from its street and `ROAD_STEP` = 1 terrain level
+  above or below it (a driveway climbs a terrace, not a cliff). The old
+  touching-and-level-with rule forced every district into a comb of
+  streets three rows apart; measured against OpenStreetMap's real
+  Heidelberg footprints it admitted only 22 % of the actual buildings even
+  with every arterial paved, against 81 % for reach 3 (and 46 %→56 % from
+  the ±1 step alone, all of it hillside). A block is a block now, not a
+  ribbon. Growth got easier everywhere as a side effect — greenfield 29→31
+  houses, playtest 37→40, both still green; test_terrain pins reach 3 and
+  the two-step cliff that must still be refused.
   `WorldModel.lot_buildable` is the ONE predicate shared by growth,
   `spawn_candidates` and the overlay (a cliff-side zoning strip stalled a
   real town at 3 houses for 120 days with zero feedback), and `_grow`
@@ -427,6 +590,85 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   bottom-center anchor preset + grow directions do the re-fit on their
   own — each cost a screenshot loop). test_hud_components pins that no
   tab row ever drops a tile.
+  **HOTBAR + PIPETTE (2026-08-14, user request: the tabbed bottom bar is
+  "not user friendly"; 5 research agents — Minecraft/JEI, city-builders,
+  factory builders, HCI menu literature, Godot UI)**. The diagnosis was
+  NOT cosmetic: a tab row reuses the same screen cell for a different
+  tool per tab, so the location→tool mapping never stabilises (Somberg
+  CHI'87; Mitchell & Shneiderman: users are SLOWER with reordering menus
+  and 81 % prefer static), and hotkey-auto-switches-tab changed the
+  visible set under a motionless cursor. Round-trip cost ~1.6-2.0 s per
+  tool change (Cockburn's Fitts constants). NO RADIAL: the HCI numbers
+  favour it (Callahan CHI'88 ~15 % faster/~42 % fewer errors at 8 items)
+  but radial build menus appear in the genre only as GAMEPAD
+  substitutions (Frostpunk/Anno console) and a wedge cannot carry
+  "€26 000 · 1000 kVA" — radials belong on an armed tool's 2-6 variants
+  (Satisfactory hold-E), not on a 28-tool catalogue.
+  LANDED (layers 1+3 of a 4-layer design): `Hotbar` (game/scenes/hud/,
+  pure + persisted) = 10 slots on 1-0 whose POSITIONS NEVER MOVE;
+  unaffordable tools dim but KEEP their slot and stay selectable (a slot
+  that vanishes on a money dip shifts every neighbour — the exact sin
+  Factorio's FFF-278 quickbar rework undid). Digits match
+  `physical_keycode` (AZERTY's unshifted number row isn't digits);
+  mnemonic LETTERS stay on `keycode` (QWERTZ prints Z where US has Y) —
+  the two rules deliberately differ. DEFAULT LOADOUT = the district loop
+  spanning EVERY network (road · zone · overhead line · substation · heat
+  pipe · heat exchanger · water pipe · water station · repair ·
+  bulldozer). Seeding it from the old digit binds instead was the first
+  attempt and was WRONG (user report same day: "you eliminated everything
+  but electricity") — those binds were power-heavy precisely because heat
+  and water had only ever had LETTER aliases, so the one always-visible
+  row showed six electricity tools and no heat or water at all. On the
+  always-visible row, absent reads as DELETED; test_hud_components pins
+  category coverage now. Slots 1-4 kept their old meaning; the
+  few-times-per-city placements (gas/wind/solar/battery/grid) live in the
+  catalogue. Persistence:
+  `user://settings.cfg` via ConfigFile (the project's FIRST settings
+  file), NOT the save envelope — a loadout is a player preference and
+  the envelope is golden/contract sensitive; stored as STABLE STRING
+  IDS, never Tool enum ints (tools get appended regularly; a mid-enum
+  insert would silently rebind every saved slot). Pin gesture = hover a
+  catalogue tile + press the digit (Minecraft creative's own binding
+  gesture), middle-click a slot clears. The palette table gained a
+  stable `id` per entry (PERSISTENCE key — never rename a shipped one).
+  The CATALOGUE stays VISIBLE by default (TAB still folds it away).
+  Hiding it was tried and reverted the same day: combined with the
+  power-heavy default loadout it made every tool that had moved off the
+  digit row look deleted. Anything the hotbar does not hold must stay on
+  screen.
+  `ToolPipette.sample(model, pos)` = middle-click (or S) → arm the tool
+  that built the tile, CARRYING the variant (buried vs surface) and
+  rot/flip (a picked-up solar park that reset its facing would silently
+  change its yield). Probe order buildings > lines > house/commercial >
+  zoning > roads: LINES OUTRANK ROADS deliberately, because a buried run
+  under a road is the one thing whose kind you cannot see. Middle-button
+  click-vs-drag is `_pan_travel < PIPETTE_MAX_TRAVEL` (6 px) so the
+  pipette shares the pan button; RMB stays camera-only (the old
+  accidental-bulldoze lesson). Suites: test_hotbar (7), test_tool_pipette
+  (7), test_hud_components +2 — incl. the REFLEXIVE completeness check
+  that every `CityView.Tool` appears in the palette (a consistency sweep
+  over a table proves nothing about the table being COMPLETE — §6). Real
+  input verified with a TEMPORARY screenshot-mode probe (warp_mouse +
+  parse_input_event): both cable kinds on ONE run pipette to their own
+  tool, a 40-px middle-drag still pans. GdUnit 260/260;
+  saveload/citylife/playtest green.
+  NOT YET (layers 2+4 of the design): the flat all-28-tiles catalogue
+  with a SEARCH field (fuzzy over name/category/network + GERMAN aliases
+  — Ortsnetzstation, Erdkabel, Freileitung, Wärmespeicher, Brunnen — and
+  ratings as text "630"/"1000"/"3 MW"; Furnas: two people pick the same
+  term <20 % of the time), collapsing surface/buried into one tool + a
+  variant modifier (city.gd:308-313 already maps both to one `kind` int,
+  so it is a UI-only change), and an MRU strip. LANDMINE FOR THAT WORK:
+  `city_view.gd:1304` PANS THE CAMERA from `Input.get_axis(&"ui_left"…)`
+  polled in `_process`, and polled input ignores GUI focus — the moment a
+  focusable LineEdit exists, arrow keys pan the map while you type. Gate
+  it on `get_viewport().gui_get_focus_owner() is LineEdit`. Second trap:
+  the HUD's blanket `FOCUS_NONE` is LOAD-BEARING (hud.gd says so) —
+  making tiles focusable turns TAB into `ui_focus_next` and SPACE into
+  `ui_accept`, killing the menu toggle and pause; only the search field
+  may take focus, and grid nav must be a hand-rolled cursor index. Third:
+  Esc must get ONE owner or it becomes a 3-press ritual (LineEdit
+  unfocus → close panel → disarm tool).
   Smokes recalibrated for sampled variance: maintenance grid override
   140 kW, drought tower 0.5 m³ + 9 h window + dry-phase (not end-instant)
   assertion — calibrated smokes must assert WINDOW properties, samples
@@ -518,6 +760,19 @@ re-verified green).
   three times as exit 124/143 — every kill was misread as
   infrastructure noise. A timed-out run has NO verdict: a gate only
   counts when its one JSON line actually printed.
+- **BULK EDITS MUST BATCH THE SIGNAL** (2026-08-14, reported as "it
+  crashed"): `City.world_changed` is wired straight to `CityView.redraw`,
+  and redraw is a FULL pass — `DecoScatter.placements()` over the whole
+  65k-tile scatter, eight layer diffs, and `lot_buildable` for EVERY zoned
+  tile. Fine per player action, quadratic per thousand. The Heidelberg
+  prebuild's ~4 500 build calls froze the game for MINUTES at ~90 % CPU on
+  one thread with ~1 GB RSS, before it ever reached the solvers (the tell:
+  the backends had received only `/health`, never a `/gb/net/reset`). It
+  was never a crash — nothing in the Godot log, no signal, process alive.
+  `City.begin_bulk()` / `end_bulk()` hold the storm and emit ONCE;
+  `Scenarios.start` wraps every prebuild. **Measured: 260.5 s → 8.3 s, 31×.**
+  `build_path` had always done this for drawn paths (`_batching`) — the
+  lesson is that anything laying more than a handful of tiles must too.
 - **GDScript lambdas capture scalars BY VALUE** — mutate Dictionaries instead.
 - **JSON wire: every number arrives as float** (Godot stringify makes 1 → 1.0);
   backends accept zero-fraction floats (`_as_int`), the contract suite pins it
@@ -560,7 +815,55 @@ re-verified green).
   `city_view.sun_dir_world()`); CLOUDS drift with
   the wind (smooth alpha puffs + invisible SHADOWS_ONLY twins — alpha-hash
   cast shadows but dithered; unshaded overlays glow at night, keep them
-  shaded). WIND DIRECTION (2026-07-31): `WeatherSystem.wind_dir_rad` (slow
+  shaded).
+  **CLOUD MORPHOLOGY (2026-08-14, user request: "smaller and larger
+  clouds as well as connected cloud covers")** — `CloudField`
+  (game/scenes/rendering/, statics testable + build() early-returns
+  headless), replacing 26 near-identical blobs scattered uniformly at
+  random altitudes. Three published facts, each fixing one tell:
+  (1) SIZES ARE POWER-LAW, not a uniform range — Wood & Field (2011)
+  measured N(L) ∝ L^-1.66 with an exponential SCALE BREAK at the top
+  (satellite retrievals 1.6-2.2, shallow-convection LES 1.7-1.9); the
+  sampler is a BOUNDED inverse-CDF draw, which is the scale break in its
+  cheapest honest form and means no draw can ever produce a map-sized
+  cloud (clamped on the way out too — the pow round-trip lands a hair
+  past hi at u=1). (2) CUMULUS BASES ARE FLAT AND ALL AT ONE ALTITUDE
+  (the LCL belongs to the air mass, not the cloud) — it is the TOPS that
+  grow, and randomising base height is what made the old puffs read as
+  stickers hung at arbitrary heights. Vertical development OUTRUNS
+  horizontal growth (humilis is a flat pancake, congestus is as tall as
+  it is wide): growing both linearly made big clouds relatively FLATTER,
+  caught by the unit test, fixed with pow(size, 0.8) vs pow(size, 1.2).
+  (3) FIELDS ORGANISE ALONG THE WIND (horizontal convective rolls put
+  cumulus in wind-parallel streets) and CLOSE INTO AN UNBROKEN SHEET at
+  cloud fraction ~1 (closed-cell stratocumulus). So `cover` drives THREE
+  things, not just a visible count: `visible` (pool share; the pool is
+  sorted SMALL FIRST so a clear sky shows fair-weather puffs, not one
+  lone giant), `swell` (connected cover comes from clouds GROWING until
+  they touch — that is what actually merges them) and `fill` (streets
+  dissolving into a filled sheet past ~0.62).
+  GEOMETRY GOTCHAS, each cost a screenshot loop: clouds are positioned in
+  WIND SPACE and the wrap runs there too — wrapping world x/z slices the
+  streets into segments whenever the wind isn't axis-aligned, and BOX
+  must stay an exact multiple of the street spacing or a wrapped cloud
+  lands between streets. The field TILES AROUND THE CAMERA (`BOX` 160,
+  folded around `_cam_focus`): spread over the 256-tile map it took
+  ~1800 clouds to look overcast because the viewport sees well under 1 %
+  of the map — the SAME trap the wind arrows hit ("a world-fixed arrow
+  field misses the ~30-unit viewport entirely at map scale"). Sizes are
+  tuned to the CAMERA, not the atmosphere: a real cumulus is 1-2 km
+  across = 40-80 tiles and rendered as a single white wall (first tuning
+  pass); `WORLD_SCALE` compresses to ~5 units small / ~14 large and the
+  DISTRIBUTION carries the realism. `BASE_Y` (24.0) is a READABILITY
+  dial as much as a physical one — the iso camera has no horizon, the
+  ground fills the frame, so every cloud overlaps some of it; raising the
+  deck pushes clouds into the far band and keeps the middle of the frame,
+  where the player builds, clear (at 15.5 an overcast sky buried the
+  city). One SHARED unit SphereMesh for every puff now (the old field
+  allocated a SphereMesh per puff, defeating batching).
+  `CLOUD_COVER=0..1` env probe pins the cover for a screenshot (the
+  REGION_SHOT/PALETTE_TAB pattern) since the real one comes from the
+  seeded clearness field. Suite: test_cloud_field (5). WIND DIRECTION (2026-07-31): `WeatherSystem.wind_dir_rad` (slow
   synoptic veer, seeded noise offset +500 to decorrelate from speed; visual
   only — turbines use speed). Clouds drift along it and 18 SMALL faint
   grey ARROWS (alpha 0.3) point/drift with it. The arrows are

@@ -103,10 +103,11 @@ func test_palette_table_is_consistent() -> void:
 	var hud := Hud.new()
 	var tools_seen := {}
 	var keys_seen := {}
+	var ids_seen := {}
 	for cat: Dictionary in hud._build_items():
 		for item: Dictionary in cat["items"]:
 			var label: String = item["label"]
-			for field: String in ["tool", "label", "mono", "key", "desc"]:
+			for field: String in ["tool", "id", "label", "mono", "key", "desc"]:
 				assert_bool(item.has(field)) \
 					.override_failure_message(label + " missing " + field).is_true()
 			# a palette entry names either a building kind or its own color+cost
@@ -119,9 +120,68 @@ func test_palette_table_is_consistent() -> void:
 			assert_bool(tools_seen.has(item["tool"])) \
 				.override_failure_message(label + ": duplicate tool").is_false()
 			tools_seen[item["tool"]] = true
-			assert_bool(keys_seen.has(item["key"])) \
-				.override_failure_message(label + ": duplicate hotkey").is_false()
-			keys_seen[item["key"]] = true
+			# ids are PERSISTENCE keys (hotbar loadouts): a duplicate or an
+			# empty one silently binds two tools to one slot
+			assert_str(str(item["id"])) \
+				.override_failure_message(label + ": empty id").is_not_empty()
+			assert_bool(ids_seen.has(item["id"])) \
+				.override_failure_message(label + ": duplicate id").is_false()
+			ids_seen[item["id"]] = true
+			# "" means "no letter alias" (the digit row belongs to the
+			# hotbar now) and may repeat; a real letter may not
+			if str(item["key"]) != "":
+				assert_bool(keys_seen.has(item["key"])) \
+					.override_failure_message(label + ": duplicate hotkey").is_false()
+				keys_seen[item["key"]] = true
+	hud.free()
+
+
+func test_palette_covers_every_tool_in_the_enum() -> void:
+	# the reflexive check: a consistency sweep over the table says nothing
+	# about the table being COMPLETE, and three palette entries once went
+	# missing with every gate still green. The hotbar, the pipette and the
+	# catalogue all resolve through this table — a tool absent from it is
+	# unreachable and unpinnable.
+	var hud := Hud.new()
+	var tools_seen := {}
+	for cat: Dictionary in hud._build_items():
+		for item: Dictionary in cat["items"]:
+			tools_seen[item["tool"]] = true
+	for name: String in CityView.Tool.keys():
+		assert_bool(tools_seen.has(CityView.Tool[name])) \
+			.override_failure_message("tool %s is in no palette category" % name) \
+			.is_true()
+	hud.free()
+
+
+func test_hotbar_defaults_name_real_palette_tools() -> void:
+	# a default slot pointing at a renamed id would ship an empty hotbar
+	var hud := Hud.new()
+	var ids := {}
+	var category_of := {}
+	for cat: Dictionary in hud._build_items():
+		for item: Dictionary in cat["items"]:
+			ids[item["id"]] = item
+			category_of[item["id"]] = str(cat["cat"])
+	for id: String in Hotbar.DEFAULT_IDS:
+		assert_bool(ids.has(id)) \
+			.override_failure_message("default hotbar slot '%s' names no tool" % id) \
+			.is_true()
+	# THE regression pin (user report 2026-08-14, "you eliminated
+	# everything but electricity"): the hotbar is the always-visible row,
+	# so a default loadout that skips a network makes that network read as
+	# REMOVED. Seeding it from the old digit binds did exactly that —
+	# those were power-heavy because heat and water only ever had letter
+	# aliases. Every category must appear.
+	var covered := {}
+	for id: String in Hotbar.DEFAULT_IDS:
+		covered[category_of.get(id, "?")] = true
+	for cat: Dictionary in hud._build_items():
+		assert_bool(covered.has(str(cat["cat"]))) \
+			.override_failure_message(
+				"no default hotbar slot holds a %s tool — that network " % cat["cat"]
+				+ "looks deleted on a fresh start") \
+			.is_true()
 	hud.free()
 
 

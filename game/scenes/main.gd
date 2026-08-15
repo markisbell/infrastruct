@@ -278,6 +278,39 @@ func _take_screenshot() -> void:
 	# --hour=N picks another time (dusk/night verification shots)
 	GameClock.restore({"total_minutes": _screenshot_hour * 60.0, "speed": 0.0})
 	City.money = 100_000_000
+	# scenario-look probe (same family as REGION_SHOT): render a PREBUILT
+	# scenario instead of the demo town — the only way to eyeball one, and
+	# prebuilds are hand-authored coordinates that want checking.
+	var scenario_shot := OS.get_environment("SCENARIO_SHOT")
+	if scenario_shot != "":
+		City.scenario_state = Scenarios.start(scenario_shot, "normal")
+		view.redraw()
+		var focus := OS.get_environment("SCENARIO_FOCUS")
+		var parts := focus.split(",") if focus != "" else PackedStringArray()
+		view.focus_tile(
+			Vector2i(int(parts[0]), int(parts[1])) if parts.size() >= 2
+				else Vector2i(110, 120),
+			float(parts[2]) if parts.size() >= 3 else 150.0)
+		await get_tree().create_timer(1.5).timeout
+		get_viewport().get_texture().get_image().save_png(_screenshot_path)
+		print("SCREENSHOT saved to ", _screenshot_path)
+		print("SCENARIO_STATS ", JSON.stringify({
+			"houses": City.model.houses.size(),
+			"roads": City.model.roads.size(),
+			"zoned": City.model.zoning.size(),
+			"cables": City.model.cables.size(),
+			"heat_pipes": City.model.heat_pipes.size(),
+			"water_pipes": City.model.water_pipes.size(),
+			"buildings": City.model.buildings.size(),
+			"by_kind": _kind_counts(),
+			"road_health": Scenarios.road_health(City.model.roads),
+			"cable_health": Scenarios.road_health(City.model.cables),
+			"heat_health": Scenarios.road_health(City.model.heat_pipes),
+			"water_health": Scenarios.road_health(City.model.water_pipes),
+			"orphans": _orphan_devices(),
+			"topology": _topology_report()}))
+		get_tree().quit(0)
+		return
 	if OS.get_environment("REGION_SHOT") != "":  # terrain-look probe (kept)
 		City.model.terrain.set_seed(19)
 		City.model.terrain.load_region(OS.get_environment("REGION_SHOT"))
@@ -368,12 +401,73 @@ func _take_screenshot() -> void:
 		hud._open_tile_inspector("cable", line_pos)
 	view.tool = CityView.Tool.SUBSTATION
 	view.redraw()
-	if not view._clouds.is_empty():  # drift one cloud over town for the shot
-		view._clouds[0].position = Vector3(126.0, 13.0, 128.0)
+	view.park_cloud_over(Vector3(126.0, 13.0, 128.0))  # a shadow on town
 	await get_tree().create_timer(1.0).timeout
 	get_viewport().get_texture().get_image().save_png(_screenshot_path)
 	print("SCREENSHOT saved to ", _screenshot_path)
 	get_tree().quit(0)
+
+
+## What the three builders actually KEEP. Tile counts and adjacency say a
+## device touches a pipe; only the topology says the solver will see it,
+## because each builder drops whatever its BFS from the slack cannot reach.
+func _topology_report() -> Dictionary:
+	var power := PowerTopology.build(City.model, {})
+	var heat := HeatTopology.build(City.model, {})
+	var water := WaterTopology.build(City.model, {})
+	return {
+		"power_zones": power.zones_info.size(),
+		"power_warnings": power.warnings,
+		"heat_zones": heat.zones_info.size(),
+		"heat_warnings": heat.warnings,
+		"water_zones": water.zones_info.size(),
+		"water_warnings": water.warnings,
+	}
+
+
+## Buildings whose network has no line touching them at all: a plant that
+## taps nothing is scenery, and a total count never shows it.
+func _orphan_devices() -> Dictionary:
+	const LAYER := {
+		"heat_exchanger": "heat", "chp_plant": "heat", "boiler_plant": "heat",
+		"heat_pump_plant": "heat", "heat_storage": "heat",
+		"substation": "cable", "substation_xl": "cable", "gas_plant": "cable",
+		"grid_connection": "cable", "battery": "cable", "wind_farm": "cable",
+		"solar_park": "cable", "charging_park": "cable",
+		"water_station": "water", "well": "water", "water_tower": "water",
+		"pumping_station": "water",
+	}
+	var out := {}
+	for id: String in City.model.buildings:
+		var kind: String = City.model.buildings[id]["kind"]
+		if not LAYER.has(kind):
+			continue
+		var layer: Dictionary = City.model.cables
+		if LAYER[kind] == "heat":
+			layer = City.model.heat_pipes
+		elif LAYER[kind] == "water":
+			layer = City.model.water_pipes
+		var touching := false
+		for tile: Vector2i in BuildingDefs.footprint(kind,
+				City.model.buildings[id]["anchor"]):
+			for offset: Vector2i in Scenarios.ORTHOGONAL:
+				if layer.has(tile + offset):
+					touching = true
+					break
+		if not touching:
+			var anchor: Vector2i = City.model.buildings[id]["anchor"]
+			out[id] = "%s at (%d,%d)" % [kind, anchor.x, anchor.y]
+	return out
+
+
+## Buildings per kind — a prebuild that silently fails to seat something
+## still looks fine in a total.
+func _kind_counts() -> Dictionary:
+	var out := {}
+	for id: String in City.model.buildings:
+		var kind: String = City.model.buildings[id]["kind"]
+		out[kind] = int(out.get(kind, 0)) + 1
+	return out
 
 
 # ─── road-piece visual regression: every mask variant on one screen ───

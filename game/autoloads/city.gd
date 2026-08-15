@@ -495,6 +495,25 @@ var dirty_tiles := {}
 var _batching := false
 
 
+## Bulk edit: hold the per-tile world_changed/state_changed storm and emit
+## ONCE at the end. `world_changed` is wired straight to CityView.redraw,
+## and redraw is a FULL pass — deco placements over the whole 65k-tile
+## scatter, eight layer diffs, and lot_buildable for every zoned tile. That
+## is affordable per player action and quadratic per thousand, so anything
+## that lays a city in one go (scenario prebuilds) MUST wrap itself here.
+## Discovered the hard way: the Heidelberg prebuild's ~4 500 build calls
+## froze the game for minutes at 100 % CPU before it ever reached the
+## solvers. build_path has always done this for drawn paths.
+func begin_bulk() -> void:
+	_batching = true
+
+
+func end_bulk() -> void:
+	_batching = false
+	world_changed.emit()
+	state_changed.emit()
+
+
 func _after_build(topology_relevant: bool) -> bool:
 	if topology_relevant:
 		_topo_dirty = true

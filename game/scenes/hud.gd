@@ -3,17 +3,12 @@ extends CanvasLayer
 ## HUD: status bar, build menu (TAB — categorized tile palette with hover
 ## tooltips), tool hotkeys, event toasts, speed controls.
 
+## Mnemonic letter aliases, matched on `keycode` — the LABEL printed on the
+## key, which is what a mnemonic means (on QWERTZ the key marked Z reports
+## KEY_Z; matching physically would give KEY_Y). The digit row moved to the
+## hotbar, which matches PHYSICALLY instead — see Hotbar._PHYSICAL_SLOTS for
+## why the two rules differ.
 const TOOL_KEYS := {
-	KEY_1: CityView.Tool.ROAD,
-	KEY_2: CityView.Tool.ZONE,
-	KEY_3: CityView.Tool.CABLE,
-	KEY_4: CityView.Tool.SUBSTATION,
-	KEY_5: CityView.Tool.GAS,
-	KEY_6: CityView.Tool.WIND,
-	KEY_7: CityView.Tool.SOLAR,
-	KEY_8: CityView.Tool.BATTERY,
-	KEY_9: CityView.Tool.GRID,
-	KEY_0: CityView.Tool.BULLDOZE,
 	KEY_H: CityView.Tool.PIPE,
 	KEY_J: CityView.Tool.HEAT_SUB,
 	KEY_B: CityView.Tool.BOILER,
@@ -44,106 +39,111 @@ var _button_group := ButtonGroup.new()
 var _items_by_tool := {}         # CityView.Tool -> item Dictionary
 
 
-## Palette data: monogram + hotkey + gameplay description per tool. Costs and
-## swatch colors come from BuildingDefs for buildings; line tools carry their
-## own. Categories per user direction: city basics, one infrastructure block
-## per network, demolish on its own.
+## Palette data: stable id + monogram + hotkey + gameplay description per
+## tool. Costs and swatch colors come from BuildingDefs for buildings; line
+## tools carry their own. Categories per user direction: city basics, one
+## infrastructure block per network, demolish on its own.
+##
+## `id` is the PERSISTENCE key (hotbar loadouts in user://settings.cfg) and
+## must never be renamed once shipped — a changed id silently empties the
+## slot a player learned. `key` is the mnemonic letter alias, "" for tools
+## that only ever had a digit (those live on the hotbar now).
 func _build_items() -> Array:
 	return [
 		{"cat": "City", "items": [
-			{"tool": CityView.Tool.ROAD, "label": "Road", "mono": "Rd", "key": "1",
+			{"tool": CityView.Tool.ROAD, "id": "road", "label": "Road", "mono": "Rd", "key": "",
 				"color": Color(0.45, 0.45, 0.5), "cost": BuildingDefs.COSTS["road"],
 				"desc": "Drag to pave. Houses only grow on zoned tiles next to a road."},
-			{"tool": CityView.Tool.ZONE, "label": "Residential zone", "mono": "Zn", "key": "2",
+			{"tool": CityView.Tool.ZONE, "id": "zone", "label": "Residential zone", "mono": "Zn", "key": "",
 				"color": Color(0.45, 0.8, 0.4), "cost": BuildingDefs.COSTS["zone"],
 				"desc": "Paint building land. Houses appear when a powered substation covers it and people are happy."},
-			{"tool": CityView.Tool.ZONE_COMMERCIAL, "label": "Commercial zone", "mono": "Cz", "key": "X",
+			{"tool": CityView.Tool.ZONE_COMMERCIAL, "id": "zone_commercial", "label": "Commercial zone", "mono": "Cz", "key": "X",
 				"color": Color(0.45, 0.55, 0.9), "cost": BuildingDefs.COSTS["zone_commercial"],
 				"desc": "Paint industrial land. Factories, food plants and malls move in on their own - but only where the substation has the headroom to carry them."},
 		]},
 		{"cat": "Electricity", "items": [
-			{"tool": CityView.Tool.CABLE, "label": "Overhead line", "mono": "Oh", "key": "3",
+			{"tool": CityView.Tool.CABLE, "id": "cable_overhead", "label": "Overhead line", "mono": "Oh", "key": "",
 				"color": Color(0.45, 0.36, 0.28), "cost": BuildingDefs.COSTS["overhead_line"],
 				"desc": "20 kV pole-and-wire line (~7 MVA). Cheap and visible; sustained overload trips it."},
-			{"tool": CityView.Tool.UCABLE, "label": "Underground cable", "mono": "Ug", "key": "G",
+			{"tool": CityView.Tool.UCABLE, "id": "cable_buried", "label": "Underground cable", "mono": "Ug", "key": "G",
 				"color": Color(0.36, 0.33, 0.29), "cost": BuildingDefs.COSTS["cable"],
 				"desc": "Buried 20 kV NA2XS2Y cable (~8.7 MVA). Pricier, out of sight — joins overhead runs freely."},
-			{"tool": CityView.Tool.SUBSTATION, "label": "Substation", "mono": "Su", "key": "4",
+			{"tool": CityView.Tool.SUBSTATION, "id": "substation", "label": "Substation", "mono": "Su", "key": "",
 				"kind": "substation",
 				"desc": "20/0.4 kV district transformer (630 kVA), supply zone radius 12. Houses inside draw electricity here."},
-			{"tool": CityView.Tool.GRID, "label": "Grid connection", "mono": "Gr", "key": "9",
+			{"tool": CityView.Tool.GRID, "id": "grid_connection", "label": "Grid connection", "mono": "Gr", "key": "",
 				"kind": "grid_connection",
 				"desc": "The 110/20 kV interface to the transmission grid — 20 MVA. Your city's lifeline and wholesale meter."},
-			{"tool": CityView.Tool.GAS, "label": "Gas plant", "mono": "Ga", "key": "5",
+			{"tool": CityView.Tool.GAS, "id": "gas_plant", "label": "Gas plant", "mono": "Ga", "key": "",
 				"kind": "gas_plant",
 				"desc": "2 MW dispatchable generation — runs when wind and sun don't."},
-			{"tool": CityView.Tool.WIND, "label": "Wind turbine", "mono": "Wi", "key": "6",
+			{"tool": CityView.Tool.WIND, "id": "wind_farm", "label": "Wind turbine", "mono": "Wi", "key": "",
 				"kind": "wind_farm",
 				"desc": "9 MW rated (3 × 3 MW turbines). Output follows the weather — calm spells produce nothing."},
-			{"tool": CityView.Tool.SOLAR, "label": "Solar park", "mono": "So", "key": "7",
+			{"tool": CityView.Tool.SOLAR, "id": "solar_park", "label": "Solar park", "mono": "So", "key": "",
 				"kind": "solar_park",
 				"desc": "1.2 MWp (300 kW per tile), real measured sun profiles. FACING matters: R rotates — south (default) maximizes, east/west spread the day ±1.5 h, north starves. Watch the compass."},
-			{"tool": CityView.Tool.BATTERY, "label": "Battery", "mono": "Ba", "key": "8",
+			{"tool": CityView.Tool.BATTERY, "id": "battery", "label": "Battery", "mono": "Ba", "key": "",
 				"kind": "battery",
 				"desc": "1 MWh / 400 kW. Peak shaving: discharges load spikes, recharges in the valleys."},
-			{"tool": CityView.Tool.SUBSTATION_XL, "label": "Substation 1 MVA", "mono": "S+", "key": "Z",
+			{"tool": CityView.Tool.SUBSTATION_XL, "id": "substation_xl", "label": "Substation 1 MVA", "mono": "S+", "key": "Z",
 				"kind": "substation_xl",
 				"desc": "The industrial Ortsnetzstation: a 1000-kVA transformer with the headroom commercial customers need. Same coverage as the 630."},
-			{"tool": CityView.Tool.CHARGING, "label": "Charging park", "mono": "Cp", "key": "D",
+			{"tool": CityView.Tool.CHARGING, "id": "charging_park", "label": "Charging park", "mono": "Cp", "key": "D",
 				"kind": "charging_park",
 				"desc": "Eight 175-kW DC fast chargers behind one MV connection. Spiky megawatt-class load - and it bills every delivered kWh."},
 		]},
 		{"cat": "Heat", "items": [
-			{"tool": CityView.Tool.PIPE, "label": "Heat pipe", "mono": "Hp", "key": "H",
+			{"tool": CityView.Tool.PIPE, "id": "heat_pipe", "label": "Heat pipe", "mono": "Hp", "key": "H",
 				"color": CityView.PIPE_SUPPLY_COLOR, "cost": BuildingDefs.COSTS["heat_pipe"],
 				"desc": "District-heating pair: red forward, blue return. Long runs lose temperature."},
-			{"tool": CityView.Tool.BURIED_PIPE, "label": "Buried heat pipe", "mono": "Bh", "key": "K",
+			{"tool": CityView.Tool.BURIED_PIPE, "id": "heat_pipe_buried", "label": "Buried heat pipe", "mono": "Bh", "key": "K",
 				"color": Color(0.36, 0.33, 0.29), "cost": BuildingDefs.COSTS["heat_pipe_buried"],
 				"desc": "Same pair, trenched: crosses under roads and shares the street with other buried lines."},
-			{"tool": CityView.Tool.HEAT_SUB, "label": "Heat exchanger", "mono": "Hx", "key": "J",
+			{"tool": CityView.Tool.HEAT_SUB, "id": "heat_exchanger", "label": "Heat exchanger", "mono": "Hx", "key": "J",
 				"kind": "heat_exchanger",
 				"desc": "Defines a heat zone (radius 12). Homes inside get district heat."},
-			{"tool": CityView.Tool.BOILER, "label": "Boiler plant", "mono": "Bo", "key": "B",
+			{"tool": CityView.Tool.BOILER, "id": "boiler_plant", "label": "Boiler plant", "mono": "Bo", "key": "B",
 				"kind": "boiler_plant",
 				"desc": "Cheap heat, but low flow temperature (66°C) — far ends go cold in deep winter."},
-			{"tool": CityView.Tool.CHP, "label": "CHP plant", "mono": "CH", "key": "C",
+			{"tool": CityView.Tool.CHP, "id": "chp_plant", "label": "CHP plant", "mono": "CH", "key": "C",
 				"kind": "chp_plant",
 				"desc": "Heat AND electricity (85°C). Cable it up: its power feeds your grid."},
-			{"tool": CityView.Tool.HEATPUMP, "label": "Heat pump plant", "mono": "HP", "key": "U",
+			{"tool": CityView.Tool.HEATPUMP, "id": "heat_pump_plant", "label": "Heat pump plant", "mono": "HP", "key": "U",
 				"kind": "heat_pump_plant",
 				"desc": "Heat from electricity (70°C). Draws serious grid power in cold snaps."},
-			{"tool": CityView.Tool.HEATSTORE, "label": "Heat storage", "mono": "St", "key": "T",
+			{"tool": CityView.Tool.HEATSTORE, "id": "heat_storage", "label": "Heat storage", "mono": "St", "key": "T",
 				"kind": "heat_storage",
 				"desc": "500 kWh buffer tank: charges at night, carries the morning peak."},
 		]},
 		{"cat": "Water", "items": [
-			{"tool": CityView.Tool.WATER_PIPE, "label": "Water pipe", "mono": "Wp", "key": "W",
+			{"tool": CityView.Tool.WATER_PIPE, "id": "water_pipe", "label": "Water pipe", "mono": "Wp", "key": "W",
 				"color": CityView.WATER_PIPE_COLOR, "cost": BuildingDefs.COSTS["water_pipe"],
 				"desc": "Drinking-water main (green). Pressure falls with distance and elevation."},
-			{"tool": CityView.Tool.BURIED_WATER, "label": "Buried water pipe", "mono": "Bw", "key": "L",
+			{"tool": CityView.Tool.BURIED_WATER, "id": "water_pipe_buried", "label": "Buried water pipe", "mono": "Bw", "key": "L",
 				"color": Color(0.36, 0.33, 0.29), "cost": BuildingDefs.COSTS["water_pipe_buried"],
 				"desc": "Same main, trenched: crosses under roads and shares the street with other buried lines."},
-			{"tool": CityView.Tool.WATER_SUB, "label": "Water station", "mono": "Ws", "key": "A",
+			{"tool": CityView.Tool.WATER_SUB, "id": "water_station", "label": "Water station", "mono": "Ws", "key": "A",
 				"kind": "water_station",
 				"desc": "Defines a water zone (radius 12). Homes inside tap this network."},
-			{"tool": CityView.Tool.WELL, "label": "Well", "mono": "We", "key": "N",
+			{"tool": CityView.Tool.WELL, "id": "well", "label": "Well", "mono": "We", "key": "N",
 				"kind": "well",
 				"desc": "Gravity well field, no power needed — droughts shrink its yield. Near a river: +50% yield (richer aquifer)."},
-			{"tool": CityView.Tool.PUMP, "label": "Pumping station", "mono": "Pu", "key": "P",
+			{"tool": CityView.Tool.PUMP, "id": "pumping_station", "label": "Pumping station", "mono": "Pu", "key": "P",
 				"kind": "pumping_station",
 				"desc": "High yield and pressure, needs a cable: a blackout here stops the water. Bridge two pipe ends with it to BOOST pressure inline along the run."},
-			{"tool": CityView.Tool.WATER_TOWER, "label": "Water tower", "mono": "Tw", "key": "O",
+			{"tool": CityView.Tool.WATER_TOWER, "id": "water_tower", "label": "Water tower", "mono": "Tw", "key": "O",
 				"kind": "water_tower",
 				"desc": "Pressure head + 200 m³ buffer. Rides through pump outages; taller = more bar."},
 		]},
 		{"cat": "Service", "items": [
-			{"tool": CityView.Tool.NONE, "label": "Inspect", "mono": "?", "key": "Esc",
+			{"tool": CityView.Tool.NONE, "id": "inspect", "label": "Inspect", "mono": "?", "key": "Esc",
 				"color": Color(0.31, 0.76, 0.97), "cost": 0,
 				"desc": "No tool: click any building or line/pipe to open its daily graph. Esc always returns here."},
-			{"tool": CityView.Tool.REPAIR, "label": "Repair crew", "mono": "Rp", "key": "M",
+			{"tool": CityView.Tool.REPAIR, "id": "repair", "label": "Repair crew", "mono": "Rp", "key": "M",
 				"color": Color(1.0, 0.75, 0.2), "cost": City.CREW_COST,
 				"desc": "Send a crew to a TRIPPED line or transformer (~2 h work). Overload trips don't fix themselves."},
-			{"tool": CityView.Tool.BULLDOZE, "label": "Bulldozer", "mono": "X", "key": "0",
+			{"tool": CityView.Tool.BULLDOZE, "id": "bulldoze", "label": "Bulldozer", "mono": "X", "key": "",
 				"color": Color(0.8, 0.25, 0.2), "cost": 0,
 				"desc": "Remove anything (buildings refund 25%). On empty land it clears trees, stones and brush."},
 		]},
@@ -166,7 +166,7 @@ func _ready() -> void:
 	_status = Label.new()
 	row.add_child(_status)
 	_tool_label = Label.new()
-	_tool_label.text = "Tool: none — TAB build menu · I happiness breakdown · right-drag orbit · Q/E snap 90° · R rotate / F flip ghost · SPACE pause · V overlays"
+	_tool_label.text = "Tool: none — 1-0 hotbar · TAB catalogue · S picks up a tool · I breakdown · Q/E turn · R/F ghost · SPACE pause · V overlays"
 	row.add_child(_tool_label)
 	for pair: Array in [["Save", "save"], ["Load", "load"]]:
 		var slot_button := Button.new()
@@ -185,11 +185,13 @@ func _ready() -> void:
 	events_panel.add_child(_events_box)
 
 	_make_build_menu()
+	_make_hotbar()  # after the menu: slots mirror its tiles' icons
 	_render_thumbnails()  # async: icons replace the monograms as they render
 	_make_breakdown()
 	view.building_clicked.connect(_open_inspector)
 	view.tile_infra_clicked.connect(_open_tile_inspector)
 	view.empty_clicked.connect(_close_inspector)
+	view.pipette_requested.connect(_pipette)
 
 	City.state_changed.connect(_refresh)
 	City.event_logged.connect(_on_event)
@@ -219,7 +221,8 @@ func _make_build_menu() -> void:
 	_build_menu.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_build_menu.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_build_menu.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_build_menu.offset_bottom = -10.0
+	# clears the hotbar AND the flash line that sits between the two
+	_build_menu.offset_bottom = -96.0
 	add_child(_build_menu)
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 4)
@@ -252,11 +255,23 @@ func _make_build_menu() -> void:
 		tab.pressed.connect(func() -> void: _show_category(cat))
 		tab_row.add_child(tab)
 		_tab_buttons[cat] = tab
+	# the binding gesture is only discoverable where it applies — a hint in
+	# the status bar would be read once and never again
+	var hint := Label.new()
+	hint.text = "hover a tool + press 1-0 to pin it to that hotbar slot · middle-click a slot to clear"
+	hint.add_theme_font_size_override("font_size", 10)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.modulate = Color(1, 1, 1, 0.6)
+	stack.add_child(hint)
 	# screenshot-mode probe (the REGION_SHOT pattern): PALETTE_TAB=<cat>
 	# opens that tab so its tiles can be verified visually
 	var probe := OS.get_environment("PALETTE_TAB")
 	_show_category(probe if _tab_rows.has(probe)
 		else str((_build_items()[0] as Dictionary)["cat"]))
+	# the catalogue STAYS on screen by default: every tool the hotbar does
+	# not hold has to remain visible, or the ones that moved off the digit
+	# row read as deleted. TAB still folds it away when the map matters
+	# more than the menu.
 
 
 func _show_category(cat: String) -> void:
@@ -278,6 +293,7 @@ func _make_tile(item: Dictionary) -> Button:
 		color = def["color"]
 		cost = def["cost"]
 	_items_by_tool[item["tool"]] = item
+	_items_by_id[item["id"]] = item
 	var button := Button.new()
 	button.text = item["mono"]
 	button.custom_minimum_size = Vector2(44, 44)
@@ -308,8 +324,210 @@ func _make_tile(item: Dictionary) -> Button:
 	button.add_theme_color_override("font_pressed_color", Color.WHITE)
 	button.add_theme_color_override("font_hover_color", Color.WHITE)
 	button.pressed.connect(func() -> void: _select_tool(item["tool"]))
+	# hovering a tile with the catalogue open makes the digit keys PIN
+	# instead of select — Minecraft's creative-inventory binding gesture,
+	# the cheapest possible way to build a loadout
+	button.mouse_entered.connect(func() -> void: _hovered_id = str(item["id"]))
+	button.mouse_exited.connect(func() -> void:
+		if _hovered_id == str(item["id"]):
+			_hovered_id = "")
 	_tool_buttons[item["tool"]] = button
 	return button
+
+
+# ─── hotbar: ten stable slots on 1-0, the always-visible bottom row ───
+#
+# The tabbed catalogue above it still holds everything; what changed is
+# that the tools you actually use sit in ONE place that never re-arranges
+# itself. Rules live in Hotbar (pure + persisted); this is the row.
+
+var _hotbar: PanelContainer
+var _hotbar_slots: Array[String] = []
+var _hotbar_buttons: Array[Button] = []
+var _slot_group := ButtonGroup.new()
+var _items_by_id := {}    # stable id -> item Dictionary
+var _hovered_id := ""     # catalogue tile under the mouse, "" when none
+var _flash: Label         # armed-tool confirmation, fades on its own
+var _flash_fade: Tween
+
+
+func _make_hotbar() -> void:
+	_hotbar_slots = Hotbar.load_slots(_items_by_id)
+	_hotbar = PanelContainer.new()
+	_hotbar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_hotbar.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_hotbar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_hotbar.offset_bottom = -6.0  # hug the screen edge: Fitts pays there
+	add_child(_hotbar)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	_hotbar.add_child(row)
+	for i in Hotbar.SLOT_COUNT:
+		var slot := Button.new()
+		slot.custom_minimum_size = Vector2(52, 52)
+		slot.toggle_mode = true
+		slot.button_group = _slot_group
+		slot.focus_mode = Control.FOCUS_NONE
+		slot.expand_icon = true
+		slot.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		slot.add_theme_color_override("font_color", Color.WHITE)
+		slot.add_theme_color_override("font_pressed_color", Color.WHITE)
+		slot.add_theme_color_override("font_hover_color", Color.WHITE)
+		var index := i
+		slot.pressed.connect(func() -> void: _select_slot(index))
+		# middle-click clears a slot — the near-universal gesture for this
+		# (Factorio, and every mod that adds slots to a game lacking them)
+		slot.gui_input.connect(func(event: InputEvent) -> void:
+			var mb := event as InputEventMouseButton
+			if mb != null and mb.pressed \
+					and mb.button_index == MOUSE_BUTTON_MIDDLE:
+				_pin_to_slot(index, ""))
+		var digit := Label.new()
+		digit.text = Hotbar.SLOT_LABELS[i]
+		digit.add_theme_font_size_override("font_size", 10)
+		digit.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+		digit.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+		digit.grow_vertical = Control.GROW_DIRECTION_BEGIN
+		digit.offset_right = -4.0
+		digit.offset_bottom = -2.0
+		digit.modulate = Color(1, 1, 1, 0.75)
+		digit.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot.add_child(digit)
+		row.add_child(slot)
+		_hotbar_buttons.append(slot)
+	_refresh_hotbar()
+
+
+## Slot styling carries three states: assigned, empty, and unaffordable.
+## Unaffordable stays SELECTABLE and keeps its place — a tool that vanishes
+## when money dips would move every neighbour, which is the one thing a
+## hotbar must never do. It dims and says why in the tooltip instead.
+func _refresh_hotbar() -> void:
+	for i in _hotbar_buttons.size():
+		var slot: Button = _hotbar_buttons[i]
+		var id: String = _hotbar_slots[i] if i < _hotbar_slots.size() else ""
+		var item: Dictionary = _items_by_id.get(id, {})
+		if item.is_empty():
+			slot.icon = null
+			slot.text = ""
+			slot.tooltip_text = "Empty slot %s — hover a tool in the build menu (TAB) and press %s" % [
+				Hotbar.SLOT_LABELS[i], Hotbar.SLOT_LABELS[i]]
+			slot.add_theme_stylebox_override("normal", _slot_style(
+				Color(0.11, 0.12, 0.15), Color(0.25, 0.27, 0.32)))
+			continue
+		var source: Button = _tool_buttons.get(item["tool"], null)
+		if source != null:  # icon or monogram, whichever the palette has
+			slot.icon = source.icon
+			slot.text = "" if source.icon != null else str(item["mono"])
+		var cost := _item_cost(item)
+		var affordable := City.infinite_money or City.money >= cost
+		slot.tooltip_text = "%s — %s%s\nmiddle-click to clear" % [
+			item["label"], ("€%s" % _fmt_money(cost)) if cost > 0 else "free",
+			"" if affordable else "  (not affordable)"]
+		slot.modulate = Color.WHITE if affordable else Color(1, 0.72, 0.66, 0.55)
+		slot.add_theme_stylebox_override("normal", _slot_style(
+			Color(0.16, 0.18, 0.22), _item_color(item)))
+
+
+func _slot_style(bg: Color, accent: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = bg
+	style.set_corner_radius_all(6)
+	style.set_content_margin_all(3)
+	style.border_color = accent
+	style.border_width_bottom = 3
+	return style
+
+
+static func _item_cost(item: Dictionary) -> int:
+	if item.has("kind"):
+		var def := BuildingDefs.get_def(item["kind"])
+		return int(def.get("cost", 0))
+	return int(item.get("cost", 0))
+
+
+static func _item_color(item: Dictionary) -> Color:
+	if item.has("kind"):
+		var def := BuildingDefs.get_def(item["kind"])
+		var kind_color: Color = def.get("color", Color.GRAY)
+		return kind_color
+	var own_color: Color = item.get("color", Color.GRAY)
+	return own_color
+
+
+func _select_slot(index: int) -> void:
+	var id: String = _hotbar_slots[index] if index < _hotbar_slots.size() else ""
+	if id == "":
+		_show_flash("Slot %s is empty — TAB, hover a tool, press %s" % [
+			Hotbar.SLOT_LABELS[index], Hotbar.SLOT_LABELS[index]])
+		_sync_slot_pressed(view.tool)
+		return
+	_select_tool(_items_by_id[id]["tool"])
+
+
+## Pin (or with an empty id, clear). Saves immediately: a loadout the
+## player has to remember to save is a loadout they lose.
+func _pin_to_slot(index: int, id: String) -> void:
+	_hotbar_slots = Hotbar.assign(_hotbar_slots, index, id)
+	Hotbar.save_slots(_hotbar_slots)
+	_refresh_hotbar()
+	_sync_slot_pressed(view.tool)
+	_show_flash("Slot %s cleared" % Hotbar.SLOT_LABELS[index] if id == ""
+		else "%s → slot %s" % [_items_by_id[id]["label"],
+			Hotbar.SLOT_LABELS[index]])
+
+
+## Press the slot(s) holding the armed tool; leave none pressed otherwise.
+func _sync_slot_pressed(tool: CityView.Tool) -> void:
+	for i in _hotbar_buttons.size():
+		var id: String = _hotbar_slots[i] if i < _hotbar_slots.size() else ""
+		var item: Dictionary = _items_by_id.get(id, {})
+		(_hotbar_buttons[i] as Button).set_pressed_no_signal(
+			not item.is_empty() and item["tool"] == tool)
+
+
+## Transient confirmation above the hotbar (Minecraft names the item you
+## just selected the same way): visible where the eyes already are, gone
+## before it becomes clutter.
+func _show_flash(text: String) -> void:
+	if _flash == null:
+		_flash = Label.new()
+		_flash.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+		_flash.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_flash.grow_vertical = Control.GROW_DIRECTION_BEGIN
+		_flash.offset_bottom = -70.0
+		_flash.add_theme_font_size_override("font_size", 14)
+		_flash.add_theme_constant_override("outline_size", 4)
+		_flash.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(_flash)
+	_flash.text = text
+	_flash.modulate = Color.WHITE
+	# kill the previous fade first: switching tools quickly otherwise leaves
+	# several tweens racing over the same alpha, and the newest message
+	# inherits the oldest one's countdown
+	if _flash_fade != null and _flash_fade.is_valid():
+		_flash_fade.kill()
+	_flash_fade = create_tween()
+	_flash_fade.tween_interval(1.4)
+	_flash_fade.tween_property(_flash, "modulate:a", 0.0, 0.6)
+
+
+# ─── pipette: point at it, get the tool that built it ───
+
+## The shortest path to a tool there is — no menu, no category, no recall
+## of which of two near-identical tools laid that run. Carries the variant
+## and the placement transform (ToolPipette owns the mapping).
+func _pipette(pos: Vector2i) -> void:
+	var picked := ToolPipette.sample(City.model, pos)
+	if picked.is_empty():
+		_show_flash("Nothing to pick up here")
+		return
+	var tool: CityView.Tool = picked["tool"]
+	_select_tool(tool)
+	view.set_ghost_transform(int(picked["rot"]), bool(picked["flip"]))
+	var item: Dictionary = _items_by_tool.get(tool, {})
+	_show_flash("Picked up: %s" % item.get("label", "tool"))
 
 
 # ─── happiness breakdown (Phase 6: see WHAT is wrong, not just that
@@ -866,6 +1084,7 @@ func _render_thumbnails() -> void:
 		button.expand_icon = true
 		button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vp.queue_free()
+	_refresh_hotbar()  # slots mirror the tiles: pick the icons up now
 
 
 ## The sample rendered for a tool's thumbnail — building visuals verbatim,
@@ -977,6 +1196,11 @@ func _select_tool(tool: CityView.Tool) -> void:
 	_tool_label.text = "Tool: %s%s" % [item.get("label", "none"), hint]
 	if _tool_buttons.has(tool):
 		(_tool_buttons[tool] as Button).set_pressed_no_signal(true)
+	_sync_slot_pressed(tool)
+	if item.has("label"):
+		var cost := _item_cost(item)
+		_show_flash("%s%s" % [item["label"],
+			("  ·  €%s" % _fmt_money(cost)) if cost > 0 else ""])
 	# a hotkey may select a tool on a hidden tab — follow it so the
 	# pressed highlight is always visible
 	if _tool_category.has(tool):
@@ -999,6 +1223,7 @@ func _refresh() -> void:
 		City.total_water_outage_minutes(),
 		("  ·  ⟳ rebuilding grid…" if City.is_syncing() else "")]
 	_refresh_breakdown()
+	_refresh_hotbar()  # affordability tracks the money line
 
 
 func _on_event(event: Dictionary) -> void:
@@ -1023,9 +1248,19 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.is_pressed():
 		return
 	var key: InputEventKey = event
+	var slot := Hotbar.slot_for_physical(key.physical_keycode)
 	if key.keycode == KEY_ESCAPE:
 		_select_tool(CityView.Tool.NONE)  # back to inspect mode
 		_close_inspector()
+	elif slot >= 0:
+		# same digit, two meanings by context: over a catalogue tile it
+		# PINS that tool, anywhere else it ARMS the slot
+		if _build_menu.visible and _hovered_id != "":
+			_pin_to_slot(slot, _hovered_id)
+		else:
+			_select_slot(slot)
+	elif key.keycode == KEY_S:
+		_pipette(view.mouse_tile())  # keyboard twin of middle-click
 	elif TOOL_KEYS.has(key.keycode):
 		_select_tool(TOOL_KEYS[key.keycode])
 	elif key.keycode == KEY_TAB:

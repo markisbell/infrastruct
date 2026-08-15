@@ -59,21 +59,40 @@ func test_buildings_need_level_ground() -> void:
 	assert_bool(model.can_place_building("gas_plant", Vector2i(5, 5))).is_true()
 
 
-func test_house_needs_same_height_road() -> void:
-	var model := WorldModel.new()
-	model.terrain.force_height(Vector2i(3, 3), Vector2i(3, 3), 1)
-	model.set_road(Vector2i(3, 3))       # road up on the ledge
-	model.set_zone(Vector2i(3, 4))       # lot at the foot of the ledge
-	assert_bool(model.spawn_house(Vector2i(3, 4))).is_false()
-	model.set_road(Vector2i(2, 4))       # road on the lot's own level
-	assert_bool(model.spawn_house(Vector2i(3, 4))).is_true()
+func test_lot_reach_and_step_rules() -> void:
+	# The lot rule loosened deliberately (2026-08-14, user call: the
+	# one-house-touching-the-street rule "makes things too complicated").
+	# A lot may now sit up to ROAD_REACH tiles from its street and one
+	# terrace above or below it. Measured against OpenStreetMap's real
+	# Heidelberg footprints, the old touching-and-level-with rule admitted
+	# only 22 % of the actual buildings; this admits 81 %.
+	var flat := WorldModel.new()
+	flat.set_road(Vector2i(0, 4))
+	flat.set_zone(Vector2i(3, 4))            # three tiles back from the street
+	assert_bool(flat.lot_buildable(Vector2i(3, 4))).is_true()
+	flat.set_zone(Vector2i(4, 4))             # …but four is backland
+	assert_bool(flat.lot_buildable(Vector2i(4, 4))).is_false()
+
+	var terrace := WorldModel.new()           # a driveway can climb ONE step
+	terrace.terrain.force_height(Vector2i(3, 3), Vector2i(3, 3), 1)
+	terrace.set_road(Vector2i(3, 3))
+	terrace.set_zone(Vector2i(3, 4))
+	assert_bool(terrace.spawn_house(Vector2i(3, 4))).is_true()
+
+	var cliff := WorldModel.new()             # …but not two: still a cliff
+	cliff.terrain.force_height(Vector2i(3, 3), Vector2i(3, 3), 2)
+	cliff.set_road(Vector2i(3, 3))
+	cliff.set_zone(Vector2i(3, 4))
+	assert_bool(cliff.spawn_house(Vector2i(3, 4))).is_false()
 
 
 func test_spawn_candidates_agree_with_lot_buildable() -> void:
 	# growth list, spawn_house and the zone overlay share ONE predicate: a
 	# cliff-side lot must never be offered as a candidate (nor tinted green)
 	var model := WorldModel.new()
-	model.terrain.force_height(Vector2i(3, 3), Vector2i(3, 3), 1)
+	# a TWO-step cliff: one step is a driveway now (see ROAD_STEP), two is
+	# still unreachable, and the predicate must agree with the candidate list
+	model.terrain.force_height(Vector2i(3, 3), Vector2i(3, 3), 2)
 	model.set_road(Vector2i(3, 3))       # road up on the ledge only
 	model.set_zone(Vector2i(3, 4))
 	assert_bool(model.lot_buildable(Vector2i(3, 4))).is_false()

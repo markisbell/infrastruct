@@ -32,6 +32,8 @@ signal building_clicked(id: String)
 signal tile_infra_clicked(category: String, pos: Vector2i)
 ## No-tool click on a tile with nothing inspectable — click-away dismiss.
 signal empty_clicked
+## Middle-click that did NOT pan: "give me the tool that built this tile".
+signal pipette_requested(pos: Vector2i)
 
 ## Network color language (user direction): heat = red/blue double pipe
 ## (forward/return — physically honest, the backend models both sides);
@@ -110,6 +112,9 @@ var _painting := false
 ## a click without movement keeps the quick-bulldoze convenience.
 var _orbiting := false
 var _orbit_travel := 0.0
+var _pan_travel := 0.0
+## Pixels of middle-button travel that still count as a click, not a pan.
+const PIPETTE_MAX_TRAVEL := 6.0
 
 var _dark_material := StandardMaterial3D.new()
 var _cold_material := StandardMaterial3D.new()
@@ -229,7 +234,9 @@ func _build_environment() -> void:
 	world_env.environment = env
 	add_child(world_env)
 	_env = env
-	_spawn_clouds()
+	_cloud_field = CloudField.new()
+	add_child(_cloud_field)
+	_cloud_field.build(777)
 	_spawn_wind_arrows()
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
@@ -240,8 +247,13 @@ func _build_environment() -> void:
 
 # ─── day/night cycle + drifting clouds (user request) ───
 
-var _clouds: Array[Node3D] = []
-const CLOUD_COUNT := 26
+var _cloud_field: CloudField
+## Sky-look probe (the REGION_SHOT/PALETTE_TAB pattern): CLOUD_COVER=0..1
+## pins the cover a screenshot renders, since the real one comes from a
+## seeded noise field you cannot dial from the command line. <0 = off.
+var _cloud_cover_probe: float = \
+	float(OS.get_environment("CLOUD_COVER")) \
+	if OS.get_environment("CLOUD_COVER") != "" else -1.0
 var _brightness := 1.0  # daylight brightness from _update_daylight
 var _daylight := 1.0    # raw daylight window (compass hides its sun at night)
 ## The sun rotates in DISCRETE steps: a continuously creeping light
@@ -315,45 +327,10 @@ func _update_daylight() -> void:
 
 ## A fleet of soft puff clusters drifting with the weather's wind — they
 ## cast REAL moving shadows (alpha-hash keeps them in the shadow pass).
-func _spawn_clouds() -> void:
-	var crng := RandomNumberGenerator.new()
-	crng.seed = 777
-	# smooth alpha puffs render clean but can't cast shadows — an invisible
-	# SHADOWS_ONLY twin per puff throws the moving cloud shadow instead
-	# (alpha-hash cast shadows but dithered the puffs into speckle)
-	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(0.99, 0.99, 1.0, 0.82)
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.roughness = 1.0
-	for i in CLOUD_COUNT:
-		var cloud := Node3D.new()
-		for p in crng.randi_range(3, 5):
-			var sphere := SphereMesh.new()
-			var radius := crng.randf_range(1.4, 2.8)
-			sphere.radius = radius
-			sphere.height = radius
-			sphere.radial_segments = 16
-			sphere.rings = 8
-			var spot := Vector3(crng.randf_range(-2.8, 2.8),
-				crng.randf_range(-0.2, 0.4), crng.randf_range(-1.6, 1.6))
-			var puff := MeshInstance3D.new()
-			puff.mesh = sphere
-			puff.scale = Vector3(1.7, 0.5, 1.25)
-			puff.position = spot
-			puff.material_override = material
-			puff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			cloud.add_child(puff)
-			var shadow_twin := MeshInstance3D.new()
-			shadow_twin.mesh = sphere
-			shadow_twin.scale = puff.scale
-			shadow_twin.position = spot
-			shadow_twin.cast_shadow = \
-				GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
-			cloud.add_child(shadow_twin)
-		cloud.position = Vector3(crng.randf_range(0.0, 256.0),
-			crng.randf_range(12.0, 17.0), crng.randf_range(0.0, 256.0))
-		add_child(cloud)
-		_clouds.append(cloud)
+## Park a cloud over a world position (screenshot shadow-on-town nicety).
+func park_cloud_over(pos: Vector3) -> void:
+	if _cloud_field != null:
+		_cloud_field.park_over(pos)
 
 
 const WIND_ARROW_COUNT := 18  # 6x3 jittered pattern across the view box
@@ -422,15 +399,14 @@ func _drift_clouds(delta: float) -> void:
 	# cloud COVER follows the weather's clearness field — the same field that
 	# attenuates ghi and picks the measured pv day, so an overcast sky and a
 	# dim solar dispatch always agree. The field drifts over ~1.5 days, so
-	# the visible prefix grows/shrinks one cloud at a time, no popping.
-	var cover := 1.0 - City.weather.clearness(City.current_t)
-	var visible_n := roundi(lerpf(4.0, float(_clouds.size()), cover))
-	for i in _clouds.size():
-		var cloud: Node3D = _clouds[i]
-		cloud.visible = i < visible_n
-		cloud.position += vel * delta
-		cloud.position.x = wrapf(cloud.position.x, -6.0, 262.0)
-		cloud.position.z = wrapf(cloud.position.z, -6.0, 262.0)
+	# the sky thickens gradually: CloudField turns cover into visible count,
+	# swell and street-vs-sheet organisation (see its header for the
+	# morphology it is reproducing).
+	if _cloud_field != null:
+		var cover := 1.0 - City.weather.clearness(City.current_t)
+		if _cloud_cover_probe >= 0.0:
+			cover = _cloud_cover_probe
+		_cloud_field.update(delta, dir, _wind_vis_speed, cover, _cam_focus)
 	_wind_drift += Vector2(vel.x, vel.z) * 2.2 * delta  # brisker than clouds
 	var extent := _zoom * 1.9  # covers the ortho view box at any zoom
 	var origin := Vector2(_cam_focus.x, _cam_focus.z) - Vector2(extent, extent) * 0.5
@@ -1399,6 +1375,14 @@ func _cancel_drag() -> void:
 
 # ─── ghost placement preview ───
 
+## Adopt an existing building's placement — the pipette carries rotation
+## and flip, because a picked-up solar park whose facing silently reset
+## would quietly change its yield.
+func set_ghost_transform(rot: int, flip: bool) -> void:
+	_ghost_rot = rot % 4
+	_ghost_flip = flip
+
+
 func rotate_ghost() -> void:
 	_ghost_rot = (_ghost_rot + 1) % 4
 
@@ -1525,6 +1509,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				_orbiting = mb.pressed
 				if mb.pressed:
 					_orbit_travel = 0.0
+			MOUSE_BUTTON_MIDDLE:
+				# middle DRAG pans (unchanged); a middle CLICK is the
+				# pipette. The travel test is what lets one button carry
+				# both — the same click-vs-drag discrimination the orbit
+				# button already tracks.
+				if mb.pressed:
+					_pan_travel = 0.0
+				elif _pan_travel < PIPETTE_MAX_TRAVEL:
+					pipette_requested.emit(mouse_tile())
 			MOUSE_BUTTON_WHEEL_UP:
 				if mb.pressed:
 					_zoom = maxf(_zoom / 1.12, 6.0)
@@ -1546,6 +1539,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cam_yaw_target = _cam_yaw
 			_place_camera()
 		elif mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
+			_pan_travel += mm.relative.length()
 			_pan_ground(Vector2(-mm.relative.x, mm.relative.y) * 0.02 * (_zoom / 18.0))
 
 

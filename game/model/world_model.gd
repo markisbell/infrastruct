@@ -263,12 +263,31 @@ func buildings_of_kind(kind: String) -> Array[String]:
 	return out
 
 
+## How far a lot may sit from the street that serves it, in tiles
+## (manhattan). Was 1 — strictly touching — which forced every buildable
+## district into a comb of streets three rows apart and made real city
+## geometry impossible: measured against OpenStreetMap's Heidelberg
+## footprints, a 1-tile rule admits only 22 % of the actual buildings even
+## with every arterial built, while reach 3 admits 81 %. The rest are
+## courtyard and backland buildings reached by paths the game does not
+## model. A block is now a block, not a ribbon.
+const ROAD_REACH := 3
+
+## …and it may sit ONE terrain step above or below: a driveway can climb a
+## terrace, it just cannot climb a cliff. On Heidelberg's hillside that is
+## the difference between 46 % and 56 % of the real footprints being
+## buildable at all.
+const ROAD_STEP := 1
+
+
 func _adjacent_to_road(pos: Vector2i) -> bool:
-	# a road across a terrain step doesn't serve this lot (no driveway up a cliff)
-	for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-		var n := pos + offset
-		if roads.has(n) and terrain.height(n) == terrain.height(pos):
-			return true
+	var level := terrain.height(pos)
+	for dx in range(-ROAD_REACH, ROAD_REACH + 1):
+		var span := ROAD_REACH - absi(dx)
+		for dy in range(-span, span + 1):
+			var n := pos + Vector2i(dx, dy)
+			if roads.has(n) and absi(terrain.height(n) - level) <= ROAD_STEP:
+				return true
 	return false
 
 
