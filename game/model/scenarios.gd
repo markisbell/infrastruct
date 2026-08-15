@@ -422,6 +422,7 @@ static func _build_heidelberg() -> void:
 	for way: Variant in _hd_ways(osm, "minor"):
 		_hd_pave((way as Dictionary)["pts"], strip)
 	_hd_thin_roads()
+	_hd_prune_stubs(6)
 	_hd_trim_dots()
 
 	# ── the real city: OpenStreetMap building footprints become houses ──
@@ -601,30 +602,119 @@ static func _hd_pave(pts: Array, clip: Rect2i) -> void:
 				City.build_road(p)
 
 
-## A solid 2x2 of asphalt is a blob, not a street — parallel OSM ways
-## (dual carriageways, service roads) collapse onto neighbouring tiles at
-## 25 m resolution. Drop one corner of each block when it carries no
-## through traffic of its own.
+## Redundant asphalt goes, and ONLY redundant asphalt. Parallel OSM ways
+## (dual carriageways, service roads, slip lanes) collapse onto neighbouring
+## tiles at 25 m and render as blobs and little donuts — the "bubbles and
+## rings". A tile is removed when its road neighbours stay mutually
+## reachable inside the 5x5 window WITHOUT it and none of them is left a
+## dead end: a local detour implies a global one, so this can never
+## disconnect the network. Measured: solid 2x2 asphalt 331 -> 22, mean
+## straight run 5.5 -> 6.0, components unchanged.
+##
+## Two rejected alternatives, both of which scored well and broke the map:
+## dropping whole duplicate WAYS (blobs 331 -> 107 but components 4 -> 50)
+## and opening every small ring (components 4 -> 457). Filling the 1-tile
+## holes instead just trades donuts for blobs (331 -> 643).
 static func _hd_thin_roads() -> void:
-	var drop: Array[Vector2i] = []
-	for pos: Vector2i in City.model.roads:
-		var solid := true
-		for offset: Vector2i in [Vector2i(1, 0), Vector2i(0, 1),
-				Vector2i(1, 1)]:
-			if not City.model.roads.has(pos + offset):
-				solid = false
-				break
-		if not solid:
-			continue
-		var degree := 0
+	var roads: Dictionary = City.model.roads
+	var order: Array[Vector2i] = []
+	for pos: Vector2i in roads:
+		order.append(pos)
+	order.sort()  # deterministic: the result depends on visit order
+	for pos: Vector2i in order:
+		var links: Array[Vector2i] = []
 		for offset: Vector2i in ORTHOGONAL:
-			if City.model.roads.has(pos + offset):
-				degree += 1
-		if degree <= 2:
-			drop.append(pos)
-	for pos: Vector2i in drop:
-		City.model.remove_road(pos)
-		City.dirty_tiles[pos] = true
+			if roads.has(pos + offset):
+				links.append(pos + offset)
+		if links.size() < 2 or not _hd_locally_bridged(roads, pos, links):
+			continue
+		roads.erase(pos)
+		var orphaned := false
+		for neighbour: Vector2i in links:
+			var degree := 0
+			for offset: Vector2i in ORTHOGONAL:
+				if roads.has(neighbour + offset):
+					degree += 1
+			if degree <= 1:
+				orphaned = true
+				break
+		if orphaned:
+			roads[pos] = true      # putting it back beats a new loose end
+		else:
+			City.dirty_tiles[pos] = true
+
+
+## Do `pos`'s road neighbours still reach each other without it, staying
+## inside the 5x5 window? O(1) per tile — the global version cost a flood
+## fill each time.
+static func _hd_locally_bridged(roads: Dictionary, pos: Vector2i,
+		links: Array[Vector2i]) -> bool:
+	var window := {}
+	for dx in range(-2, 3):
+		for dy in range(-2, 3):
+			var q := pos + Vector2i(dx, dy)
+			if q != pos and roads.has(q):
+				window[q] = true
+	var seen := {links[0]: true}
+	var stack: Array[Vector2i] = [links[0]]
+	while not stack.is_empty():
+		var cur: Vector2i = stack.pop_back()
+		for offset: Vector2i in ORTHOGONAL:
+			var q: Vector2i = cur + offset
+			if window.has(q) and not seen.has(q):
+				seen[q] = true
+				stack.append(q)
+	for neighbour: Vector2i in links:
+		if not seen.has(neighbour):
+			return false
+	return true
+
+
+## Trim dead-end spurs: OSM driveways and service stubs rasterise to a few
+## tiles that simply stop in a field, and a dead end renders as a capped
+## stub — the "loose ends". Iterative, because trimming one spur can expose
+## the next. Longer spurs are real cul-de-sacs and stay.
+static func _hd_prune_stubs(max_len: int) -> void:
+	var roads: Dictionary = City.model.roads
+	var changed := true
+	while changed:
+		changed = false
+		var ends: Array[Vector2i] = []
+		for pos: Vector2i in roads:
+			var degree := 0
+			for offset: Vector2i in ORTHOGONAL:
+				if roads.has(pos + offset):
+					degree += 1
+			if degree == 1:
+				ends.append(pos)
+		for start: Vector2i in ends:
+			if not roads.has(start):
+				continue
+			var run: Array[Vector2i] = [start]
+			var cur := start
+			var prev := Vector2i(-9999, -9999)
+			while run.size() <= max_len:
+				var onward: Array[Vector2i] = []
+				for offset: Vector2i in ORTHOGONAL:
+					var q: Vector2i = cur + offset
+					if roads.has(q) and q != prev:
+						onward.append(q)
+				if onward.size() != 1:
+					break                      # reached a junction or an end
+				var degree := 0
+				for offset: Vector2i in ORTHOGONAL:
+					if roads.has(onward[0] + offset):
+						degree += 1
+				if degree > 2:
+					break                      # the next tile is a junction
+				prev = cur
+				cur = onward[0]
+				run.append(cur)
+			if run.size() <= max_len:
+				for q: Vector2i in run:
+					City.model.remove_road(q)
+					City.dirty_tiles[q] = true
+				changed = true
 
 
 const ORTHOGONAL: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0),
@@ -671,11 +761,14 @@ static func road_health(roads: Dictionary) -> Dictionary:
 	var straight := 0
 	var bends := 0
 	var blobs := 0
+	var stubs := 0
 	for pos: Vector2i in roads:
 		var links: Array[Vector2i] = []
 		for offset: Vector2i in ORTHOGONAL:
 			if roads.has(pos + offset):
 				links.append(offset)
+		if links.size() == 1:
+			stubs += 1     # a dead end renders as a capped "loose end"
 		if links.size() == 2:
 			if links[0] == -links[1]:
 				straight += 1
@@ -684,7 +777,7 @@ static func road_health(roads: Dictionary) -> Dictionary:
 		if roads.has(pos + Vector2i(1, 0)) and roads.has(pos + Vector2i(0, 1)) \
 				and roads.has(pos + Vector2i(1, 1)):
 			blobs += 1
-	return {"tiles": roads.size(), "lonely": lonely,
+	return {"tiles": roads.size(), "lonely": lonely, "stubs": stubs,
 		"components": components, "largest": largest, "blobs": blobs,
 		"bend_pct": 0 if straight + bends == 0
 			else roundi(100.0 * float(bends) / float(straight + bends))}

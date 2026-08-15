@@ -170,7 +170,13 @@ func test_streets_are_continuous_not_dotted() -> void:
 		.is_less_equal(30)
 	assert_int(health["blobs"]) \
 		.override_failure_message("too much solid 2x2 asphalt — blobs, not streets") \
-		.is_less(500)
+		.is_less(60)
+	# dead ends render as capped stubs — the "loose ends". OSM's driveways
+	# and service spurs make dozens of them; _hd_prune_stubs trims the short
+	# ones, and a road that simply ends at a building is legitimate.
+	assert_int(health["stubs"]) \
+		.override_failure_message("too many capped dead ends") \
+		.is_less(80)
 
 
 func test_road_health_detects_a_dotted_network() -> void:

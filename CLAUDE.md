@@ -410,6 +410,26 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   scored beautifully on shape and tore the network from 17 components
   into 85. `snap_way` re-anchors on the true endpoint; one short
   reconnecting leg per way buys back every junction.
+  **BUBBLES, RINGS AND LOOSE ENDS** (user, after the snap landed). Named
+  precisely by `LineSpecs.road_piece`: mask 0 draws `road-end-round` (a
+  literal round cap — the bubble), masks 1/2/4/8 draw `road-end` (the
+  loose end). Measured: 0 isolated tiles but 76 dead-end stubs and 238
+  enclosed holes of exactly ONE tile — a road looping a single 25 m patch,
+  which is a rasterisation artefact of parallel ways, not a city block
+  (holes of 3+ tiles ARE blocks and must stay). Fixes: `_hd_thin_roads`
+  became a SIMPLE-POINT thinner — a tile goes only when its road
+  neighbours stay mutually reachable inside the 5x5 window without it and
+  none is left a dead end, which is O(1) and provably cannot disconnect —
+  plus `_hd_prune_stubs(6)`, iterative because trimming one spur exposes
+  the next. Solid 2x2 asphalt 331 -> 29, stubs 76 -> 53, mean run 5.5 ->
+  6.0, connectivity untouched, prebuild still ~7 s.
+  THREE ALTERNATIVES REJECTED, each of which scored better on the metric
+  it targeted and broke the map: dropping whole duplicate WAYS (blobs
+  331 -> 107, components 4 -> 50), opening every small ring (components
+  4 -> 457), and FILLING the 1-tile holes (blobs 331 -> 643 — it just
+  trades donuts for asphalt). ~235 single-tile courtyards survive on
+  purpose: removing their ring either disconnects the street or leaves a
+  new loose end, and filling them makes a blob.
   TOOLING, and the actual answer to "what can we do so you build better
   streets": `tools/terrain/streetlab.py` rasterises the OSM extract,
   SCORES the shape (bend %, mean straight run, 2x2 blobs, junctions AND
