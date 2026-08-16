@@ -480,12 +480,50 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   shapes incl. exact 45°, the city has 0 lonely tiles / ≤30 components /
   a >60 % dominant network, AND road_health itself is shown to FAIL on a
   synthetic diagonal chain (a detector that cannot fail is not a test).
-  **THE HEAT MODEL HAS EXACTLY ONE PRODUCER** (found placing Heidelberg's
-  real Stadtwerke plants, user request): `HeatTopology` emits ONE
+  **CORRECTION (2026-08-16, user challenged it — rightly): MULTIPLE HEAT
+  PLANTS AND MULTIPLE WATER SOURCES ALREADY WORK.** An earlier note here
+  claimed extra heat plants were "scenery, not supply". That was WRONG.
+  The heat gamebridge binds the FIRST plant device to the bundle's slack
+  and turns *every further plant device into a `heat_exchanger` feed-in at
+  its own node* (`api/gamebridge.py:33-36,337`), which is exactly how a
+  real network carries several boilers along one line; `ProducerSpec.kind`
+  is `slack | heat_exchanger | pump_mass`. Water does the same: non-head
+  `well`/`water_pump` devices become `pp.create_source` INJECTIONS at
+  their junction (`api/gamebridge.py:48`), and `SupplyFile` holds LISTS of
+  supplies/tanks/stations/wellfields with a validator demanding at least
+  one head, not exactly one. The `bypass_` consumer is a zero-flow guard
+  for a plant sitting at a dead-end junction (test_multi_networks pins it)
+  — NOT a replacement for the plant. What is genuinely single is the
+  PRESSURE REFERENCE: one slack per heat network (the backend 422s on a
+  second pressure slack) and one head per water network, which is also the
+  physics — distributed producers have a circulation circuit and an
+  *optional* pressure-holding unit. So a second DISCONNECTED network is
+  still impossible; several producers on ONE network are not.
+  **SLACK CHOICE WAS A REAL BUG, now fixed**: `HeatTopology` picked
+  `plant_ids.sort()[0]`, i.e. by ID STRING, and the slack sets the supply
+  temperature the whole network runs at (`heat_topology.gd:182`). So
+  "boiler_plant" beat "chp_plant" and a single 66 °C boiler anywhere
+  dropped the entire city from 85 °C. It now picks the HOTTEST plant
+  (tie-broken by id); both topology goldens were deliberately re-baselined
+  and the diff is exactly `t_flow_k` 339.15 → 358.15 K plus the slack
+  moving. **HEAT DISPATCH followed**: secondary plants were each given
+  their catalog nameplate regardless of load, so N plants injected N ×
+  100 kW into a network that wanted less. `DispatchPolicy.heat_feed_in_kw`
+  now shares the real demand in MERIT ORDER (chp → heat pump → boiler,
+  peak boilers last, slack keeps HEAT_SLACK_SHARE to balance on) with a
+  standby trickle so no feed-in sits at exactly zero — a zero-dispatch
+  feed-in is a zero-flow branch and the hydraulics go degenerate.
+  STILL OPEN: adding two peak-load boilers to Heidelberg's 273-pipe
+  network makes every hydraulic retry tier fail to converge. Ruled out:
+  nameplate over-dispatch, plants on dead-end stubs (both were moved onto
+  through-going trunk tiles), and zero-dispatch branches. Whatever remains
+  is in the hydraulics and wants the heat backend's own diagnostics —
+  the scenario ships without them and says so in a comment.
+  The old (superseded) note follows for the record: `HeatTopology` emits ONE
   producer — the slack — and takes the whole network's flow temperature
   from THAT plant's kind (`heat_topology.gd:182`); every other plant
-  sitting at a degree-1 leaf is rewritten into a `bypass_` CONSUMER stub
-  (:160), so extra heat plants are scenery, not supply. The slack is
+  sitting at a degree-1 leaf ALSO gets a `bypass_` consumer stub
+  (:160). The slack is
   `plant_ids.sort()[0]`, i.e. chosen by ID STRING: "boiler_plant" sorts
   before "chp_plant", so ONE boiler anywhere silently drops the entire
   city from 85 °C to 66 °C — on a 487-pipe network the far ends stop

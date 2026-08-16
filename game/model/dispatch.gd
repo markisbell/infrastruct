@@ -43,6 +43,56 @@ static func gas_p_kw(residual: float, p_max: float, down: bool) -> float:
 ## capped at 0.6x live demand because discharging more than the net
 ## consumes is hydraulically infeasible (the pressure slack cannot absorb
 ## reverse flow; the solver rightly fails).
+## Merit order for district-heat plants: base load first, peak boilers
+## last. A real network runs the cheap plant flat out and lights the boiler
+## only when it cannot keep up — Heidelberg's Spitzenlastkessel sit idle
+## most of the year.
+const HEAT_MERIT := {"chp_plant": 0, "heat_pump_plant": 1, "boiler_plant": 2}
+
+## Share of demand the SLACK plant is left to carry. A feed-in that covers
+## the whole load leaves the pressure reference nothing to do and the flow
+## direction goes ambiguous.
+const HEAT_SLACK_SHARE := 0.5
+
+## Trickle an idle feed-in keeps circulating [kW].
+const HEAT_STANDBY_KW := 10.0
+
+
+## How much each SECONDARY (non-slack) heat plant injects this step.
+##
+## Only the slack is a pressure reference; every other plant is a
+## `heat_exchanger` feed-in at its own node, which is exactly how a real
+## network runs several boilers along one line. But they have to cover the
+## demand that EXISTS: dispatching each at its catalog nameplate pushed
+## ~300 kW into a network that wanted less, and every retry tier of the
+## hydraulic solver failed to converge. Merit order, capped at each
+## plant's rating, cheapest first.
+static func heat_feed_in_kw(demand_kw: float, plants: Array,
+		slack_share: float = HEAT_SLACK_SHARE) -> Dictionary:
+	var order := plants.duplicate()
+	order.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var ma := int(HEAT_MERIT.get(a.get("kind", ""), 9))
+		var mb := int(HEAT_MERIT.get(b.get("kind", ""), 9))
+		if ma != mb:
+			return ma < mb
+		return str(a.get("id", "")) < str(b.get("id", "")))
+	var budget := maxf(0.0, demand_kw * (1.0 - clampf(slack_share, 0.0, 1.0)))
+	var out := {}
+	for plant: Dictionary in order:
+		var rating := maxf(0.0, float(plant["rating_kw"]))
+		var take := clampf(budget, 0.0, rating)
+		# A feed-in must never sit at EXACTLY zero: the producer is a heat
+		# exchanger on a branch, and a zero-dispatch branch carries no flow,
+		# which leaves the hydraulics degenerate. A plant on standby still
+		# circulates, so keep a trickle whenever the plant is available at
+		# all (rating 0 = genuinely down, and then it really is off).
+		if rating > 0.0:
+			take = maxf(take, minf(rating, HEAT_STANDBY_KW))
+		out[plant["id"]] = snappedf(take, 0.1)
+		budget -= take
+	return out
+
+
 static func storage_heat_q_kw(t: int, p_max: float, total_demand: float) -> float:
 	var hour := (t * 15 % 1440) / 60
 	if hour >= 0 and hour < 5:

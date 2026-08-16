@@ -61,11 +61,26 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	var plant_ids: Array[String] = []
 	for kind: String in BuildingDefs.HEAT_PLANT_KINDS:
 		plant_ids.append_array(model.buildings_of_kind(kind))
-	plant_ids.sort()  # deterministic slack choice: first by id
+	plant_ids.sort()  # deterministic tie-break
 	has_plant = not plant_ids.is_empty()
 	if not has_plant:
 		return
+	# SLACK = the HOTTEST plant, not the alphabetically first. Only the
+	# slack is a pressure reference (circ_pump_const_pressure), and its
+	# t_flow_k is the supply temperature the WHOLE network runs at; every
+	# other plant feeds in at its own node as a heat_exchanger producer and
+	# adds heat without setting the temperature. Choosing by id let a 66 °C
+	# boiler outrank an 85 °C CHP ("boiler_plant" < "chp_plant") and drag a
+	# whole city below what its far ends could be served at — the reason
+	# Heidelberg could not carry a peak-load boiler at all.
 	var slack_id: String = plant_ids[0]
+	var hottest := -1.0
+	for id: String in plant_ids:
+		var flow_c := float(BuildingDefs.get_def(
+			model.buildings[id]["kind"]).get("t_flow_c", 85.0))
+		if flow_c > hottest:
+			hottest = flow_c
+			slack_id = id
 	var adjacency := NetGraph.adjacency(raw_pipes)
 	var reachable := NetGraph.bfs_from(adjacency, [slack_id])
 	for id: String in model.buildings:

@@ -87,3 +87,36 @@ func test_reset_reseeds_the_ema() -> void:
 	policy.reset()
 	assert_float(policy.battery_shave_kw(50, 400.0, 1)).is_equal(0.0)
 	assert_float(policy.peak_ema).is_equal(400.0)
+
+
+func test_heat_feed_in_follows_demand_in_merit_order() -> void:
+	# Secondary plants are feed-ins: they must cover the demand that EXISTS,
+	# cheapest first. Dispatching each at its catalog nameplate pushed far
+	# more heat into the network than it wanted.
+	var plants: Array = [
+		{"id": "peak", "kind": "boiler_plant", "rating_kw": 100.0},
+		{"id": "base", "kind": "chp_plant", "rating_kw": 100.0},
+		{"id": "mid", "kind": "heat_pump_plant", "rating_kw": 100.0},
+	]
+	# 400 kW demand, slack carries half -> 200 kW of feed-in to share:
+	# base takes its full 100, mid the rest, the peak boiler stays on standby
+	var high := DispatchPolicy.heat_feed_in_kw(400.0, plants)
+	assert_float(float(high["base"])).is_equal_approx(100.0, 0.01)
+	assert_float(float(high["mid"])).is_equal_approx(100.0, 0.01)
+	assert_float(float(high["peak"])) \
+		.override_failure_message("the peak boiler fired before the base load ran out") \
+		.is_equal_approx(DispatchPolicy.HEAT_STANDBY_KW, 0.01)
+	# a quiet summer step must not push the whole nameplate into the net…
+	var low := DispatchPolicy.heat_feed_in_kw(20.0, plants)
+	var total := 0.0
+	for id: String in low:
+		total += float(low[id])
+	assert_float(total).is_less(120.0)
+	# …but nothing sits at EXACTLY zero: a zero-dispatch feed-in is a
+	# zero-flow branch, and the hydraulics go degenerate
+	for id: String in low:
+		assert_float(float(low[id])).is_greater(0.0)
+	# a plant that is down really is off
+	var downed: Array = [{"id": "dead", "kind": "boiler_plant", "rating_kw": 0.0}]
+	assert_float(float(DispatchPolicy.heat_feed_in_kw(500.0, downed)["dead"])) \
+		.is_equal(0.0)

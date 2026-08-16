@@ -815,6 +815,23 @@ func _heat_setpoints(t: int) -> Dictionary:
 			+ DemandModel.commercial_heat_sum_kw(
 				heat_topo.zones_info[zone_id].get("commercial_tiles", []),
 				model.commercial, t, temp)
+	# Secondary plants are heat_exchanger FEED-INS at their own node — the
+	# way a real network carries several boilers along one line. They are
+	# dispatched in MERIT ORDER against the demand that actually exists;
+	# giving each its catalog nameplate injected far more heat than the
+	# network wanted and every hydraulic retry tier stopped converging.
+	var secondaries: Array = []
+	for device: Dictionary in heat_topo.doc.get("devices", []):
+		if not (device["kind"] in ["chp", "boiler", "heat_pump"]):
+			continue
+		if not first:
+			var plant_kind: String = model.buildings[device["id"]]["kind"]
+			secondaries.append({"id": device["id"], "kind": plant_kind,
+				"rating_kw": 0.0 if event_system.is_down(device["id"], t)
+					else float(BuildingDefs.get_def(plant_kind)
+						.get("dispatch_q_kw", 100.0))})
+		first = false
+	var feed_in := DispatchPolicy.heat_feed_in_kw(total_demand, secondaries)
 	for device: Dictionary in heat_topo.doc.get("devices", []):
 		var def_kind: String = device["kind"]
 		var down := event_system.is_down(device["id"], t)
@@ -822,13 +839,8 @@ func _heat_setpoints(t: int) -> Dictionary:
 			var p_max := 0.0 if down else float(device["params"].get("p_max_kw", 100.0))
 			out[device["id"]] = {"q_kw": snappedf(
 				DispatchPolicy.storage_heat_q_kw(t, p_max, total_demand), 0.1)}
-		elif not first and def_kind in ["chp", "boiler", "heat_pump"]:
-			# secondary plants are heat-exchanger feed-ins with constant dispatch
-			var b_kind: String = model.buildings[device["id"]]["kind"]
-			out[device["id"]] = {"q_kw": 0.0 if down else float(
-				BuildingDefs.get_def(b_kind).get("dispatch_q_kw", 100.0))}
-		if def_kind in ["chp", "boiler", "heat_pump"]:
-			first = false
+		elif feed_in.has(device["id"]):
+			out[device["id"]] = {"q_kw": feed_in[device["id"]]}
 	return out
 
 

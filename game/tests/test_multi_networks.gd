@@ -123,3 +123,27 @@ func test_heat_exchanger_one_pipe_tile_from_plant_connects() -> void:
 	var topo := HeatTopology.build(model, {})
 	assert_bool(bool(topo.connected[exchanger])).is_true()  # was: no edge
 	assert_int(topo.doc["zones"].size()).is_equal(1)
+
+
+func test_heat_slack_is_the_hottest_plant_not_the_first_by_id() -> void:
+	# Only the slack sets the supply temperature the WHOLE network runs at;
+	# every other plant feeds in at its own node without touching it. The
+	# slack used to be plant_ids.sort()[0], so "boiler_plant" (66 °C) beat
+	# "chp_plant" (85 °C) on a string compare and dragged a whole city below
+	# what its far ends could be served at.
+	var model := WorldModel.new()
+	model.place_building("boiler_plant", Vector2i(0, 0))       # 66 °C, 2x2
+	for x in range(2, 12):
+		model.set_heat_pipe(Vector2i(x, 1), 1)
+	model.place_building("chp_plant", Vector2i(4, 2))          # 85 °C
+	model.place_building("heat_exchanger", Vector2i(12, 1))
+	var topo := HeatTopology.build(model, {})
+	var producer: Dictionary = topo.doc["native"]["producers"]["producers"][0]
+	assert_float(float(producer["t_flow_k"])) \
+		.override_failure_message("the cooler plant became the slack") \
+		.is_equal_approx(273.15 + 85.0, 0.01)
+	# and the boiler is still shipped — as a feed-in, not as scenery
+	var device_ids := []
+	for device: Dictionary in topo.doc["devices"]:
+		device_ids.append(device["id"])
+	assert_int(device_ids.size()).is_greater_equal(2)

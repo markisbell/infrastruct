@@ -220,6 +220,13 @@ them the way they ask:
   art. 9899, 2020.
   [doi:10.3390/su12239899](https://doi.org/10.3390/su12239899)
 
+The Heidelberg reference city's street network and building footprints are
+derived from **© [OpenStreetMap](https://www.openstreetmap.org/copyright)
+contributors**, available under the
+[Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/).
+Its elevation comes from [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
+(Mapzen terrarium, SRTM-derived).
+
 ---
 
 ## License
