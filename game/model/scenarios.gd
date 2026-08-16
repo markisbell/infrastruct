@@ -479,6 +479,30 @@ static func _build_heidelberg() -> void:
 	# zoned band around the arterials is the room this city has left
 	for sub_id: String in City.model.buildings_of_kind("substation"):
 		City.spawn_houses_bulk(sub_id, 4)
+	_hd_prune_idle_heat(City.model)
+
+
+## Drop heat exchangers that ended up with NO houses in reach.
+##
+## The supply trios are seated mechanically every ~16 corridor tiles, before
+## a single house exists — so where the real footprints happen to be thin,
+## a station lands with nobody to serve. NINE of seventeen were like that,
+## and an idle station is not merely useless: it draws no flow, so its
+## branch cools to ground temperature (the smoke read it as a 10 °C
+## `t_supply_low` violation and it looked like the far city was freezing)
+## and it leaves a near-stagnant branch for the hydraulics to resolve. A
+## utility would not build it, so neither do we.
+static func _hd_prune_idle_heat(model: WorldModel) -> void:
+	var radius: int = int(BuildingDefs.get_def("heat_exchanger")["zone_radius"])
+	for sub_id: String in model.buildings_of_kind("heat_exchanger"):
+		var centre: Vector2i = model.buildings[sub_id]["anchor"]
+		var served := false
+		for pos: Vector2i in model.houses:
+			if absi(pos.x - centre.x) <= radius and absi(pos.y - centre.y) <= radius:
+				served = true
+				break
+		if not served:
+			model.remove_building(sub_id)
 
 
 ## The river as a swept polyline. force_water overrides the "valley level 0

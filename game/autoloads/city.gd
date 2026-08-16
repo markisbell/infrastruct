@@ -307,6 +307,10 @@ func place_building(kind: String, anchor: Vector2i, rot: int = 0,
 # ─── drag-and-draw paths (ghost preview + commit on release) ───
 
 ## Path build kinds the drag tools draw; maps to cost key + validator.
+## What one heat zone keeps circulating even with no demand at all [kW] —
+## ~2 % of a zone's 160 kW design load. See the boundary provider below.
+const HEAT_ZONE_CIRCULATION_KW := 3.2
+
 const PATH_BUILDS := {
 	"road": {"cost": "road"},
 	"zone": {"cost": "zone"},
@@ -672,11 +676,23 @@ func get_zone_demand(network: String, t: int) -> Dictionary:
 	if network == "heat":
 		var temp := float(weather.sample(t)["temp_c"])
 		for zone_id: String in heat_topo.zones_info:
-			out[zone_id] = {"value": snappedf(DemandModel.heat_zone_sum_kw(
-				heat_topo.zones_info[zone_id]["house_tiles"], t, temp)
+			var zone_kw := DemandModel.heat_zone_sum_kw(
+				heat_topo.zones_info[zone_id]["house_tiles"], t, temp) \
 				+ DemandModel.commercial_heat_sum_kw(
 					heat_topo.zones_info[zone_id].get("commercial_tiles", []),
-					model.commercial, t, temp), 0.1)}
+					model.commercial, t, temp)
+			# CIRCULATION FLOOR. A district-heating substation never draws
+			# nothing: it keeps flow through its branch so the line stays hot
+			# and the taps run warm at once (Zirkulation), and its standing
+			# losses are on this order. Without it a July night — no space
+			# heating, everyone asleep, so no hot water either — takes every
+			# zone to a few hundred watts, the trunk goes nearly stagnant,
+			# and the hydraulics stop converging: measured on Heidelberg's
+			# own network, 1.0 kW/zone fails and 1.6 kW/zone solves at
+			# 56-72 °C. Two percent of a zone's design load is comfortably
+			# past that and still small enough to disappear against winter.
+			out[zone_id] = {"value": snappedf(maxf(
+				zone_kw, HEAT_ZONE_CIRCULATION_KW), 0.1)}
 		return out
 	if network == "water":
 		var temp_w := float(weather.sample(t)["temp_c"])

@@ -568,14 +568,14 @@
 							"from_node": "hn_boiler_plant_6",
 							"length_km": 0.125,
 							"sections": 1,
-							"std_type": "ISOPLUS_DRE50_STD",
+							"std_type": "ISOPLUS_DRE40_STD",
 							"to_node": "hn_chp_plant_9"
 						},
 						{
 							"from_node": "hn_chp_plant_9",
 							"length_km": 0.075,
 							"sections": 1,
-							"std_type": "ISOPLUS_DRE50_STD",
+							"std_type": "ISOPLUS_DRE40_STD",
 							"to_node": "hn_heat_exchanger_7"
 						}
 					]

@@ -549,13 +549,45 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   the CHP's node, and the CHP's coupled electricity collapsed (-18.8 kW
   where it owes < -30). The slack device is emitted first explicitly now.
   Backend pins: `tests/test_gb_multi_plant.py`.
-  STILL COLD, and it is NOT generation: `HeatTopology.STD_TYPE` hard-codes
-  **ISOPLUS_DRE50_STD for every pipe in every city** — DN50 carries ~293 kW
-  at a sane 1 m/s, while Heidelberg's 17 heat zones are dimensioned at
-  2720 kW. The trunk is ~10x too small, which is why the far Altstadt sits
-  at 10-20 C supply however much plant you add. Sizing pipes from their
-  downstream design load (rtheatflow's own convert_schutterwald does
-  exactly this) is the next heat fix.
+  **HEAT PIPE SIZING + THE COLD FAR END: FIXED 2026-08-16.** Heidelberg's
+  heat now converges **9 frames in 9** (was 6) with every zone at
+  **81-83 C** (was 10-20 C). Four things were wrong, and the first three
+  were each invisible behind the others:
+  (1) `HeatTopology.STD_TYPE` hard-coded ISOPLUS_DRE50_STD for EVERY pipe
+  in EVERY city. `PIPE_LADDER` + `pipe_std_type()` now size each pipe from
+  the load BEHIND it (`load_tree()` roots the network at the slack and sums
+  each subtree; loop closers take the smaller side; a pipe touching a plant
+  or zone carries at least that node's own duty). Heidelberg gets DN32-DN200
+  — DN125 dominates because the CENTRAL slack splits the load two ways.
+  (2) NINE of seventeen heat exchangers had ZERO houses: the supply trios
+  are seated every ~16 corridor tiles BEFORE any house exists, so where the
+  real footprints are thin a station lands with nobody to serve. An idle
+  station draws no flow, so its branch cools to ground temperature — that
+  is where most of the "10 C far Altstadt" came from, and it left nine
+  near-stagnant branches for the hydraulics. `_hd_prune_idle_heat` drops
+  them (17 zones -> 8, all served).
+  (3) `plift_bar` was a fixed 2.0. Fine for a village; a 6.25 km city's
+  worst point sat at **-0.86 bar** (critical `dp_low`). `plift_bar(km)`
+  scales it with the network's extent (clamped 2-8 bar), so the worst point
+  is +0.75 bar. A real network regulates this on the worst point
+  (Schlechtpunktregelung); nothing in the loop does, hence the stand-in.
+  (4) THE ACTUAL SMOKE FAILURE, and it was none of the above: phase F
+  starts at **day 200 = mid-July, at MIDNIGHT** — no space heating and the
+  DHW trough, so every zone fell to a few hundred watts and the trunk went
+  nearly stagnant. Measured on the real doc: 1.0 kW/zone fails, 1.6 kW/zone
+  solves at 56-72 C. `City.HEAT_ZONE_CIRCULATION_KW` (3.2 kW, ~2 % of a
+  zone's design load) floors it — a DH substation always circulates to keep
+  its branch hot, which is what Zirkulation is.
+  METHOD NOTE worth keeping: the game smoke costs ~10 min per answer and
+  reports only NON-converged frames, which hid the fix twice (the converged
+  frames were already at 81 C while `heidelberg_why` showed 10 C). Dumping
+  the real heat doc and replaying it against the backend's TestClient
+  answered each question in seconds and is how (4) was found — the same
+  move that cracked the boiler bug.
+  Economy: the CSV moved for a REAL reason this time (a correctly sized
+  small town gets DN40 instead of DN50, less surface, ~0.5 % less fuel;
+  the circulation floor adds ~0.8 % summer heat income) — regenerated and
+  committed per the balancing contract. Suites: test_heat_sizing (5).
   The old (superseded) note follows for the record: `HeatTopology` emits ONE
   producer — the slack — and takes the whole network's flow temperature
   from THAT plant's kind (`heat_topology.gd:182`); every other plant
@@ -1202,7 +1234,6 @@ econ books, event-system state incl. RNG position, device SoC survive
 loads), SoC replay on every registration (heatstorage smoke pins
 0.79→0.79), drag stalls halved, `WorldModel.check_invariants`, Windows
 installer, Linux port + tarball. Remaining: contract 1.2 candidates
-(emitter leaks, CHP fuel field, multi-network heat), HEAT PIPE SIZING (§4:
-one hard-coded DN50 for every pipe in every city — the next heat fix),
-dry-home visuals, terrain-aware coverage discs. River BRIDGES: DONE
+(emitter leaks, CHP fuel field, multi-network heat), dry-home visuals,
+terrain-aware coverage discs. River BRIDGES and HEAT PIPE SIZING: DONE
 2026-08-16.
