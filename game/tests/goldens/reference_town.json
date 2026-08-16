@@ -4,19 +4,19 @@
 			"contract": "1.0",
 			"devices": [
 				{
-					"id": "boiler_plant_6",
-					"kind": "boiler",
-					"node": "hn_boiler_plant_6",
-					"params": {
-						"eta": 0.95
-					}
-				},
-				{
 					"id": "chp_plant_9",
 					"kind": "chp",
 					"node": "hn_chp_plant_9",
 					"params": {
 						"pq_ratio": 0.5
+					}
+				},
+				{
+					"id": "boiler_plant_6",
+					"kind": "boiler",
+					"node": "hn_boiler_plant_6",
+					"params": {
+						"eta": 0.95
 					}
 				}
 			],

@@ -51,22 +51,25 @@ const HEAT_MERIT := {"chp_plant": 0, "heat_pump_plant": 1, "boiler_plant": 2}
 
 ## Share of demand the SLACK plant is left to carry. A feed-in that covers
 ## the whole load leaves the pressure reference nothing to do and the flow
-## direction goes ambiguous.
+## direction goes ambiguous — measured on the backend: pushing 200 kW of
+## secondary dispatch into a 70 kW network fails every retry tier, honestly.
 const HEAT_SLACK_SHARE := 0.5
-
-## Trickle an idle feed-in keeps circulating [kW].
-const HEAT_STANDBY_KW := 10.0
 
 
 ## How much each SECONDARY (non-slack) heat plant injects this step.
 ##
-## Only the slack is a pressure reference; every other plant is a
-## `heat_exchanger` feed-in at its own node, which is exactly how a real
-## network runs several boilers along one line. But they have to cover the
-## demand that EXISTS: dispatching each at its catalog nameplate pushed
-## ~300 kW into a network that wanted less, and every retry tier of the
-## hydraulic solver failed to converge. Merit order, capped at each
-## plant's rating, cheapest first.
+## Only the slack is a pressure reference; every other plant is a pump of
+## its own along the line, which is exactly how a real network runs several
+## boilers. But they have to cover the demand that EXISTS: dispatching each
+## at its catalog nameplate pushed ~300 kW into a network that wanted less,
+## and the solver rightly refused. Merit order, capped at each plant's
+## rating, cheapest first.
+##
+## Zero is a legitimate dispatch here — an idle station burns no fuel. Its
+## pump still circulates a trickle so the branch never sits at exactly zero
+## flow, but that is a FLOW floor and belongs where the flow lives (the
+## backend's MIN_PUMP_MDOT_KG_PER_S), not in a kW setpoint: heat added to a
+## stalled branch makes its temperature rise explode, it does not move water.
 static func heat_feed_in_kw(demand_kw: float, plants: Array,
 		slack_share: float = HEAT_SLACK_SHARE) -> Dictionary:
 	var order := plants.duplicate()
@@ -81,13 +84,6 @@ static func heat_feed_in_kw(demand_kw: float, plants: Array,
 	for plant: Dictionary in order:
 		var rating := maxf(0.0, float(plant["rating_kw"]))
 		var take := clampf(budget, 0.0, rating)
-		# A feed-in must never sit at EXACTLY zero: the producer is a heat
-		# exchanger on a branch, and a zero-dispatch branch carries no flow,
-		# which leaves the hydraulics degenerate. A plant on standby still
-		# circulates, so keep a trickle whenever the plant is available at
-		# all (rating 0 = genuinely down, and then it really is off).
-		if rating > 0.0:
-			take = maxf(take, minf(rating, HEAT_STANDBY_KW))
 		out[plant["id"]] = snappedf(take, 0.1)
 		budget -= take
 	return out

@@ -146,7 +146,19 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		return
 
 	var devices: Array[Dictionary] = []
-	for id: String in plant_ids:      # slack plant FIRST (backend binds it)
+	# THE SLACK DEVICE MUST BE FIRST — the backend binds device[0] to the
+	# bundle's one slack producer and configures its dispatch model from that
+	# plant's kind. This used to fall out of the id sort for free (the slack
+	# WAS plant_ids[0]); once the slack became the hottest plant, a boiler
+	# sorting ahead of the CHP was handed the slack's role while the bundle's
+	# producer still named the CHP's node. The CHP then ran as a secondary
+	# and its coupled electricity collapsed (coldsnap caught it: the heat→
+	# power coupling came back at -18.8 kW where the CHP owes < -30).
+	var ordered: Array[String] = [slack_id]
+	for id: String in plant_ids:
+		if id != slack_id:
+			ordered.append(id)
+	for id: String in ordered:
 		if reachable.has(id):
 			var def := BuildingDefs.get_def(model.buildings[id]["kind"])
 			devices.append({"id": id, "kind": def["device"], "node": node_name[id],

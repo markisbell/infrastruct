@@ -294,21 +294,21 @@ static func _build_heidelberg() -> void:
 	City.place_building("heat_pump_plant", Vector2i(58, 131))  # Flusswärmepumpe
 	# SPITZENLASTKESSEL along the line, which is how a real district heating
 	# network is fed: one plant holds pressure and supply temperature (the
-	# slack) while further plants inject heat at their OWN node — the heat
-	# backend turns every extra plant device into a `heat_exchanger` feed-in
-	# exactly for this. Boilers are safe here now that the slack is chosen by
-	# FLOW TEMPERATURE: previously a 66 °C boiler outranked the 85 °C CHP on
-	# an id sort and set the whole city's supply temperature.
-	# NO peak-load boilers here yet, and the reason is worth recording: the
-	# heat backend genuinely supports several plants on one line (every
-	# non-slack plant device becomes a `heat_exchanger` feed-in at its own
-	# node), and the dispatch below now covers real demand in merit order —
-	# but adding two boilers to THIS 273-pipe network makes every hydraulic
-	# retry tier stop converging. Ruled out: nameplate over-dispatch (merit
-	# order fixed that), a plant on a dead-end stub (both were moved onto
-	# through-going trunk tiles), and zero-dispatch degenerate branches (the
-	# standby trickle). Whatever remains is in the hydraulics, not the
-	# wiring, and wants the heat backend's own diagnostics.
+	# slack) while further plants inject heat at their OWN node, each through
+	# its own pump. Two things had to be true before these could stand here:
+	# the slack is chosen by FLOW TEMPERATURE (an id sort let a 66 °C boiler
+	# outrank the 85 °C CHP and set the whole city's supply temperature), and
+	# secondary plants are pump_mass producers rather than heat_exchanger
+	# feed-ins — an hx fixes HEAT on a branch whose flow the network decides,
+	# so the second one landed at near-zero flow and its temperature rise
+	# exploded (measured on the backend's own bundle: a zone at -438 °C,
+	# reported as "converged"). A pump fixes the flow instead.
+	City.place_building("boiler_plant", Vector2i(100, 152))  # Spitzenlast Ost
+	City.place_building("boiler_plant", Vector2i(38, 152))   # Spitzenlast West
+	# and one ON the Altstadt branch, 3 km from the slack: that far end sat
+	# at 10-20 °C supply because a single producer cannot push heat that far.
+	# Re-heating mid-line is exactly what these are for.
+	City.place_building("boiler_plant", Vector2i(150, 123))  # Spitzenlast Altstadt
 	City.place_building("gas_plant", Vector2i(47, 185))     # gas generator
 	City.place_building("grid_connection", Vector2i(46, 58))   # north bank
 	# OSM puts the Heizkraftwerk at (48,75), which straddles a terrain step

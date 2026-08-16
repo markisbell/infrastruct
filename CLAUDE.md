@@ -513,12 +513,45 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   peak boilers last, slack keeps HEAT_SLACK_SHARE to balance on) with a
   standby trickle so no feed-in sits at exactly zero — a zero-dispatch
   feed-in is a zero-flow branch and the hydraulics go degenerate.
-  STILL OPEN: adding two peak-load boilers to Heidelberg's 273-pipe
-  network makes every hydraulic retry tier fail to converge. Ruled out:
-  nameplate over-dispatch, plants on dead-end stubs (both were moved onto
-  through-going trunk tiles), and zero-dispatch branches. Whatever remains
-  is in the hydraulics and wants the heat backend's own diagnostics —
-  the scenario ships without them and says so in a comment.
+  **ROOT-CAUSED AND FIXED 2026-08-16** (the boilers stand in Heidelberg
+  now, three of them). It was never hydraulics: a `heat_exchanger`
+  producer is a BRANCH bridging return->supply carrying a fixed qext_w,
+  and that model only holds for ONE. The slack forces the single one's
+  flow; a second leaves the split between three return->supply paths
+  unpinned, so a branch lands at near-zero/reversed flow and
+  DT = Q/(mdot*cp) explodes — the backend's own appendix_a bundle
+  returned "converged" with zones at -438 C and +505 C, three raised.
+  Secondary plants are pressure-free `pump_mass` producers now (their own
+  pump — what a Spitzenlastkessel physically is, and what rtheatflow's
+  measured Verbier network uses for its second plant HS1); a pump fixes
+  mdot instead of Q so no flow split can make it singular. kW->mdot uses
+  the spread read back from the last solved state (one-step feedback), so
+  delivered heat lands on the requested kW. **My HEAT_STANDBY_KW trickle
+  was the wrong fix and is gone**: qext adds heat, it does not move water
+  — a trickle on a stalled branch makes DT worse. The flow floor lives in
+  the backend (`MIN_PUMP_MDOT_KG_PER_S`), and an idle station now burns
+  no fuel. SECOND BUG, found by the same work: a buffer storage parked
+  its idle discharge pump out of service, and **pandapipes 0.14.0 cannot
+  build the pit when `circ_pump_mass` MIXES in-service and out-of-service
+  rows** (`create_pit_branch_entries` filters the TABLE to active rows but
+  sizes the pit slice from ALL of them -> IndexError at
+  circulation_pump.py:117, every retry tier fails). Invisible while the
+  storage pump was the only such row; the storage now creates/drops that
+  pump instead of parking it. THIRD BUG (mine, from the slack change, and
+  ONLY `--smoke=coldsnap` caught it): `doc.devices` was still emitted in
+  id-sorted order under a comment claiming "slack plant FIRST" — an
+  invariant that held only while the slack WAS plant_ids[0]. A boiler
+  sorting ahead of the CHP got bound to the slack while the bundle named
+  the CHP's node, and the CHP's coupled electricity collapsed (-18.8 kW
+  where it owes < -30). The slack device is emitted first explicitly now.
+  Backend pins: `tests/test_gb_multi_plant.py`.
+  STILL COLD, and it is NOT generation: `HeatTopology.STD_TYPE` hard-codes
+  **ISOPLUS_DRE50_STD for every pipe in every city** — DN50 carries ~293 kW
+  at a sane 1 m/s, while Heidelberg's 17 heat zones are dimensioned at
+  2720 kW. The trunk is ~10x too small, which is why the far Altstadt sits
+  at 10-20 C supply however much plant you add. Sizing pipes from their
+  downstream design load (rtheatflow's own convert_schutterwald does
+  exactly this) is the next heat fix.
   The old (superseded) note follows for the record: `HeatTopology` emits ONE
   producer — the slack — and takes the whole network's flow temperature
   from THAT plant's kind (`heat_topology.gd:182`); every other plant

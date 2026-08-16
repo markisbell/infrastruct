@@ -205,13 +205,18 @@ func test_the_city_has_its_real_thermal_plants() -> void:
 	var model := City.model
 	assert_int(model.buildings_of_kind("chp_plant").size()).is_equal(1)
 	assert_int(model.buildings_of_kind("heat_pump_plant").size()).is_equal(1)
-	# NO BOILER, and that is load-bearing rather than an omission. The heat
-	# doc has ONE producer (the slack), chosen as plant_ids.sort()[0], and
-	# the whole network runs at THAT plant's flow temperature.
-	# "boiler_plant" sorts before "chp_plant", so one boiler anywhere drops
-	# the city from 85 °C to 66 °C and the far ends stop being servable —
-	# heat frames went from 9-in-9 converged to 5, with `failed` among them.
-	assert_int(model.buildings_of_kind("boiler_plant").size()).is_equal(0)
+	# THREE SPITZENLASTKESSEL along the line, which is how a real district
+	# heating network is fed. This used to pin ZERO boilers, and the reason
+	# is worth keeping because both halves of it were real bugs:
+	#   1. the slack was `plant_ids.sort()[0]`, so "boiler_plant" outranked
+	#      "chp_plant" by STRING and one boiler dropped the whole city from
+	#      85 °C to 66 °C — the slack sets the network's supply temperature;
+	#   2. secondary plants were `heat_exchanger` feed-ins, which fix HEAT on
+	#      a branch whose flow the network decides, so the second one landed
+	#      at near-zero flow and its temperature rise exploded.
+	# The slack is the hottest plant now and secondaries are pumps, so these
+	# can stand. Every one of them must REACH a heat main (below).
+	assert_int(model.buildings_of_kind("boiler_plant").size()).is_equal(3)
 	# two gas plants: a small generator in the south and the real
 	# Heizkraftwerk Heidelberg, which is a gas CHP in life but can only be
 	# a power plant here (see below)

@@ -105,17 +105,19 @@ func test_heat_feed_in_follows_demand_in_merit_order() -> void:
 	assert_float(float(high["mid"])).is_equal_approx(100.0, 0.01)
 	assert_float(float(high["peak"])) \
 		.override_failure_message("the peak boiler fired before the base load ran out") \
-		.is_equal_approx(DispatchPolicy.HEAT_STANDBY_KW, 0.01)
-	# a quiet summer step must not push the whole nameplate into the net…
+		.is_equal(0.0)
+	# a quiet summer step must not push the whole nameplate into the net —
+	# the total stays inside what the network actually asked for
 	var low := DispatchPolicy.heat_feed_in_kw(20.0, plants)
 	var total := 0.0
 	for id: String in low:
 		total += float(low[id])
-	assert_float(total).is_less(120.0)
-	# …but nothing sits at EXACTLY zero: a zero-dispatch feed-in is a
-	# zero-flow branch, and the hydraulics go degenerate
-	for id: String in low:
-		assert_float(float(low[id])).is_greater(0.0)
+	assert_float(total).is_less_equal(20.0 * (1.0 - DispatchPolicy.HEAT_SLACK_SHARE))
+	# an idle station burns no fuel. Its pump keeps a trickle of flow so the
+	# branch is never singular, but that floor lives on the FLOW in the
+	# backend — heat pushed into a stalled branch would only blow up its
+	# temperature rise (measured: a zone at -438 C, reported "converged")
+	assert_float(float(low["peak"])).is_equal(0.0)
 	# a plant that is down really is off
 	var downed: Array = [{"id": "dead", "kind": "boiler_plant", "rating_kw": 0.0}]
 	assert_float(float(DispatchPolicy.heat_feed_in_kw(500.0, downed)["dead"])) \
