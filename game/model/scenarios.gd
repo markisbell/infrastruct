@@ -337,6 +337,16 @@ static func _build_heidelberg() -> void:
 			Vector2i(28, 151)],
 		[Vector2i(22, 160), Vector2i(26, 160)],                      # heat store
 	]
+	# ── the three real Neckar crossings, decked before anything is laid ──
+	# Ernst-Walz-, Theodor-Heuss- and Alte Brücke stand where the river
+	# polyline already named them. A decked tile is crossable ground, so the
+	# OSM street network lays itself over them later in this same build and
+	# the utility run below can follow — which is the whole reason the north
+	# bank stops being a separate city.
+	for span: Vector2i in [Vector2i(91, 105), Vector2i(114, 109),
+			Vector2i(159, 115)]:
+		_hd_bridge_span(span)
+
 	# PHASE 2 — every trench, laid while only Phase 1's buildings exist.
 	# Seating the supply trios inside THIS loop (the previous shape) let a
 	# trio beside corridor N sever corridor N+1 where it crossed: the
@@ -415,7 +425,16 @@ static func _build_heidelberg() -> void:
 	# multi-component support, via grid_forming islands.
 	var north_tiles: Array = []
 	for run: Array in north:
+		_hd_run("water", run)
 		north_tiles.append(_hd_run("cable", run))
+	# THE CROSSING. One run over the Theodor-Heuss-Brücke joins the north
+	# bank to the south networks: power meshes into one grid, and the water
+	# mains reach the Königstuhl tower's pressure zone instead of being
+	# discarded as an unreachable component. It lands on the north trunk at
+	# y=98 and on the Altstadt corridor at y=125, both of which already run
+	# through x=114.
+	_hd_run("cable", [Vector2i(114, 98), Vector2i(114, 125)])
+	_hd_run("water", [Vector2i(114, 98), Vector2i(114, 125)])
 
 	# PHASE 3 — supply trios, seated only once every trench is in the
 	# ground. Each finds its own free tile beside the pipe it taps; a
@@ -425,7 +444,7 @@ static func _build_heidelberg() -> void:
 		_hd_supply_along(tiles, 16, true)
 	_hd_supply_along(sued_tiles, 16, false)   # Südstadt: no heat station
 	for tiles: Array in north_tiles:
-		_hd_supply_along(tiles, 16, false, false)
+		_hd_supply_along(tiles, 16, false)   # water reaches over the bridge now
 
 	# ── the real street network, laid around the utilities ──
 	# Every arterial across the map (motorway…tertiary), plus the dense
@@ -887,6 +906,33 @@ static func _hd_seat(kind: String, at: Vector2i) -> bool:
 
 ## Buried run along axis-aligned legs. Integer stepping is exact because
 ## every leg is axis-aligned (one component of the delta is zero).
+## Deck one river crossing: the three columns around *centre*.x, walking
+## out along y and decking only what is actually wet. The channel is a swept
+## polyline, so its exact extent at a given x is whatever the sweep left —
+## and three columns wide gives a diagonal street room to find the deck.
+static func _hd_bridge_span(centre: Vector2i, reach: int = 12) -> int:
+	var decked := 0
+	var wet: Array[int] = []
+	for dx in range(-1, 2):
+		for dy in range(-reach, reach + 1):
+			if City.model.set_bridge(centre + Vector2i(dx, dy)):
+				decked += 1
+				if dx == 0:
+					wet.append(centre.y + dy)
+	if wet.is_empty():
+		return 0
+	wet.sort()
+	# The carriageway. Decking alone leaves a bare slab: the OSM street
+	# network is laid from real geometry and does not happen to run down the
+	# column we decked, so the crossing has to be paved explicitly — the
+	# centre column plus a short ramp onto each bank to meet the streets.
+	# Tiles already carrying something simply refuse, which is the ramp
+	# finding its own length.
+	for y in range(wet[0] - 4, wet[wet.size() - 1] + 5):
+		City.build_road(Vector2i(centre.x, y))
+	return decked
+
+
 static func _hd_run(build: String, waypoints: Array) -> Array[Vector2i]:
 	var laid: Array[Vector2i] = []
 	for i in waypoints.size() - 1:

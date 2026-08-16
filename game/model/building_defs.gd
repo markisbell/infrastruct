@@ -122,7 +122,11 @@ const LINE_UNDERGROUND := 2  # buried cable — pricier, out of sight
 const COSTS := {"road": 40, "overhead_line": 120, "cable": 320, "zone": 10,
 	"zone_commercial": 25,
 	"heat_pipe": 350, "heat_pipe_buried": 600,
-	"water_pipe": 180, "water_pipe_buried": 400}
+	"water_pipe": 180, "water_pipe_buried": 400,
+	# A river crossing is the most expensive metre of infrastructure a small
+	# city builds — piers in a riverbed, not a trench in a street. Priced so
+	# spanning a 5-tile channel (~€9k) is a deliberate act, not a doodle.
+	"bridge": 1_800}
 
 ## Fixed O&M per building per game-day, € (Phase 7 economy; rationale in
 ## tools/balancing/economy.md — sized so a ~25-house town runs thin-but-

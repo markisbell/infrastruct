@@ -10,7 +10,7 @@ extends Node3D
 enum Tool { NONE, ROAD, ZONE, CABLE, SUBSTATION, GAS, WIND, SOLAR, BATTERY, GRID,
 	BULLDOZE, PIPE, HEAT_SUB, BOILER, CHP, HEATPUMP, HEATSTORE,
 	WATER_PIPE, WATER_SUB, WELL, PUMP, WATER_TOWER, UCABLE, REPAIR,
-	BURIED_PIPE, BURIED_WATER, ZONE_COMMERCIAL, CHARGING, SUBSTATION_XL }
+	BURIED_PIPE, BURIED_WATER, ZONE_COMMERCIAL, CHARGING, SUBSTATION_XL, BRIDGE }
 
 const TOOL_BUILDING := {
 	Tool.SUBSTATION: "substation", Tool.GAS: "gas_plant", Tool.WIND: "wind_farm",
@@ -74,6 +74,7 @@ const PATH_TOOL_BUILD := {
 	Tool.CABLE: "cable_overhead", Tool.UCABLE: "cable_buried",
 	Tool.PIPE: "heat", Tool.BURIED_PIPE: "heat_buried",
 	Tool.WATER_PIPE: "water", Tool.BURIED_WATER: "water_buried",
+	Tool.BRIDGE: "bridge",
 }
 ## ghost tint per path tool (the element's own color language, faded)
 const PATH_TOOL_COLOR := {
@@ -82,8 +83,12 @@ const PATH_TOOL_COLOR := {
 	Tool.CABLE: Color(0.45, 0.36, 0.28), Tool.UCABLE: Color(0.36, 0.33, 0.29),
 	Tool.PIPE: PIPE_SUPPLY_COLOR, Tool.BURIED_PIPE: Color(0.36, 0.33, 0.29),
 	Tool.WATER_PIPE: WATER_PIPE_COLOR, Tool.BURIED_WATER: Color(0.36, 0.33, 0.29),
+	Tool.BRIDGE: Color(0.62, 0.58, 0.52),
 }
 const PATH_BLOCKED_COLOR := Color(0.95, 0.22, 0.18)
+## How far a deck rides above the water it spans (visual units; terrain
+## VISUAL_STEP is 0.3/level, so this is about one terrain step).
+const BRIDGE_DECK_RISE := 0.32
 var _drag_path: Array[Vector2i] = []
 var _drag_active := false
 var _path_ghost: Node3D
@@ -98,6 +103,7 @@ var _orphan_markers := {}    # house pos -> Label3D
 
 # pos/id -> Node3D, one dict per layer (incremental diff in redraw)
 var _roads := {}
+var _bridges := {}
 var _cables := {}
 var _pipes := {}
 var _water_pipes := {}
@@ -461,6 +467,7 @@ func redraw() -> void:
 	_rebuild_terrain()
 	_rebuild_deco()
 	_diff(_zones, model.zoning, _make_zone)
+	_diff(_bridges, model.bridges, _make_bridge)
 	_diff(_roads, model.roads, _make_road)
 	_diff(_cables, model.cables, _make_cable)
 	_diff(_pipes, model.heat_pipes, _make_pipe)
@@ -544,7 +551,11 @@ func _ground_y(pos: Vector2i) -> float:
 	# always did (the smoothed _ground_y variant cost ~16 noise calls per
 	# call in every renderer hot path AND shattered road runs into
 	# stepped slabs — user report 2026-08-02)
-	return City.model.terrain.visual_y(pos)
+	# A BRIDGE lifts its tile: returning the deck height here is what puts
+	# the road piece, the wires and the pipes ON the crossing instead of in
+	# the river — every renderer places through _center/_ground_y.
+	var y := City.model.terrain.visual_y(pos)
+	return y + BRIDGE_DECK_RISE if City.model.bridges.has(pos) else y
 
 
 ## Geometry rules live in TerrainMeshBuilder (Phase-5 extraction); this
@@ -711,6 +722,12 @@ func _make_zone(pos: Vector2i) -> Node3D:
 	quad.material_override = _flat(Color(0.45, 0.8, 0.4, 0.10), true)
 	quad.position = _center(pos) + Vector3(0, 0.01, 0)
 	return quad
+
+
+func _make_bridge(pos: Vector2i) -> Node3D:
+	var node := BuildingModels.make_bridge_deck(BRIDGE_DECK_RISE + 0.25)
+	node.position = _center(pos)
+	return node
 
 
 func _make_road(pos: Vector2i) -> Node3D:

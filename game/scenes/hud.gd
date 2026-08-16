@@ -60,6 +60,9 @@ func _build_items() -> Array:
 			{"tool": CityView.Tool.ZONE_COMMERCIAL, "id": "zone_commercial", "label": "Commercial zone", "mono": "Cz", "key": "X",
 				"color": Color(0.45, 0.55, 0.9), "cost": BuildingDefs.COSTS["zone_commercial"],
 				"desc": "Paint industrial land. Factories, food plants and malls move in on their own - but only where the substation has the headroom to carry them."},
+			{"tool": CityView.Tool.BRIDGE, "id": "bridge", "label": "Bridge", "mono": "Br", "key": "V",
+				"color": Color(0.62, 0.58, 0.52), "cost": BuildingDefs.COSTS["bridge"],
+				"desc": "Deck a river tile so a crossing can be built. Drag bank to bank, then run roads, cables and pipes over it like any other ground."},
 		]},
 		{"cat": "Electricity", "items": [
 			{"tool": CityView.Tool.CABLE, "id": "cable_overhead", "label": "Overhead line", "mono": "Oh", "key": "",

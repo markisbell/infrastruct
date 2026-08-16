@@ -1,8 +1,9 @@
 extends GdUnitTestSuite
 ## The Heidelberg reference build. These are the assertions that keep the
 ## city recognisable: the Neckar where the bridges are, districts on their
-## real ground, and — because the river cuts the map and there are no
-## bridges — two independent networks rather than one broken one.
+## real ground, and the three crossings that make it ONE city — power and
+## water run over the Theodor-Heuss-Brücke, and only heat stays south, on
+## capacity grounds rather than structural ones.
 
 
 func before_test() -> void:
@@ -48,10 +49,12 @@ func test_city_stands_on_both_banks() -> void:
 	assert_int(north).is_greater(10)
 
 
-func test_two_independent_networks_because_there_are_no_bridges() -> void:
-	# the honest consequence of the missing river crossing: each bank needs
-	# its own 110/20 kV infeed. If bridges ever land, this is the assertion
-	# that should change.
+func test_each_bank_keeps_its_own_infeed() -> void:
+	# This used to be forced: with no way over the river, each bank NEEDED
+	# its own 110/20 kV infeed. The banks are bridged now and the cable
+	# crosses, so the second one is redundancy rather than necessity — which
+	# is also how the real city is fed. Kept at two deliberately: it gives
+	# the north bank somewhere to island onto when the crossing trips.
 	assert_int(City.model.buildings_of_kind("grid_connection").size()) \
 		.is_equal(2)
 
@@ -66,9 +69,10 @@ func test_all_three_networks_are_supplied() -> void:
 	# exchangers fell to 10 °C and the solve failed outright.
 	assert_int(model.buildings_of_kind("chp_plant").size()).is_equal(1)
 	assert_int(model.buildings_of_kind("heat_storage").size()).is_equal(1)
-	# two wells, both south: the north bank has no water system at all,
-	# because WaterTopology solves only the single head's network and the
-	# head (the Königstuhl tower) is on this side of the river
+	# two wells, both south — but the north bank drinks from them now. Its
+	# mains used to be discarded by WaterTopology, which BFSes from the one
+	# head (the Königstuhl tower, on this side); the bridged crossing puts
+	# them in the same pressure zone, and water zones went 20 -> 34.
 	assert_int(model.buildings_of_kind("well").size()).is_equal(2)
 	# every line layer got built, and buried: a surface line cannot cross a
 	# road, so an overhead trunk would never have entered a district
@@ -147,8 +151,10 @@ func test_streets_are_continuous_not_dotted() -> void:
 	# stand completely alone (it renders as a capped stub in a field), and
 	# the network must be a few big pieces, not dust. Before the fix this
 	# city had 97 lonely tiles and 803 diagonal dead ends out of 3 600.
-	# Components stay >1 legitimately: the Neckar has no bridges, so each
-	# bank is its own network, plus a few outlying stubs at the map edge.
+	# Components stay >1 legitimately: outlying stubs at the map edge, and
+	# whatever the OSM extract left dangling. The banks themselves are no
+	# longer among the reasons — the three crossings are decked, and a deck
+	# is ordinary ground to the street layer.
 	var health := Scenarios.road_health(City.model.roads)
 	assert_int(health["tiles"]).is_greater(2000)
 	assert_int(health["lonely"]) \
@@ -221,18 +227,50 @@ func test_the_city_has_its_real_thermal_plants() -> void:
 	# Heizkraftwerk Heidelberg, which is a gas CHP in life but can only be
 	# a power plant here (see below)
 	assert_int(model.buildings_of_kind("gas_plant").size()).is_equal(2)
-	# DISTRICT HEATING IS SOUTH-BANK ONLY, and that is a model limit worth
-	# pinning: HeatTopology binds ONE slack and drops every pipe it cannot
-	# reach from it, so the second heat system a river-split city needs
-	# cannot exist. Heat on the north bank silently ate the south's solve.
-	# If heat ever grows multi-slack the way power grew islands, this is
-	# the assertion that should change.
+	# DISTRICT HEATING IS STILL SOUTH-BANK ONLY, but the reason has changed
+	# and is worth keeping straight. It used to be structural: heat drops
+	# every pipe it cannot reach from its one slack, so a river-split city
+	# needed a second heat system the model could not express. The Neckar is
+	# BRIDGED now — power and water cross it — so heat could follow. What
+	# stops it is capacity: HeatTopology gives every pipe in every city
+	# ISOPLUS_DRE50_STD, and DN50 carries ~293 kW at a sane velocity against
+	# 17 zones dimensioned at 2720 kW. The far Altstadt already runs at
+	# 10-20 °C supply; hanging Neuenheim off the same trunk would only
+	# spread the cold. Size pipes from downstream load and this assertion is
+	# the one to revisit.
 	var north_heat := 0
 	for pos: Vector2i in model.heat_pipes:
 		if pos.y < 105:
 			north_heat += 1
 	assert_int(north_heat).is_equal(0)
 	assert_int(model.heat_pipes.size()).is_greater(150)
+
+
+func test_the_neckar_is_bridged_and_the_north_bank_joins_the_city() -> void:
+	# The river used to cut the map in two: the north bank ran on its OWN
+	# grid connection and had no water at all, because WaterTopology BFSes
+	# from one head and silently discarded 16 stranded stations. Three real
+	# crossings (Ernst-Walz, Theodor-Heuss, Alte Brücke) are decked now, and
+	# one run over the Theodor-Heuss carries power and water across.
+	var model := City.model
+	assert_int(model.bridges.size()) 		.override_failure_message("the Neckar has no crossings").is_greater(30)
+	for pos: Vector2i in model.bridges:
+		assert_bool(model.terrain.is_water(pos)) 			.override_failure_message("a deck at %s stands on dry land" % pos) 			.is_true()
+	# the crossing itself: utilities on decked river tiles, north to south
+	var crossed := {"cable": 0, "water": 0}
+	for pos: Vector2i in model.bridges:
+		if model.cables.has(pos):
+			crossed["cable"] += 1
+		if model.water_pipes.has(pos):
+			crossed["water"] += 1
+	assert_int(crossed["cable"]) 		.override_failure_message("no power line crosses the river").is_greater(0)
+	assert_int(crossed["water"]) 		.override_failure_message("no water main crosses the river").is_greater(0)
+	# and the north bank is genuinely served: water mains north of the river
+	var north_water := 0
+	for pos: Vector2i in model.water_pipes:
+		if pos.y < 95:
+			north_water += 1
+	assert_int(north_water) 		.override_failure_message("the north bank still has no water") 		.is_greater(20)
 
 
 func test_pressure_tower_stands_on_the_koenigstuhl_slope() -> void:

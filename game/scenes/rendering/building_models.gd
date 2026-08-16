@@ -54,6 +54,32 @@ static func box(size: Vector3, color: Color, offset: Vector3) -> MeshInstance3D:
 	return mesh_box
 
 
+## A river crossing's deck: slab, kerbs and four piers dropping into the
+## water. Deliberately orientation-free — a bridge tile has no direction of
+## its own, and the road/line art laid ON the deck carries the direction
+## (which also means a deck never needs re-orienting when its neighbours
+## change, unlike road pieces).
+static func make_bridge_deck(drop: float) -> Node3D:
+	var node := Node3D.new()
+	var stone := Color(0.62, 0.60, 0.56)
+	var kerb := Color(0.72, 0.70, 0.66)
+	node.add_child(box(Vector3(1.0, 0.12, 1.0), stone, Vector3(0, -0.06, 0)))
+	# kerbs on all four edges: low enough to read as a deck rim from any
+	# approach, never as a wall across the carriageway
+	for edge: Vector3 in [Vector3(0.47, 0, 0), Vector3(-0.47, 0, 0),
+			Vector3(0, 0, 0.47), Vector3(0, 0, -0.47)]:
+		var along_x := absf(edge.x) > 0.0
+		node.add_child(box(
+			Vector3(0.06 if along_x else 1.0, 0.10, 1.0 if along_x else 0.06),
+			kerb, edge + Vector3(0, 0.05, 0)))
+	var pier := maxf(0.25, drop)
+	for corner: Vector3 in [Vector3(0.34, 0, 0.34), Vector3(-0.34, 0, 0.34),
+			Vector3(0.34, 0, -0.34), Vector3(-0.34, 0, -0.34)]:
+		node.add_child(box(Vector3(0.13, pier, 0.13), stone.darkened(0.25),
+			corner + Vector3(0, -0.12 - pier / 2.0, 0)))
+	return node
+
+
 ## The procedural library dispatch; null = no procedural model (the
 ## renderer falls back to a kit GLB).
 static func make(kind: String) -> Node3D:

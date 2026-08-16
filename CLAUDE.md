@@ -371,12 +371,16 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   (4) The first pass zoned ~2100 tiles but supplied only 6 substations, so
   92 % of the city was land that could never grow — a substation's radius
   12 / 150 houses is about a real Ortsnetzstation, so a CITY needs a ROW
-  of them (now ~14, one per ~20 tiles of street). **THE HEADLINE FINDING:
-  there are no river BRIDGES and water blocks every kind of construction,
-  so the Neckar cuts the map in two and the north bank had to be built as
-  its OWN network with its OWN 110/20 kV infeed.** That is defensible
-  (Neuenheim really is fed from other substations) but it is a workaround,
-  not a model — bridges are the unlock that would make this one city, and
+  of them (now ~14, one per ~20 tiles of street). **THE HEADLINE FINDING
+  (2026-08-14), RESOLVED 2026-08-16: there were no river BRIDGES and water
+  blocked every kind of construction, so the Neckar cut the map in two and
+  the north bank had to be built as its OWN network with its OWN 110/20 kV
+  infeed.** BRIDGES now exist (see §4) and the three real crossings are
+  decked: power and water run over the Theodor-Heuss-Brücke, WATER ZONES
+  WENT 20 -> 34 (the north bank's mains used to be silently discarded by
+  the single-head BFS), and the second infeed is kept as redundancy rather
+  than necessity. Only HEAT stays south, and no longer for structural
+  reasons — the DN50 trunk (§4 heat pipes) cannot carry another district.
   test_scenario_heidelberg pins the 2-infeed consequence so it changes
   deliberately. Scale is compressed: ~814 houses (53 % of the real
   footprints; the rest are courtyard/backland buildings, or lost to the
@@ -635,7 +639,7 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   (`Terrain.is_water` — seed-only like heights, seed 0 = none, water only
   on valley level 0, never under forced-height rects; `force_water` is the
   scenario/test hook, serialized additively). Water blocks ALL construction
-  (roads/lines/pipes/zones/buildings — no bridges yet); wells within 3
+  (roads/lines/pipes/zones/buildings) unless a BRIDGE decks it; wells within 3
   tiles of water yield ×1.5 (`WaterTopology.WELL_RIVER_BONUS`). Sandbox +
   greenfield (terrain seed 19) carry rivers; prebuilt scenarios stay flat.
   DECORATION: Kenney mini-forest props CLUSTER (user direction — grouped,
@@ -646,6 +650,28 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   redraw so building clears props. The BULLDOZER on empty land clears a
   tile's props explicitly (`WorldModel.deco_cleared`, saved additively —
   derived scatter needs remembered removals).
+- **RIVER BRIDGES (2026-08-16, user request — "the structural unlock")**:
+  a bridge decks ONE water tile (`WorldModel.bridges`, additive save key,
+  tool V, €1 800/tile, drag bank to bank like any other run). A decked tile
+  is crossable ground: `water_blocks()` is the shared predicate behind
+  `can_set_road`/`_line_blocked`, so roads AND all three utility layers may
+  cross it — but `is_tile_free` stays STRICT about water, because it is
+  what building placement, prop scatter and the scenario spot-finder ask,
+  and a deck is a street cross-section, not a plot (a bridge took a
+  substation until that was split — caught by the new suite). The deck is
+  only removable once bare (the bulldozer takes the road first). Renderer:
+  `BuildingModels.make_bridge_deck` (slab, kerbs, four piers) drawn via the
+  usual `_diff`, and `_ground_y` returns the deck height for a bridged tile
+  — which is what puts the road piece, the wires and the pipes ON the
+  crossing rather than in the river, for free, in every renderer.
+  Deliberately orientation-free, so a deck never needs re-orienting when
+  its neighbours change (unlike road pieces). Heidelberg decks its three
+  REAL crossings (Ernst-Walz/Theodor-Heuss/Alte Brücke, already named in
+  the `HD_NECKAR` polyline) and paves each centre column — the OSM street
+  network is real geometry and does NOT happen to run down the column we
+  deck, so the carriageway is explicit, with a ramp that finds its own
+  length (occupied tiles simply refuse). Suites: test_bridges (7),
+  test_scenario_heidelberg's crossing pin.
 - **MODEL PASS (2026-07-31, user-driven)**: every plant/utility building is
   a procedural rebuild after a Sketchfab reference the user picked or a
   reference found via the public search API (api.sketchfab.com/v3/search;
@@ -1176,6 +1202,7 @@ econ books, event-system state incl. RNG position, device SoC survive
 loads), SoC replay on every registration (heatstorage smoke pins
 0.79→0.79), drag stalls halved, `WorldModel.check_invariants`, Windows
 installer, Linux port + tarball. Remaining: contract 1.2 candidates
-(emitter leaks, CHP fuel field, multi-network heat), river BRIDGES
-(mini-forest ships bridge.glb), dry-home visuals, terrain-aware coverage
-discs.
+(emitter leaks, CHP fuel field, multi-network heat), HEAT PIPE SIZING (§4:
+one hard-coded DN50 for every pipe in every city — the next heat fix),
+dry-home visuals, terrain-aware coverage discs. River BRIDGES: DONE
+2026-08-16.

@@ -28,6 +28,7 @@ var buildings: Dictionary = {}       # id (String) -> {"kind": String, "anchor":
 ## Tiles the bulldozer cleared of environment props (trees/stones are
 ## DERIVED from the seed, so removal must be remembered explicitly).
 var deco_cleared: Dictionary = {}    # Vector2i -> true
+var bridges: Dictionary = {}         # Vector2i -> true (deck over a river tile)
 var next_building_id := 1
 
 ## Vector2i -> building id — derived from `buildings`, rebuilt on load.
@@ -36,6 +37,18 @@ var building_tiles: Dictionary = {}
 
 # ─── occupancy ───
 
+## Water stops construction unless a BRIDGE decks it. Roads and every
+## utility line may cross a bridged tile — that is the whole point of one —
+## but zoning, houses and building footprints never may: a deck carries a
+## street cross-section, not a plot of land.
+func water_blocks(pos: Vector2i) -> bool:
+	return terrain.is_water(pos) and not bridges.has(pos)
+
+
+## Free LAND. Deliberately strict about water even where a bridge decks it:
+## this is what building placement, prop scatter and the scenario spot-finder
+## ask, and none of them may treat a deck as ground. Roads and lines have
+## their own predicates and go through `water_blocks`.
 func is_tile_free(pos: Vector2i) -> bool:
 	return not (roads.has(pos) or houses.has(pos) or building_tiles.has(pos)
 		or cables.has(pos) or heat_pipes.has(pos) or water_pipes.has(pos)
@@ -44,10 +57,10 @@ func is_tile_free(pos: Vector2i) -> bool:
 
 ## Buried lines (kind LINE_UNDERGROUND) may run under ROADS and share the
 ## street cross-section with other buried networks; nothing ever runs under
-## houses or building footprints — and nothing crosses RIVERS (no bridges
-## yet: water constrains routing). Surface builds keep the strict rules.
+## houses or building footprints — and a river is crossed only where a
+## BRIDGE decks it. Surface builds keep the strict rules.
 func _line_blocked(pos: Vector2i, buried: bool) -> bool:
-	if houses.has(pos) or building_tiles.has(pos) or terrain.is_water(pos):
+	if houses.has(pos) or building_tiles.has(pos) or water_blocks(pos):
 		return true
 	return not buried and roads.has(pos)
 
@@ -141,7 +154,7 @@ func has_cable(pos: Vector2i) -> bool:
 func can_set_road(pos: Vector2i) -> bool:
 	# paving OVER existing buried lines is fine; surface lines block
 	if roads.has(pos) or houses.has(pos) or building_tiles.has(pos) \
-			or terrain.is_water(pos):
+			or water_blocks(pos):
 		return false
 	for layer: Dictionary in [cables, heat_pipes, water_pipes]:
 		if _surface_entry(layer, pos):
@@ -156,6 +169,36 @@ func set_road(pos: Vector2i) -> bool:
 	# survived under the asphalt and growth put a house on the road)
 	zoning.erase(pos)
 	roads[pos] = true
+	return true
+
+
+## A bridge decks ONE river tile. Drag a run of them bank to bank and the
+## crossing carries whatever you then build on it — road, cable, heat, water.
+## Nothing else about the tile changes: the river still flows under it, the
+## well next to it still gets its river bonus, and no house may stand on it.
+func can_set_bridge(pos: Vector2i) -> bool:
+	return terrain.is_water(pos) and not bridges.has(pos)
+
+
+func set_bridge(pos: Vector2i) -> bool:
+	if not can_set_bridge(pos):
+		return false
+	bridges[pos] = true
+	return true
+
+
+## Removing a deck drops whatever it carried into the river, so it is only
+## allowed once the tile is clear — the bulldozer takes the road or line
+## first, exactly as it would on land.
+func can_remove_bridge(pos: Vector2i) -> bool:
+	return bridges.has(pos) and not (roads.has(pos) or cables.has(pos)
+		or heat_pipes.has(pos) or water_pipes.has(pos))
+
+
+func remove_bridge(pos: Vector2i) -> bool:
+	if not can_remove_bridge(pos):
+		return false
+	bridges.erase(pos)
 	return true
 
 
@@ -329,15 +372,15 @@ func check_invariants() -> Array[String]:
 			["water", water_pipes]]:
 		var layer: Dictionary = layer_pair[1]
 		for pos: Vector2i in layer:
-			if terrain.is_water(pos):
-				problems.append("%s on water at %s" % [layer_pair[0], pos])
+			if water_blocks(pos):
+				problems.append("%s on unbridged water at %s" % [layer_pair[0], pos])
 			if houses.has(pos) or building_tiles.has(pos):
 				problems.append("%s under a building/house at %s" % [layer_pair[0], pos])
 			if roads.has(pos) and int(layer[pos]) != BuildingDefs.LINE_UNDERGROUND:
 				problems.append("surface %s under a road at %s" % [layer_pair[0], pos])
 	for pos: Vector2i in roads:
-		if terrain.is_water(pos):
-			problems.append("road on water at %s" % pos)
+		if water_blocks(pos):
+			problems.append("road on unbridged water at %s" % pos)
 		if houses.has(pos) or building_tiles.has(pos):
 			problems.append("road under a building/house at %s" % pos)
 	for pos: Vector2i in houses:
@@ -351,6 +394,9 @@ func check_invariants() -> Array[String]:
 	for pos: Vector2i in zoning:
 		if terrain.is_water(pos):
 			problems.append("zone on water at %s" % pos)
+	for pos: Vector2i in bridges:
+		if not terrain.is_water(pos):
+			problems.append("bridge on dry land at %s" % pos)
 	for id: String in buildings:
 		for tile: Vector2i in BuildingDefs.footprint(
 				buildings[id]["kind"], buildings[id]["anchor"]):
@@ -374,6 +420,7 @@ func to_json() -> String:
 		"commercial": _dict_to_keys(commercial),  # additive (old saves lack it)
 		"buildings": _buildings_out(),
 		"deco_cleared": _dict_to_keys(deco_cleared),  # additive (old saves lack it)
+		"bridges": _dict_to_keys(bridges),           # additive (old saves lack it)
 		"next_building_id": next_building_id,
 	})
 
@@ -396,6 +443,7 @@ static func from_json(text: String) -> WorldModel:
 	model.houses = _keys_to_dict(dict.get("houses", {}), TYPE_DICTIONARY)
 	model.commercial = _keys_to_dict(dict.get("commercial", {}), TYPE_INT)
 	model.deco_cleared = _keys_to_dict(dict.get("deco_cleared", {}), TYPE_BOOL)
+	model.bridges = _keys_to_dict(dict.get("bridges", {}), TYPE_BOOL)
 	model.next_building_id = int(dict.get("next_building_id", 1))
 	for id: String in dict.get("buildings", {}):
 		var raw: Dictionary = dict["buildings"][id]
@@ -414,7 +462,8 @@ func equals(other: WorldModel) -> bool:
 		and water_pipes == other.water_pipes and roads == other.roads \
 		and zoning == other.zoning and houses == other.houses \
 		and buildings == other.buildings and terrain.equals(other.terrain) \
-		and deco_cleared == other.deco_cleared
+		and deco_cleared == other.deco_cleared \
+		and bridges == other.bridges
 
 
 func _buildings_out() -> Dictionary:

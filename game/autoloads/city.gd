@@ -248,6 +248,12 @@ func build_road(pos: Vector2i) -> bool:
 		and model.set_road(pos) and _after_build(false)
 
 
+func build_bridge(pos: Vector2i) -> bool:
+	dirty_tiles[pos] = true
+	return model.can_set_bridge(pos) and _paid(BuildingDefs.COSTS["bridge"]) \
+		and model.set_bridge(pos) and _after_build(false)
+
+
 func build_zone(pos: Vector2i, kind: int = WorldModel.ZONE_RESIDENTIAL) -> bool:
 	dirty_tiles[pos] = true
 	var cost_key := "zone" if kind == WorldModel.ZONE_RESIDENTIAL \
@@ -311,6 +317,8 @@ const PATH_BUILDS := {
 	"heat_buried": {"cost": "heat_pipe_buried", "kind": BuildingDefs.LINE_UNDERGROUND},
 	"water": {"cost": "water_pipe", "kind": BuildingDefs.LINE_OVERHEAD},
 	"water_buried": {"cost": "water_pipe_buried", "kind": BuildingDefs.LINE_UNDERGROUND},
+	# Drawn bank to bank like any other run; what it carries comes after.
+	"bridge": {"cost": "bridge"},
 }
 
 
@@ -375,6 +383,8 @@ func build_path(build: String, tiles: Array[Vector2i]) -> int:
 				ok = build_heat_pipe(tiles[i], spec["kind"])
 			"water", "water_buried":
 				ok = build_water_pipe(tiles[i], spec["kind"])
+			"bridge":
+				ok = build_bridge(tiles[i])
 		if ok:
 			built += 1
 	_batching = false
@@ -398,6 +408,8 @@ func _path_duplicate(build: String, pos: Vector2i) -> bool:
 			return int(model.heat_pipes.get(pos, -1)) == int(spec["kind"])
 		"water", "water_buried":
 			return int(model.water_pipes.get(pos, -1)) == int(spec["kind"])
+		"bridge":
+			return model.bridges.has(pos)
 	return false
 
 
@@ -414,6 +426,8 @@ func _path_can_set(build: String, pos: Vector2i) -> bool:
 			return model.can_set_heat_pipe(pos, spec["kind"])
 		"water", "water_buried":
 			return model.can_set_water_pipe(pos, spec["kind"])
+		"bridge":
+			return model.can_set_bridge(pos)
 	return false
 
 
@@ -457,6 +471,10 @@ func bulldoze(pos: Vector2i) -> bool:
 		return _after_build(true)
 	if model.water_pipes.has(pos):
 		model.remove_water_pipe(pos)
+		return _after_build(true)
+	# a deck goes last: it is only bare once whatever crossed it is gone
+	if model.remove_bridge(pos):
+		money += int(BuildingDefs.COSTS["bridge"] * 0.25)
 		return _after_build(true)
 	if model.commercial.has(pos):
 		model.remove_commercial(pos)
