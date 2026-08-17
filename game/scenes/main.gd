@@ -26,6 +26,8 @@ func _ready() -> void:
 			_screenshot_path = arg.trim_prefix("--screenshot=")
 		elif arg.begins_with("--roadtest="):
 			_roadtest_path = arg.trim_prefix("--roadtest=")
+		elif arg.begins_with("--splinetest="):
+			_splinetest_path = arg.trim_prefix("--splinetest=")
 		elif arg.begins_with("--gallery="):
 			_gallery_path = arg.trim_prefix("--gallery=")
 
@@ -37,6 +39,9 @@ func _ready() -> void:
 		return
 	if _screenshot_path != "":
 		_take_screenshot()
+		return
+	if _splinetest_path != "":
+		await _run_splinetest()
 		return
 	if _roadtest_path != "":
 		_take_roadtest()
@@ -474,6 +479,83 @@ func _kind_counts() -> Dictionary:
 # ─── road-piece visual regression: every mask variant on one screen ───
 
 var _roadtest_path := ""
+var _splinetest_path := ""
+
+
+## SPIKE (2026-08-17): can the vendored road-generator addon draw the OSM
+## streets as real splines at city scale? Renders Heidelberg with the tile
+## road art HIDDEN and every OSM way as a RoadContainer of RoadPoints —
+## one ribbon per way, no junction stitching yet. Judged on look + timing.
+func _run_splinetest() -> void:
+	City.scenario_state = Scenarios.start("heidelberg", "normal")
+	GameClock.restore({"total_minutes": 13.0 * 60.0, "speed": 0.0})  # daylight!
+	view.redraw()
+	# hide the tile art the splines replace
+	for node: Node3D in view._roads.values():
+		node.visible = false
+	for node: Node3D in view._diag_nodes.values():
+		node.visible = false
+
+	var osm: Dictionary = Scenarios._hd_osm()
+	var t0 := Time.get_ticks_msec()
+	var mgr := RoadManager.new()
+	view.add_child(mgr)
+	var asphalt := StandardMaterial3D.new()
+	asphalt.albedo_color = Color(0.318, 0.329, 0.349)   # the kit's asphalt
+	asphalt.roughness = 1.0
+	var ways: Array = []
+	ways.append_array(osm["streets"]["main"])
+	ways.append_array(osm["streets"]["minor"])
+	var points := 0
+	var containers := 0
+	for way: Variant in ways:
+		var pts: Array = (way as Dictionary)["pts"]
+		if pts.size() < 2:
+			continue
+		var cont := RoadContainer.new()
+		mgr.add_child(cont)
+		cont.material_resource = asphalt
+		cont.density = 1.0
+		var rps: Array = []
+		for i in pts.size():
+			var tile := Vector2i(int((pts[i] as Array)[0]), int((pts[i] as Array)[1]))
+			var rp := RoadPoint.new()
+			cont.add_child(rp)
+			rp.lane_width = 0.21
+			rp.shoulder_width_l = 0.1
+			rp.shoulder_width_r = 0.1
+			rp.gutter_profile = Vector2(0.05, -0.02)
+			var pos := Vector3(tile.x + 0.5, view._ground_y(tile) + 0.04, tile.y + 0.5)
+			rp.position = pos
+			rps.append(rp)
+			points += 1
+		# face each point along its tangent (+Z is the addon's forward)
+		for i in rps.size():
+			var ahead: Vector3 = rps[mini(i + 1, rps.size() - 1)].position
+			var behind: Vector3 = rps[maxi(i - 1, 0)].position
+			var dir := (ahead - behind)
+			dir.y = 0.0
+			if dir.length() > 0.01:
+				(rps[i] as RoadPoint).rotation.y = atan2(dir.x, dir.z)
+			var mag := clampf(dir.length() * 0.25, 0.4, 1.6)
+			(rps[i] as RoadPoint).prior_mag = mag
+			(rps[i] as RoadPoint).next_mag = mag
+		for i in rps.size() - 1:
+			(rps[i] as RoadPoint).connect_roadpoint(
+				RoadPoint.PointInit.NEXT, rps[i + 1], RoadPoint.PointInit.PRIOR)
+		cont.rebuild_segments(true)
+		containers += 1
+	var built_ms := Time.get_ticks_msec() - t0
+	print("SPLINETEST ", JSON.stringify({"ways": containers,
+		"road_points": points, "build_ms": built_ms}))
+	view.focus_tile(Vector2i(145, 120), 50.0)
+	await get_tree().create_timer(1.5).timeout
+	get_viewport().get_texture().get_image().save_png(_splinetest_path)
+	view.focus_tile(Vector2i(138, 103), 18.0)
+	await get_tree().create_timer(2.0).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_splinetest_path.replace(".png", "_close.png"))
+	get_tree().quit(0)
 
 
 ## Builds all road-orientation cases: a closed loop (all four bends), a
