@@ -475,6 +475,15 @@ func redraw() -> void:
 		add_child(_streets)
 	var ribbons_changed := _streets.sync(model, Callable(self, "_ground_y"))
 	_diff(_roads, model.roads, _make_road)
+	# ONE unified road surface for every street (2026-08-17, user-chosen
+	# after the ribbon hybrid failed in play: all or nothing). The tile
+	# pieces and diagonal bands stay in the code behind ROAD_SURFACE=0 —
+	# a kill-switch, and the honest A/B for judging this in play.
+	if _road_surface == null and OS.get_environment("ROAD_SURFACE") != "0":
+		_road_surface = RoadSurface.new()
+		add_child(_road_surface)
+	if _road_surface != null:
+		_road_surface.sync(model.roads, Callable(self, "_ground_y"))
 	_diff(_cables, model.cables, _make_cable)
 	_diff(_pipes, model.heat_pipes, _make_pipe)
 	_diff(_water_pipes, model.water_pipes, _make_water_pipe)
@@ -744,7 +753,8 @@ func _make_road(pos: Vector2i) -> Node3D:
 
 # ─── diagonal streets: one band instead of a staircase of corners ───
 
-var _streets: StreetSplines    # spline ribbons for the OSM organic streets
+var _streets: StreetSplines    # spline ribbons (opt-in experiment, off)
+var _road_surface: RoadSurface # THE road renderer: one continuous surface
 var _diag_nodes := {}    # run key -> Node3D holding the rotated pieces
 var _diag_tiles := {}    # tile -> true, the tiles a band already covers
 
@@ -758,6 +768,13 @@ var _diag_tiles := {}    # tile -> true, the tiles a band already covers
 func _rebuild_diagonal_roads() -> bool:
 	var wanted := {}
 	_diag_tiles.clear()
+	if _road_surface != null:
+		# the unified surface IS the diagonal answer — bands would stack
+		var changed_off := not _diag_nodes.is_empty()
+		for key: Variant in _diag_nodes:
+			(_diag_nodes[key] as Node).queue_free()
+		_diag_nodes.clear()
+		return changed_off
 	var terrain: Terrain = City.model.terrain
 	# ribbon-covered tiles are already drawn as real curves — banding them
 	# again would stack two roads on the same street
@@ -821,6 +838,15 @@ func _make_diagonal_road(path: Array) -> Node3D:
 
 ## Piece/orientation decisions live in LineSpecs (Phase-5 extraction).
 func _orient_road(pos: Vector2i, node: Node3D) -> void:
+	if _road_surface != null:
+		# the unified surface draws every street — a piece under it would
+		# poke through the asphalt
+		if node.get_meta("piece", "") == "surface":
+			return
+		node.set_meta("piece", "surface")
+		for child in node.get_children():
+			child.queue_free()
+		return
 	if _streets != null and _streets.covered.has(pos):
 		# a spline ribbon draws this tile's street — same rule as bands
 		if node.get_meta("piece", "") == "ribbon":

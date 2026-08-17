@@ -26,6 +26,8 @@ func _ready() -> void:
 			_screenshot_path = arg.trim_prefix("--screenshot=")
 		elif arg.begins_with("--roadtest="):
 			_roadtest_path = arg.trim_prefix("--roadtest=")
+		elif arg.begins_with("--surfacetest="):
+			_surfacetest_path = arg.trim_prefix("--surfacetest=")
 		elif arg.begins_with("--splinetest="):
 			_splinetest_path = arg.trim_prefix("--splinetest=")
 		elif arg.begins_with("--gallery="):
@@ -39,6 +41,9 @@ func _ready() -> void:
 		return
 	if _screenshot_path != "":
 		_take_screenshot()
+		return
+	if _surfacetest_path != "":
+		await _run_surfacetest()
 		return
 	if _splinetest_path != "":
 		await _run_splinetest()
@@ -480,6 +485,39 @@ func _kind_counts() -> Dictionary:
 
 var _roadtest_path := ""
 var _splinetest_path := ""
+var _surfacetest_path := ""
+
+
+## Probe (2026-08-17): the unified procedural road surface — ALL roads as
+## one rounded two-tone mesh, no tile pieces, no bands. Screenshot-judged
+## before any wiring, per the ribbon lesson.
+func _run_surfacetest() -> void:
+	City.scenario_state = Scenarios.start("heidelberg", "normal")
+	GameClock.restore({"total_minutes": 13.0 * 60.0, "speed": 0.0})  # daylight!
+	view.redraw()
+	for node: Node3D in view._roads.values():
+		node.visible = false
+	for node: Node3D in view._diag_nodes.values():
+		node.visible = false
+	var surface := RoadSurface.new()
+	view.add_child(surface)
+	var t0 := Time.get_ticks_msec()
+	surface.sync(City.model.roads, Callable(view, "_ground_y"))
+	print("SURFACETEST ", JSON.stringify({
+		"tiles": City.model.roads.size(),
+		"build_ms": Time.get_ticks_msec() - t0}))
+	view.focus_tile(Vector2i(145, 120), 50.0)
+	await get_tree().create_timer(1.5).timeout
+	get_viewport().get_texture().get_image().save_png(_surfacetest_path)
+	view.focus_tile(Vector2i(112, 130), 10.0)
+	await get_tree().create_timer(2.0).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_surfacetest_path.replace(".png", "_junction.png"))
+	view.focus_tile(Vector2i(138, 103), 18.0)
+	await get_tree().create_timer(2.0).timeout
+	get_viewport().get_texture().get_image().save_png(
+		_surfacetest_path.replace(".png", "_close.png"))
+	get_tree().quit(0)
 
 
 ## Probe (2026-08-17): the spline street renderer, on its REAL path — the

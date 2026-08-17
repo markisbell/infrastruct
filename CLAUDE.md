@@ -759,7 +759,34 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   smoke also reports `heidelberg_why` — status/violations of the first
   non-converged frames — because a bare converged-count says a city is
   broken but never where).
-- **SPLINE STREETS (2026-08-17, user-directed: "rebuild the streets from
+- **UNIFIED ROAD SURFACE (2026-08-17, the street look that SHIPPED —
+  user-chosen after the ribbon hybrid failed in play)**: ALL roads render
+  as ONE continuous two-tone surface built from the tile raster
+  (`RoadSurface`, game/scenes/rendering/): every road tile contributes a
+  patch that meets its neighbours edge to edge — open sides inset, corners
+  between two open sides rounded — so junctions, curves, stubs and dead
+  ends all fall out of one rule instead of being special pieces. Colors
+  are the Kenney colormap's own (asphalt = the blend of the piece
+  carriageway's two greys, sampled by decoding road-straight.glb's flat
+  top faces + UVs — screen-pixel sampling hit grass twice). ~23 ms for the
+  whole 3 366-tile city, rebuilt only when roads.hash() changes; headless
+  skips it. Tile pieces and diagonal bands stay in the code behind
+  ROAD_SURFACE=0 (the kill-switch A/B). THREE LESSONS, each pinned by
+  test_road_surface (4): (1) a rounded corner whose arc runs BACKWARDS is
+  a bowtie, which triangulates to NOTHING — every corner/stub/isolated
+  tile silently vanished while straight grid streets looked fine;
+  (2) arc anchors must sit ON the outline or the arc bulges past the tile
+  onto the neighbour's ground (invisible on grass, pinned anyway);
+  (3) Vector2 components are 32-BIT — 0.14 round-trips as 0.14000000059,
+  so exact float equality against a 64-bit literal in tests can never
+  hold. Also: Geometry2D.triangulate_polygon wants counter-clockwise and
+  returns EMPTY for clockwise input (the first build drew nothing at all),
+  and the "left streets still draw pieces" hunt was a misdiagnosis worth
+  remembering — the pieces WERE hidden; the dark look was the buried-
+  utility strips that legitimately overlay every corridor street.
+  NOT YET: lane markings (the surface is plain two-tone; the kit pieces'
+  white dashes are gone), crossings at junctions.
+- **SPLINE STREETS (2026-08-17, superseded same day — user-directed: "rebuild the streets from
   scratch using another library")**: organic streets draw as REAL curves
   now. The vendored `game/addons/road-generator` (TheDuckCow, MIT 0.9.3,
   upstream-tested on Godot 4.7; --splinetest was the spike that proved it)
