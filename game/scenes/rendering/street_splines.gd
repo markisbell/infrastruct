@@ -26,6 +26,7 @@ const DECK_LIFT := 0.04           # ribbon rides just above the ground/pieces
 const SUBDIVIDE_TILES := 2.0      # max segment span before a ground resample
 const TEXTURE := "res://assets/road_texture_flat.png"
 
+var enabled := false              # opt-in: probes set this, players don't
 var covered := {}                 # Vector2i -> true (tiles ribbons draw)
 var _manager: RoadManager
 var _material: StandardMaterial3D
@@ -41,6 +42,16 @@ var _last_ways_size := -1
 ## outside any dirty ring (the same contract the diagonal bands use).
 func sync(model: WorldModel, ground: Callable) -> bool:
 	if DisplayServer.get_name() == "headless":
+		return false
+	# OFF BY DEFAULT (2026-08-17, user verdict after playing: the hybrid
+	# reads WORSE than the tile art — a city-wide patchwork of two road
+	# systems, junction overlaps, clip seams mid-street). The probe
+	# screenshots looked fine at their chosen zooms; a player's free camera
+	# saw the whole. Kept behind an opt-in for the next attempt, which has
+	# to be all-or-nothing: STREET_SPLINES=1 (or the --splinetest probe).
+	if not enabled and OS.get_environment("STREET_SPLINES") != "1":
+		if not _built.is_empty():
+			reset()
 		return false
 	var roads_hash := model.roads.hash()
 	if roads_hash == _last_roads_hash and model.street_ways.size() == _last_ways_size:
