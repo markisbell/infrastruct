@@ -14,9 +14,13 @@ extends Node3D
 ## without ever touching the stored geometry. Tiles a ribbon covers are
 ## reported in `covered` and the tile renderer skips their pieces.
 
-const LANE_WIDTH := 0.21          # our tile = 1.0 unit = 25 m; two lanes + …
-const SHOULDER_WIDTH := 0.1       # …sidewalk-ish shoulders ≈ a Kenney road
-const GUTTER := Vector2(0.04, -0.015)
+# Sized and toned to MATCH the Kenney pieces (user: the old/new mixture
+# showed) — a street that switches from pieces to ribbon mid-run must read
+# as one road. Widths add up to ~0.94 of a tile like a kit piece; the
+# texture's asphalt/sidewalk are the kit colormap's own colors, sampled.
+const LANE_WIDTH := 0.27          # our tile = 1.0 unit = 25 m; two lanes + …
+const SHOULDER_WIDTH := 0.17      # …sidewalk shoulders ≈ a Kenney road
+const GUTTER := Vector2(0.03, -0.012)
 const DENSITY := 1.5              # mesh loop spacing [units]
 const DECK_LIFT := 0.04           # ribbon rides just above the ground/pieces
 const SUBDIVIDE_TILES := 2.0      # max segment span before a ground resample
