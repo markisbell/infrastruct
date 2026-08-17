@@ -28,8 +28,6 @@ func _ready() -> void:
 			_roadtest_path = arg.trim_prefix("--roadtest=")
 		elif arg.begins_with("--surfacetest="):
 			_surfacetest_path = arg.trim_prefix("--surfacetest=")
-		elif arg.begins_with("--splinetest="):
-			_splinetest_path = arg.trim_prefix("--splinetest=")
 		elif arg.begins_with("--gallery="):
 			_gallery_path = arg.trim_prefix("--gallery=")
 
@@ -44,9 +42,6 @@ func _ready() -> void:
 		return
 	if _surfacetest_path != "":
 		await _run_surfacetest()
-		return
-	if _splinetest_path != "":
-		await _run_splinetest()
 		return
 	if _roadtest_path != "":
 		_take_roadtest()
@@ -484,7 +479,6 @@ func _kind_counts() -> Dictionary:
 # ─── road-piece visual regression: every mask variant on one screen ───
 
 var _roadtest_path := ""
-var _splinetest_path := ""
 var _surfacetest_path := ""
 
 
@@ -517,34 +511,6 @@ func _run_surfacetest() -> void:
 	await get_tree().create_timer(2.0).timeout
 	get_viewport().get_texture().get_image().save_png(
 		_surfacetest_path.replace(".png", "_close.png"))
-	get_tree().quit(0)
-
-
-## Probe (2026-08-17): the spline street renderer, on its REAL path — the
-## prebuild stores the OSM ways, CityView draws them. Screenshots + stats.
-func _run_splinetest() -> void:
-	view._streets = StreetSplines.new()
-	view._streets.enabled = true
-	view.add_child(view._streets)
-	City.scenario_state = Scenarios.start("heidelberg", "normal")
-	GameClock.restore({"total_minutes": 13.0 * 60.0, "speed": 0.0})  # daylight!
-	var t0 := Time.get_ticks_msec()
-	view.redraw()
-	print("SPLINETEST ", JSON.stringify({
-		"ways": City.model.street_ways.size(),
-		"covered_tiles": view._streets.covered.size() if view._streets else 0,
-		"redraw_ms": Time.get_ticks_msec() - t0}))
-	view.focus_tile(Vector2i(145, 120), 50.0)
-	await get_tree().create_timer(1.5).timeout
-	get_viewport().get_texture().get_image().save_png(_splinetest_path)
-	view.focus_tile(Vector2i(138, 103), 18.0)
-	await get_tree().create_timer(2.0).timeout
-	get_viewport().get_texture().get_image().save_png(
-		_splinetest_path.replace(".png", "_close.png"))
-	view.focus_tile(Vector2i(112, 130), 10.0)
-	await get_tree().create_timer(2.0).timeout
-	get_viewport().get_texture().get_image().save_png(
-		_splinetest_path.replace(".png", "_junction.png"))
 	get_tree().quit(0)
 
 

@@ -468,12 +468,6 @@ func redraw() -> void:
 	_rebuild_deco()
 	_diff(_zones, model.zoning, _make_zone)
 	_diff(_bridges, model.bridges, _make_bridge)
-	# spline ribbons FIRST: _orient_road skips the tiles they cover, the
-	# same contract the diagonal bands use
-	if _streets == null:
-		_streets = StreetSplines.new()
-		add_child(_streets)
-	var ribbons_changed := _streets.sync(model, Callable(self, "_ground_y"))
 	_diff(_roads, model.roads, _make_road)
 	# ONE unified road surface for every street (2026-08-17, user-chosen
 	# after the ribbon hybrid failed in play: all or nothing). The tile
@@ -511,7 +505,7 @@ func redraw() -> void:
 	var diagonals_changed := _rebuild_diagonal_roads()
 	var dirty: Dictionary = City.dirty_tiles
 	City.dirty_tiles = {}
-	if dirty.is_empty() or diagonals_changed or ribbons_changed:
+	if dirty.is_empty() or diagonals_changed:
 		for pos: Vector2i in _roads:
 			_orient_road(pos, _roads[pos])
 		for pos: Vector2i in _cables:
@@ -753,7 +747,6 @@ func _make_road(pos: Vector2i) -> Node3D:
 
 # ─── diagonal streets: one band instead of a staircase of corners ───
 
-var _streets: StreetSplines    # spline ribbons (opt-in experiment, off)
 var _road_surface: RoadSurface # THE road renderer: one continuous surface
 var _diag_nodes := {}    # run key -> Node3D holding the rotated pieces
 var _diag_tiles := {}    # tile -> true, the tiles a band already covers
@@ -776,15 +769,7 @@ func _rebuild_diagonal_roads() -> bool:
 		_diag_nodes.clear()
 		return changed_off
 	var terrain: Terrain = City.model.terrain
-	# ribbon-covered tiles are already drawn as real curves — banding them
-	# again would stack two roads on the same street
-	var band_input: Dictionary = City.model.roads
-	if _streets != null and not _streets.covered.is_empty():
-		band_input = {}
-		for pos: Vector2i in City.model.roads:
-			if not _streets.covered.has(pos):
-				band_input[pos] = true
-	for path: Array in LineSpecs.diagonal_runs(band_input):
+	for path: Array in LineSpecs.diagonal_runs(City.model.roads):
 		# a staircase climbing a hillside stays a staircase: one flat band
 		# would sink into the slope
 		var level := terrain.height(path[0])
@@ -844,14 +829,6 @@ func _orient_road(pos: Vector2i, node: Node3D) -> void:
 		if node.get_meta("piece", "") == "surface":
 			return
 		node.set_meta("piece", "surface")
-		for child in node.get_children():
-			child.queue_free()
-		return
-	if _streets != null and _streets.covered.has(pos):
-		# a spline ribbon draws this tile's street — same rule as bands
-		if node.get_meta("piece", "") == "ribbon":
-			return
-		node.set_meta("piece", "ribbon")
 		for child in node.get_children():
 			child.queue_free()
 		return

@@ -784,8 +784,22 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   and the "left streets still draw pieces" hunt was a misdiagnosis worth
   remembering — the pieces WERE hidden; the dark look was the buried-
   utility strips that legitimately overlay every corridor street.
-  NOT YET: lane markings (the surface is plain two-tone; the kit pieces'
-  white dashes are gone), crossings at junctions.
+  CENTRE DASHES landed same day (third mesh layer: one short dash per
+  STRAIGHT-THROUGH tile, none through corners/junctions — organic streets
+  get a naturally sparse cadence because their straights alternate with
+  corners; the quad winding faced DOWN on the first try, the session's
+  third winding bug). Junction crossings deliberately NOT added (500
+  junctions of zebra is paint, not charm). THE RIBBON EXPERIMENT IS
+  RETIRED: game/addons/road-generator (6.3 MB) + StreetSplines + probe
+  deleted after the user approved the surface; `WorldModel.street_ways`
+  STAYS (real OSM centreline geometry, additively saved, test_street_ways
+  pins it) as the natural host for future street features — names,
+  way-following markings. CLEANUP TRAP that broke main.gd silently: a
+  python block-slice keyed on a comment that an earlier edit had reworded
+  cut the WRONG probe function, leaving a duplicate + a leftover body —
+  and the unit suite stayed green because it never loads main.gd; only
+  check-only/smokes see it. Slice by grep-verified line numbers, then run
+  a smoke (which boots main.gd) before trusting the suite.
 - **SPLINE STREETS (2026-08-17, superseded same day — user-directed: "rebuild the streets from
   scratch using another library")**: organic streets draw as REAL curves
   now. The vendored `game/addons/road-generator` (TheDuckCow, MIT 0.9.3,

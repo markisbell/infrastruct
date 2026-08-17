@@ -24,6 +24,14 @@ const APRON_LIFT := 0.045          # above terrain, below the asphalt
 const ASPHALT_LIFT := 0.058
 const SIDEWALK_COLOR := Color(142.0 / 255.0, 149.0 / 255.0, 179.0 / 255.0)
 const ASPHALT_COLOR := Color(91.0 / 255.0, 96.0 / 255.0, 115.0 / 255.0)
+# centre dashes: the kit pieces' marking white, one short dash per
+# STRAIGHT-THROUGH tile — corners and junctions stay clean, which gives
+# organic streets a naturally sparse cadence (their straights alternate
+# with corners) and keeps 500 junctions from turning into paint
+const MARKING_COLOR := Color(252.0 / 255.0, 252.0 / 255.0, 253.0 / 255.0)
+const MARKING_LIFT := 0.066
+const DASH_LENGTH := 0.34
+const DASH_WIDTH := 0.05
 
 var _mesh: MeshInstance3D
 var _last_roads_hash := 0
@@ -122,6 +130,43 @@ func sync(roads: Dictionary, ground: Callable) -> void:
 		material.cull_mode = BaseMaterial3D.CULL_DISABLED
 		st.set_material(material)
 		st.commit(mesh)
+	# layer 3: centre dashes on straight-through tiles
+	var st_marks := SurfaceTool.new()
+	st_marks.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for pos: Vector2i in roads:
+		var n := roads.has(pos + Vector2i(0, -1))
+		var e := roads.has(pos + Vector2i(1, 0))
+		var s_ := roads.has(pos + Vector2i(0, 1))
+		var w := roads.has(pos + Vector2i(-1, 0))
+		var along_x := e and w and not n and not s_
+		var along_y := n and s_ and not e and not w
+		if not (along_x or along_y):
+			continue
+		var h := float(ground.call(pos)) + MARKING_LIFT
+		var half_l := DASH_LENGTH / 2.0
+		var half_w := DASH_WIDTH / 2.0
+		var cx := pos.x + 0.5
+		var cz := pos.y + 0.5
+		var corners: Array[Vector3] = []
+		if along_x:
+			corners = [Vector3(cx - half_l, h, cz - half_w),
+				Vector3(cx + half_l, h, cz - half_w),
+				Vector3(cx + half_l, h, cz + half_w),
+				Vector3(cx - half_l, h, cz + half_w)]
+		else:
+			corners = [Vector3(cx - half_w, h, cz - half_l),
+				Vector3(cx + half_w, h, cz - half_l),
+				Vector3(cx + half_w, h, cz + half_l),
+				Vector3(cx - half_w, h, cz + half_l)]
+		for j: int in [0, 1, 2, 0, 2, 3]:   # two tris, up-facing winding
+			st_marks.set_normal(Vector3.UP)
+			st_marks.add_vertex(corners[j])
+	st_marks.index()
+	var mark_material := StandardMaterial3D.new()
+	mark_material.albedo_color = MARKING_COLOR
+	mark_material.roughness = 1.0
+	st_marks.set_material(mark_material)
+	st_marks.commit(mesh)
 	_mesh.mesh = mesh
 	add_child(_mesh)
 
