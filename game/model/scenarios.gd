@@ -511,7 +511,166 @@ static func _build_heidelberg() -> void:
 	# whatever the footprints could not fill, growth may still take
 	for sub_id: String in City.model.buildings_of_kind("substation"):
 		City.spawn_houses_bulk(sub_id, 8)
+	# every dark cluster gets its station + street-following feeder
+	_hd_power_infill()
 	_hd_prune_idle_heat(City.model)
+
+
+## Serve every dark house: trench a spur under the streets and set a
+## substation wherever a cluster of houses has none in reach.
+##
+## The corridor trios are seated every ~16 trench tiles BEFORE any house
+## exists, and the OSM footprints spread far beyond the corridors — the
+## rebuilt city left 351 of 940 houses with no substation within the zone
+## radius, dark forever with no feedback. This is what a distribution
+## utility actually does about that: the load exists, so a station is
+## built at the load, fed by a buried spur that follows the street network
+## back to the nearest live cable (crossing the river on the bridge decks
+## like every other trench).
+static func _hd_power_infill(max_stations: int = 48) -> int:
+	# ROUNDS, because placement order matters: every station's feeder adds
+	# trench the NEXT cluster can tap, so a cluster that failed early in a
+	# round often succeeds once the map has grown toward it. One permanent
+	# blacklist stranded 27 houses whose station placed fine when asked
+	# again at the end — so failed clusters get fresh chances until a whole
+	# round places nothing.
+	var total := 0
+	for _round in 4:
+		var placed := _hd_power_infill_round(max_stations - total)
+		total += placed
+		if placed == 0:
+			break
+	return total
+
+
+static func _hd_power_infill_round(max_stations: int) -> int:
+	_hd_infill_given_up.clear()
+	var model: WorldModel = City.model
+	var radius: int = int(BuildingDefs.get_def("substation")["zone_radius"])
+	var placed := 0
+	for _pass in max_stations:
+		# orphans: houses with no substation anchor within the zone radius
+		var anchors: Array[Vector2i] = []
+		for kind: String in ["substation", "substation_xl"]:
+			for id: String in model.buildings_of_kind(kind):
+				anchors.append(model.buildings[id]["anchor"])
+		var orphans: Array[Vector2i] = []
+		for pos: Vector2i in model.houses:
+			var near := false
+			for a: Vector2i in anchors:
+				if absi(pos.x - a.x) + absi(pos.y - a.y) <= radius:
+					near = true
+					break
+			if near:
+				continue
+			var hopeless := false
+			for dead: Vector2i in _hd_infill_given_up:
+				if absi(pos.x - dead.x) + absi(pos.y - dead.y) <= radius:
+					hopeless = true
+					break
+			if not hopeless:
+				orphans.append(pos)
+		if orphans.is_empty():
+			return placed
+		# the densest cluster: the orphan with the most orphans in reach of
+		# a station standing next to it
+		var best := orphans[0]
+		var best_n := -1
+		for pos: Vector2i in orphans:
+			var n := 0
+			for other: Vector2i in orphans:
+				if absi(pos.x - other.x) + absi(pos.y - other.y) <= radius - 2:
+					n += 1
+			if n > best_n:
+				best_n = n
+				best = pos
+		if _hd_station_at(best, radius):
+			placed += 1
+		else:
+			# nothing seatable/reachable for this cluster: remember it and
+			# keep serving the others (a repeat would loop forever)
+			_hd_infill_given_up.append(best)
+	return placed
+
+
+## Clusters _hd_power_infill could not serve (skipped on later passes).
+static var _hd_infill_given_up: Array[Vector2i] = []
+
+
+## Seat one substation near *goal* and trench its feeder. Returns success.
+##
+## ORDER MATTERS: trench first, seat second. The first version chose the
+## seat during the BFS and trenched afterwards — and with free land
+## traversable, the shortest route to the cable regularly ran THROUGH the
+## chosen seat (it is exactly the free tile beside the road the path wants),
+## so `place_building` found a cable on its tile, failed, and the whole
+## cluster was blacklisted. Seating beside the FINISHED trench cannot lose
+## that race, and the station taps the trench like any building taps a line.
+static func _hd_station_at(goal: Vector2i, radius: int) -> bool:
+	var model: WorldModel = City.model
+	var start := _hd_nearest_road(goal, 6)
+	if start.x < 0:
+		return false
+	# BFS outward over everything trenchable until a live cable is found.
+	# Streets alone are not enough: the street network is a DOZEN components
+	# (real OSM geometry) and a cluster's fragment often carries no cable at
+	# all — so the feeder may cut across free land between two streets,
+	# exactly like a real one. Houses, buildings and unbridged water still
+	# refuse via can_set_cable; bridge decks carry it over the river.
+	var parent := {start: start}
+	var queue: Array[Vector2i] = [start]
+	var cable_hit := Vector2i(-1, -1)
+	var i := 0
+	while i < queue.size():
+		var tile: Vector2i = queue[i]
+		i += 1
+		if model.cables.has(tile):
+			cable_hit = tile
+			break
+		for offset: Vector2i in [Vector2i(0, -1), Vector2i(0, 1),
+				Vector2i(-1, 0), Vector2i(1, 0)]:
+			var next: Vector2i = tile + offset
+			if parent.has(next):
+				continue
+			if model.roads.has(next) or model.cables.has(next) \
+					or model.can_set_cable(next, BuildingDefs.LINE_UNDERGROUND):
+				parent[next] = tile
+				queue.append(next)
+	if cable_hit.x < 0:
+		return false
+	# trench: from the live cable back up the BFS tree to the start
+	var trench: Array[Vector2i] = []
+	var walk := cable_hit
+	while true:
+		City.build_cable(walk, BuildingDefs.LINE_UNDERGROUND)
+		trench.append(walk)
+		if walk == parent[walk]:
+			break
+		walk = parent[walk]
+	# seat: a free tile beside the trench, as close to the cluster as the
+	# trench gets (the start end is <= 6 tiles from the goal house)
+	trench.reverse()   # start end first — nearest the cluster
+	for tile: Vector2i in trench:
+		if absi(tile.x - goal.x) + absi(tile.y - goal.y) > radius - 2:
+			continue
+		for offset: Vector2i in [Vector2i(0, -1), Vector2i(0, 1),
+				Vector2i(-1, 0), Vector2i(1, 0)]:
+			if City.place_building("substation", tile + offset):
+				return true
+	return false
+
+
+static func _hd_nearest_road(goal: Vector2i, reach: int) -> Vector2i:
+	var model: WorldModel = City.model
+	for r in reach + 1:
+		for dx in range(-r, r + 1):
+			for dy in range(-r, r + 1):
+				if maxi(absi(dx), absi(dy)) != r:
+					continue
+				var pos := goal + Vector2i(dx, dy)
+				if model.roads.has(pos):
+					return pos
+	return Vector2i(-1, -1)
 
 
 ## Paint buildable land beside the streets of one district.

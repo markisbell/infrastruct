@@ -517,6 +517,9 @@ func _take_roadtest() -> void:
 	var east := view._box(Vector3(0.5, 1.6, 0.5), Color(0.15, 0.3, 0.9),
 		Vector3(150.5, 0.8, 121.5))
 	view.add_child(east)
+	# daylight, or the probe photographs pieces in the dark (the gallery
+	# had the same bug and the same one-line fix)
+	GameClock.restore({"total_minutes": 13.0 * 60.0, "speed": 0.0})
 	view.redraw()
 	view.focus_tile(Vector2i(133, 121), 24.0)
 	await get_tree().create_timer(1.0).timeout
@@ -535,7 +538,7 @@ func _take_roadtest() -> void:
 		_roadtest_path.replace(".png", "_tee1.png"))
 	# ground truth: the raw GLBs at yaw 0, red post = N edge, blue = E edge
 	var x := 126
-	for piece: String in ["road-bend", "road-intersection", "road-end"]:
+	for piece: String in ["road-bend", "road-curve", "road-intersection"]:
 		var raw := view._instance_glb(
 			"city-kit-roads/Models/GLB format/%s.glb" % piece, 1.0)
 		raw.position = Vector3(x + 0.5, 0, 130.5)

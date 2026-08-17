@@ -96,10 +96,18 @@ static func road_piece(mask: int) -> Array:
 		8: return ["road-end", 0]
 		5: return ["road-straight", 90]
 		10: return ["road-straight", 0]
-		3: return ["road-bend", 180]
-		9: return ["road-bend", 270]
-		12: return ["road-bend", 0]
-		6: return ["road-bend", 90]
+		# SMOOTH corners (2026-08-17, user: streets "still look strange";
+		# researched against the genre): a 4-connected raster turns 90°
+		# inside every corner tile, and the sharp `road-bend` renders each
+		# turn as a sawtooth tooth. The kit's own `road-curve` — the same
+		# N+E connection convention, verified with the native probe — sweeps
+		# the turn as a quarter-arc instead, which is how tile-art builders
+		# have always softened organic streets (SimCity 4's NAM went as far
+		# as dedicated fractional-angle pieces for exactly this problem).
+		3: return ["road-curve", 180]
+		9: return ["road-curve", 270]
+		12: return ["road-curve", 0]
+		6: return ["road-curve", 90]
 		14: return ["road-intersection", 0]
 		7: return ["road-intersection", 90]
 		11: return ["road-intersection", 180]
@@ -276,11 +284,22 @@ static func diagonal_runs(roads: Dictionary,
 				continue
 			var piece: Array = path.slice(i, last_good + 1)
 			var corners := 0
-			for pos: Vector2i in piece:
-				if is_bend(roads, pos):
+			var first_corner := -1
+			var last_corner := -1
+			for k in piece.size():
+				if is_bend(roads, piece[k]):
 					corners += 1
-			# two corners minimum: one jog is a corner, not a diagonal
-			if corners >= 2:
+					if first_corner < 0:
+						first_corner = k
+					last_corner = k
+			# two corners = a staircase. ONE corner is usually just a corner
+			# — except deep inside a LONG chain, where it is a shallow-angle
+			# street jogging once (SimCity 4 ships dedicated FA-2/FA-3
+			# pieces for exactly these 2:1 and 3:1 slopes); the hug test has
+			# already confirmed the band stays within half a tile of every
+			# tile it covers, so an L-street can never sneak in this way.
+			if corners >= 2 or (corners == 1 and piece.size() >= 5
+					and first_corner >= 2 and last_corner <= piece.size() - 3):
 				runs.append(piece)
 			i = last_good + 1
 	return runs

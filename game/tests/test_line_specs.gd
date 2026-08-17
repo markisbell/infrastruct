@@ -19,8 +19,8 @@ func test_road_piece_table_pins_all_sixteen_masks() -> void:
 	var expected := {
 		0: ["road-end-round", 90], 1: ["road-end", 270], 2: ["road-end", 180],
 		4: ["road-end", 90], 8: ["road-end", 0], 5: ["road-straight", 90],
-		10: ["road-straight", 0], 3: ["road-bend", 180], 9: ["road-bend", 270],
-		12: ["road-bend", 0], 6: ["road-bend", 90], 14: ["road-intersection", 0],
+		10: ["road-straight", 0], 3: ["road-curve", 180], 9: ["road-curve", 270],
+		12: ["road-curve", 0], 6: ["road-curve", 90], 14: ["road-intersection", 0],
 		7: ["road-intersection", 90], 11: ["road-intersection", 180],
 		13: ["road-intersection", 270], 15: ["road-crossroad", 0]}
 	for mask: int in expected:
@@ -173,7 +173,10 @@ func test_straight_and_single_corner_are_left_alone() -> void:
 	for x in 10:
 		straight.append(Vector2i(x, 0))
 	assert_array(LineSpecs.diagonal_runs(_roads(straight))).is_empty()
-	# and ONE corner is a corner, not a diagonal — road-bend is right there
+	# and ONE corner between two long legs is a corner, not a diagonal —
+	# the smooth road-curve piece is right there (an interior corner deep in
+	# a LONG chain does band now — the SC4 fractional-angle case — but an L
+	# never hugs its end-to-end line, so it can never qualify)
 	var elbow: Array = []
 	for x in 6:
 		elbow.append(Vector2i(x, 0))

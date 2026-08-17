@@ -603,6 +603,38 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   roots `load_tree` at every reference, and warns when a component has
   exchangers but no plant (the heat equivalent of a renewable-only power
   island staying dark).
+  **POWER INFILL + SMOOTH STREETS (2026-08-17, user report: "a lot of
+  houses without power" + streets "still look strange").** POWER: 351 of
+  940 houses had NO substation within the zone radius — the corridor trios
+  are seated before houses exist, and the OSM footprints spread far beyond
+  the corridors; a dark house gives no feedback. `Scenarios.
+  _hd_power_infill` now does what a distribution utility does: find the
+  densest unserved cluster, BFS over everything TRENCHABLE (streets first
+  but also free land — the street network is 13 real-OSM components and a
+  cluster's fragment often carries no cable; bridge decks carry it over
+  the river), trench the feeder, then seat the substation BESIDE THE
+  FINISHED TRENCH. Two ordering traps, each costing a debugging loop:
+  (1) choosing the seat during the BFS let the shortest cable route run
+  THROUGH the chosen seat tile (it is exactly the free tile beside the
+  road the path wants) — place_building then failed and the cluster was
+  blacklisted; trench-first cannot lose that race. (2) A PERMANENT
+  blacklist stranded a 27-house cluster whose station placed fine when
+  asked again later — every feeder adds trench the next cluster can tap,
+  so failed clusters get fresh RETRY ROUNDS until a whole round places
+  nothing. Result: 937/940 served (the last 3 are isolated singles no
+  utility would serve), 57 substations, supplied zones 35 -> 57 on the
+  real solver. STREETS (researched against the genre: SimCity 4's NAM
+  ships dedicated fractional-angle pieces for 2:1/3:1 slopes — the
+  stair-step problem is old; Cities: Skylines is spline-based — not our
+  model): (a) plain corners render the kit's SMOOTH `road-curve`
+  (quarter-arc, same N+E convention as road-bend — verified with the
+  native probe) instead of the sharp bend, so unbanded corners read as
+  winding streets; (b) `diagonal_runs` also bands a LONG chain with ONE
+  strictly-interior corner (len >= 5, corner >= 2 from both ends) — the
+  SC4 FA-2/FA-3 case; an L-street can never qualify because it never
+  hugs its end-to-end line. Road-piece pins updated deliberately.
+  --roadtest now sets the clock to daylight (same bug + fix as the
+  gallery: it photographed pieces in the dark).
   **HEIDELBERG REBUILT UNDER THE LIFTED LIMITS (2026-08-17, user request:
   "redo heidelberg with the fixes")** — the city had been patched around
   each fix rather than re-authored, and two big leftovers of the old limits
