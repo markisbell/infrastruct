@@ -883,6 +883,13 @@ static func _hd_pave(pts: Array, clip: Rect2i) -> void:
 		for p: Vector2i in paved_line(shaped[i], shaped[i + 1]):
 			if clip.has_point(p):
 				City.build_road(p)
+	# the SHAPED polyline is what the raster came from — store it so the
+	# spline renderer draws the street's real geometry (clipped live
+	# against the raster, so the thinning passes and the bulldozer apply)
+	if shaped.size() >= 2:
+		var way: Array[Vector2i] = []
+		way.assign(shaped)
+		City.model.street_ways.append(way)
 
 
 ## Redundant asphalt goes, and ONLY redundant asphalt. Parallel OSM ways

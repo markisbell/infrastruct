@@ -29,6 +29,12 @@ var buildings: Dictionary = {}       # id (String) -> {"kind": String, "anchor":
 ## DERIVED from the seed, so removal must be remembered explicitly).
 var deco_cleared: Dictionary = {}    # Vector2i -> true
 var bridges: Dictionary = {}         # Vector2i -> true (deck over a river tile)
+## Real street centrelines (the OSM-shaped polylines the paver rasterized),
+## kept so the renderer can draw organic streets as spline ribbons. VISUAL
+## source data only: gameplay reads the road raster, and the renderer clips
+## each way against it — so bulldozing a tile reshapes the ribbon without
+## this ever being mutated.
+var street_ways: Array = []          # Array of Array[Vector2i]
 var next_building_id := 1
 
 ## Vector2i -> building id — derived from `buildings`, rebuilt on load.
@@ -421,6 +427,7 @@ func to_json() -> String:
 		"buildings": _buildings_out(),
 		"deco_cleared": _dict_to_keys(deco_cleared),  # additive (old saves lack it)
 		"bridges": _dict_to_keys(bridges),           # additive (old saves lack it)
+		"street_ways": _ways_out(),                  # additive (old saves lack it)
 		"next_building_id": next_building_id,
 	})
 
@@ -444,6 +451,12 @@ static func from_json(text: String) -> WorldModel:
 	model.commercial = _keys_to_dict(dict.get("commercial", {}), TYPE_INT)
 	model.deco_cleared = _keys_to_dict(dict.get("deco_cleared", {}), TYPE_BOOL)
 	model.bridges = _keys_to_dict(dict.get("bridges", {}), TYPE_BOOL)
+	for flat: Variant in dict.get("street_ways", []):
+		var way: Array[Vector2i] = []
+		var arr := flat as Array
+		for i in range(0, arr.size() - 1, 2):
+			way.append(Vector2i(int(arr[i]), int(arr[i + 1])))
+		model.street_ways.append(way)
 	model.next_building_id = int(dict.get("next_building_id", 1))
 	for id: String in dict.get("buildings", {}):
 		var raw: Dictionary = dict["buildings"][id]
@@ -463,7 +476,7 @@ func equals(other: WorldModel) -> bool:
 		and zoning == other.zoning and houses == other.houses \
 		and buildings == other.buildings and terrain.equals(other.terrain) \
 		and deco_cleared == other.deco_cleared \
-		and bridges == other.bridges
+		and bridges == other.bridges and street_ways == other.street_ways
 
 
 func _buildings_out() -> Dictionary:
@@ -474,6 +487,17 @@ func _buildings_out() -> Dictionary:
 			"anchor": "%d,%d" % [entry["anchor"].x, entry["anchor"].y],
 			"rot": entry.get("rot", 0), "flip": entry.get("flip", false),
 			"params": entry.get("params", {})}
+	return out
+
+
+func _ways_out() -> Array:
+	var out: Array = []
+	for way: Variant in street_ways:
+		var flat: Array = []
+		for pos: Vector2i in (way as Array):
+			flat.append(pos.x)
+			flat.append(pos.y)
+		out.append(flat)
 	return out
 
 

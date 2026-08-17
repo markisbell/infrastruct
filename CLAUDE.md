@@ -759,6 +759,37 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   smoke also reports `heidelberg_why` — status/violations of the first
   non-converged frames — because a bare converged-count says a city is
   broken but never where).
+- **SPLINE STREETS (2026-08-17, user-directed: "rebuild the streets from
+  scratch using another library")**: organic streets draw as REAL curves
+  now. The vendored `game/addons/road-generator` (TheDuckCow, MIT 0.9.3,
+  upstream-tested on Godot 4.7; --splinetest was the spike that proved it)
+  renders `WorldModel.street_ways` — the OSM-shaped polylines the paver
+  rasterized, stored additively in the save — as RoadContainer ribbons:
+  `StreetSplines` (game/scenes/rendering/), one container per way,
+  flat-shaded 8-column lane texture in the kit palette
+  (`assets/road_texture_flat.png`, generated; German white dashed centre,
+  sidewalk-grey shoulders — the first version's dense dashes made every
+  street a striped six-lane highway). THE CLIP is the contract that ties
+  the two worlds: a way's ribbon exists exactly where its rasterized tiles
+  are still roads (`clip_way`; `raster_line` MUST equal
+  `Scenarios.paved_line`, pinned), so thinning passes and the player's
+  bulldozer reshape ribbons without touching the stored geometry; runs
+  shorter than 2.5 tiles fall back to pieces (stub ribbons read as pointed
+  shards). Tiles a ribbon covers are in `_streets.covered`: `_orient_road`
+  skips them (the band contract) and `diagonal_runs` gets a filtered input
+  so bands never stack on ribbons. `sync()` is hash-gated (roads.hash())
+  and returns covered-changed, which forces the FULL re-orientation pass
+  exactly like `diagonals_changed` — a clipped ribbon uncovers tiles far
+  outside any dirty ring. Headless skips ribbons entirely (deco pattern).
+  Heidelberg: 2 491 of 3 366 road tiles ribbon-drawn (74 %); player-drawn
+  orthogonal roads keep Kenney pieces (they render them perfectly).
+  KNOWN REMAINING: ribbon asphalt reads darker/thinner than the Kenney
+  pieces beside it; junctions are bare overlaps (the addon's
+  RoadIntersection is unused so far); the windowed Heidelberg prebuild
+  pays ~20 s of one-time ribbon building (time-slicing would fix);
+  probes MUST set daylight (the roadtest/gallery in-the-dark bug was
+  reintroduced in the spike within an hour of fixing it in roadtest).
+  Suites: test_street_splines (7).
 - **REAL-DEM TERRAIN + SMOOTH RELIEF (2026-08-02, user request: "looks
   like Minecraft")**: `Terrain.load_region(name)` swaps the noise HEIGHTS
   for a baked real region (`game/data/terrain/<name>.json` — AWS/Mapzen
