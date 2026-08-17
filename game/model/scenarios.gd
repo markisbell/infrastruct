@@ -286,6 +286,13 @@ static func _build_heidelberg() -> void:
 	# answers that with several feed-in points; the heat contract allows
 	# exactly one, so the producer moves to Heizwerk Mitte instead.
 	City.place_building("heat_storage", Vector2i(24, 161))  # Zukunftsspeicher
+	# THE ENERGY PARK at the west edge, which is what the map edge stands in
+	# for: Heidelberg's district heat is largely GKM Mannheim waste heat plus
+	# the Pfaffengrund biomass plant, and the Zukunftsspeicher above sits
+	# beside them. It feeds IN rather than holding pressure (the reference is
+	# Heizwerk Mitte, in the middle of town where a single producer has to
+	# be) — which is exactly what a secondary plant is now able to do.
+	City.place_building("boiler_plant", Vector2i(20, 159))  # GKM tie-in
 	City.place_building("well", Vector2i(44, 102))          # river bonus
 	City.place_building("well", Vector2i(52, 102))
 	City.place_building("pumping_station", Vector2i(60, 112))
@@ -328,7 +335,13 @@ static func _build_heidelberg() -> void:
 		[Vector2i(112, 132), Vector2i(112, 125)],                   # link north
 		[Vector2i(112, 125), Vector2i(138, 125), Vector2i(138, 122),
 			Vector2i(178, 122)],                                    # Altstadt
-		# (Südstadt is NOT here: it gets power and water only, below)
+		# SÜDSTADT, on district heating since 2026-08-17. It was power and
+		# water only, and the reason given was that hanging another 45-tile
+		# branch off a network with ONE producer pushed the far exchangers to
+		# 10 °C. Both halves of that are gone: pipes are sized from the load
+		# behind them (a branch gets the DN it needs) and a network carries a
+		# pressure reference per component with feed-in plants along the line.
+		[Vector2i(96, 151), Vector2i(96, 182), Vector2i(110, 182)],  # Südstadt
 		# plant tie-in — DETOURED to y=152. The straight run along y=151 went
 		# through the grid connection's 2x2 footprint at (26,151)/(27,151),
 		# which severed the SLACK plant from the trunk: heat fell back to a
@@ -359,15 +372,6 @@ static func _build_heidelberg() -> void:
 	var corridor_tiles: Array = []
 	for run: Array in corridors:
 		corridor_tiles.append(_hd_run3(run))
-	# Südstadt: power and water, NO district heating. Real Heidelberg's DH
-	# concentrates on Bergheim, Weststadt, the Altstadt and Neuenheim — and
-	# the physics agrees: hanging another 45-tile branch off a network with
-	# ONE producer pushed the far exchangers to 10 °C supply (t_supply_low
-	# on eight zones) and cost the solve outright.
-	var sued: Array = [Vector2i(96, 151), Vector2i(96, 182), Vector2i(110, 182)]
-	var sued_tiles: Array = _hd_run("cable", sued)
-	_hd_run("water", sued)
-
 	# ── south bank: water from the Rhine-plain well fields by the river ──
 	# y=103, NOT y=101: the well feeder used to run 12 tiles straight down
 	# the middle of the Neckar (the channel is 5 wide and its centre sits at
@@ -459,7 +463,7 @@ static func _build_heidelberg() -> void:
 	# the city, and a building may not sit on a road.
 	for tiles: Array in corridor_tiles:
 		_hd_supply_along(tiles, 16, true)
-	_hd_supply_along(sued_tiles, 16, false)   # Südstadt: no heat station
+
 	for tiles: Array in north_tiles:
 		_hd_supply_along(tiles, 16, false)   # water reaches over the bridge now
 
@@ -492,11 +496,53 @@ static func _build_heidelberg() -> void:
 		City.build_zone(seat)
 		if City.model.spawn_house(seat):
 			City.dirty_tiles[seat] = true
-	# whatever the footprints could not fill, growth may still take: the
-	# zoned band around the arterials is the room this city has left
+	# ── the districts the footprint extract does not cover ──
+	# Zoning used to exist ONLY where an OSM footprint landed, and the
+	# extract covers just the river strip — so every house in the city stood
+	# between y=80 and y=139 while Weststadt, Bergheim-Süd and Südstadt had
+	# streets, ~21 substations, heat and water on land that could never grow.
+	# Those are dense residential districts in reality. This is the room
+	# they need; growth fills it as the city runs.
+	for district: Rect2i in [
+			Rect2i(28, 140, 96, 18),    # Weststadt / Bergheim-Süd
+			Rect2i(88, 152, 34, 36),    # Südstadt toward Rohrbach
+			Rect2i(120, 132, 60, 12)]:  # south of the Altstadt corridor
+		_hd_zone_district(district)
+	# whatever the footprints could not fill, growth may still take
 	for sub_id: String in City.model.buildings_of_kind("substation"):
-		City.spawn_houses_bulk(sub_id, 4)
+		City.spawn_houses_bulk(sub_id, 8)
 	_hd_prune_idle_heat(City.model)
+
+
+## Paint buildable land beside the streets of one district.
+##
+## Only tiles that a house could actually take: orthogonally beside a road,
+## free, and passing `lot_buildable` — zoning a hillside the growth rule will
+## refuse just paints the map amber and teaches the player nothing.
+static func _hd_zone_district(box: Rect2i) -> int:
+	var model: WorldModel = City.model
+	var painted := 0
+	var roads: Array = model.roads.keys()
+	for pos: Vector2i in roads:
+		if not box.has_point(pos):
+			continue
+		for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0),
+				Vector2i(0, 1), Vector2i(0, -1)]:
+			var lot: Vector2i = pos + offset
+			if model.zoning.has(lot) or not model.can_set_zone(lot):
+				continue
+			# lot_buildable can only be asked of a ZONED tile (its first
+			# clause checks the paint) — so paint first, verify, and take
+			# the paint back off a lot growth would refuse (cliff steps,
+			# a line underneath): amber dead-lots teach the player nothing
+			# when the prebuild made them.
+			if not City.build_zone(lot):
+				continue
+			if model.lot_buildable(lot, WorldModel.ZONE_RESIDENTIAL):
+				painted += 1
+			else:
+				model.zoning.erase(lot)
+	return painted
 
 
 ## Drop heat exchangers that ended up with NO houses in reach.

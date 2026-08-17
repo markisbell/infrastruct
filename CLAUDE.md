@@ -603,7 +603,32 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   roots `load_tree` at every reference, and warns when a component has
   exchangers but no plant (the heat equivalent of a renewable-only power
   island staying dark).
-  HEIDELBERG: the north bank has its OWN system now, fed by the real
+  **HEIDELBERG REBUILT UNDER THE LIFTED LIMITS (2026-08-17, user request:
+  "redo heidelberg with the fixes")** — the city had been patched around
+  each fix rather than re-authored, and two big leftovers of the old limits
+  were still baked in. (1) SÜDSTADT joins district heating: it was
+  power+water only because "another 45-tile branch off a network with ONE
+  producer pushed the far exchangers to 10 C" — both halves of that are
+  gone (sized pipes + per-component references), so its corridor carries
+  all three networks via `_hd_run3`. (2) The WEST ENERGY PARK feeds in: a
+  4th boiler_plant "GKM tie-in" beside the Zukunftsspeicher — Mannheim
+  waste heat arriving from the west as a feed-in plant, which is what it
+  physically is. (3) THE REAL FINDING: zoning existed ONLY where an OSM
+  footprint landed, and the extract covers just the river strip — every
+  house stood between y=80 and y=139 while Weststadt/Bergheim-Süd/Südstadt
+  had streets, ~21 substations, heat and water on land that could NEVER
+  grow. `_hd_zone_district` paints buildable lots beside the streets of
+  three district boxes; TRAP: `lot_buildable` can only be asked of a ZONED
+  tile (its first clause checks the paint), so the painter paints first,
+  verifies, and takes the paint back off refused lots — a pre-check filter
+  silently painted nothing. Result: zoned 1126 -> 1637 (now reaching
+  y=180), houses 833 -> 940 with ~100 in the formerly dead bands, heat
+  zones 10 -> 22 (Südstadt stations keep their customers), heat still
+  9/9 converged with coldest zone 80.8 C winter / 58.3 C July midnight
+  (offline replay). test_scenario_heidelberg pins the living south
+  (zoned>300, houses>60 south of y=140, Südstadt heat pipes, >15 heat
+  zones).
+  HEIDELBERG (multi-system, same day): the north bank has its OWN system, fed by the real
   Heizkraftwerk — which is a gas CHP in life and had to be modelled as a
   plain power plant purely because heat could hold one reference. Heat
   deliberately does NOT cross the bridge: two systems keep Neuenheim's load

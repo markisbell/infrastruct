@@ -225,8 +225,11 @@ func test_the_city_has_its_real_thermal_plants() -> void:
 	#      a branch whose flow the network decides, so the second one landed
 	#      at near-zero flow and its temperature rise exploded.
 	# The slack is the hottest plant now and secondaries are pumps, so these
-	# can stand. Every one of them must REACH a heat main (below).
-	assert_int(model.buildings_of_kind("boiler_plant").size()).is_equal(3)
+	# can stand. Every one of them must REACH a heat main (below). The
+	# fourth is the GKM tie-in at the west energy park (2026-08-17 rebuild):
+	# Heidelberg's heat is largely Mannheim waste heat arriving from the
+	# west, and a feed-in plant is exactly what that is.
+	assert_int(model.buildings_of_kind("boiler_plant").size()).is_equal(4)
 	# one gas plant: the small south-bank generator. The Heizkraftwerk that
 	# used to be the second is a CHP now (above), which is what it is.
 	assert_int(model.buildings_of_kind("gas_plant").size()).is_equal(1)
@@ -296,6 +299,41 @@ func test_the_neckar_is_bridged_and_the_north_bank_joins_the_city() -> void:
 		if pos.y < 95:
 			north_water += 1
 	assert_int(north_water) 		.override_failure_message("the north bank still has no water") 		.is_greater(20)
+
+
+func test_the_southern_districts_are_living_city_not_dead_infrastructure() -> void:
+	# The 2026-08-17 rebuild's finding: zoning existed ONLY where an OSM
+	# footprint landed, and the extract covers just the river strip — so
+	# every house stood between y=80 and y=139 while Weststadt and Südstadt
+	# had streets, ~21 substations, heat and water on land that could never
+	# grow. Dense residential districts in reality; buildable land here.
+	var model := City.model
+	var south_zoned := 0
+	var south_houses := 0
+	for pos: Vector2i in model.zoning:
+		if pos.y >= 140:
+			south_zoned += 1
+	for pos: Vector2i in model.houses:
+		if pos.y >= 140:
+			south_houses += 1
+	assert_int(south_zoned) \
+		.override_failure_message("the southern districts lost their zoning") \
+		.is_greater(300)
+	assert_int(south_houses) \
+		.override_failure_message("nobody lives south of y=140 again") \
+		.is_greater(60)
+	# and Südstadt is ON district heating — the corridor carries all three
+	# networks now that sized pipes + per-component references allow it
+	var sued_heat := 0
+	for pos: Vector2i in model.heat_pipes:
+		if pos.y >= 155:
+			sued_heat += 1
+	assert_int(sued_heat) \
+		.override_failure_message("Südstadt fell off district heating") \
+		.is_greater(20)
+	# the heat networks serve a real customer base across the whole city
+	var topo := HeatTopology.build(model, {})
+	assert_int(topo.zones_info.size()).is_greater(15)
 
 
 func test_pressure_tower_stands_on_the_koenigstuhl_slope() -> void:
