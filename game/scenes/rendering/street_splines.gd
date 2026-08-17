@@ -192,9 +192,29 @@ func _build_ribbon(parent: Node3D, run: Array, ground: Callable) -> void:
 		var mag := clampf(dir.length() * 0.25, 0.3, 1.2)
 		(rps[i] as RoadPoint).prior_mag = mag
 		(rps[i] as RoadPoint).next_mag = mag
+	# Chain the points DIRECTLY instead of via connect_roadpoint: that
+	# helper runs container.update_edges() after every link, and each pass
+	# re-validates the edge list the previous link left behind — a 40-point
+	# way emits dozens of "invalid cross-container connection" warnings
+	# while building itself (the user saw 1 788 of them at Heidelberg load)
+	# and pays n edge validations for n points. The properties set here are
+	# exactly the ones connect_roadpoint sets, under the same
+	# _is_internal_updating guard the addon itself uses for batch updates;
+	# one update_edges() at the end validates the finished chain.
+	var refresh: bool = container._auto_refresh
+	container._auto_refresh = false
 	for i in rps.size() - 1:
-		(rps[i] as RoadPoint).connect_roadpoint(
-			RoadPoint.PointInit.NEXT, rps[i + 1], RoadPoint.PointInit.PRIOR)
+		var a := rps[i] as RoadPoint
+		var b := rps[i + 1] as RoadPoint
+		a._is_internal_updating = true
+		b._is_internal_updating = true
+		a.next_pt_init = a.get_path_to(b)
+		b.prior_pt_init = b.get_path_to(a)
+		a._is_internal_updating = false
+		b._is_internal_updating = false
+	container._auto_refresh = refresh
+	container._needs_refresh = true
+	container.update_edges()
 	container.rebuild_segments(true)
 
 
