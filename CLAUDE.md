@@ -578,6 +578,57 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   solves at 56-72 C. `City.HEAT_ZONE_CIRCULATION_KW` (3.2 kW, ~2 % of a
   zone's design load) floors it — a DH substation always circulates to keep
   its branch hot, which is what Zirkulation is.
+  **MULTI-SYSTEM HEAT (2026-08-17, part 3 of the user's plan): ONE
+  PRESSURE REFERENCE PER CONNECTED COMPONENT.** Heat bound a single slack
+  and BFSed from it, silently discarding every pipe it could not reach, so
+  a city split by a river could heat only one bank — the reason Heidelberg's
+  north side had no district heating at all and building it anyway cost the
+  south its solve. The FIRST thing checked was whether that was physics or
+  policy: pandapipes solves TWO disconnected DH systems with a
+  `circ_pump_const_pressure` each in ONE net perfectly well (probe: both
+  sides sane at 48.9-80 C / 4-6 bar). It was policy — rtheatflow's
+  "exactly one slack" + "everything reachable from it" data rule.
+  BACKEND: `NetIndex.slacks`/`slack_nodes` (with `slack`/`slack_node` kept
+  as the primary, so every single-system path is unchanged); feed-in, pump
+  electricity and mdot SUM over references; the heating curve drives all of
+  them; `sim.plants` is one dispatch model PER reference with a `plant`
+  property preserving the M2-M4 single-plant API; each reference reports ITS
+  OWN q/t_flow/plift/fuel in the frame; validation became "at least one
+  slack, at most one per component, every consumer reachable from SOME
+  reference"; gamebridge binds plant devices to references BY NODE
+  (`_slack_binding`) instead of first-device-wins.
+  GAME: `HeatTopology` finds components, picks the HOTTEST plant in each as
+  its reference, emits one producer per reference with its own supply
+  temperature and its own `plift_bar` (sized from THAT system's trench km),
+  roots `load_tree` at every reference, and warns when a component has
+  exchangers but no plant (the heat equivalent of a renewable-only power
+  island staying dark).
+  HEIDELBERG: the north bank has its OWN system now, fed by the real
+  Heizkraftwerk — which is a gas CHP in life and had to be modelled as a
+  plain power plant purely because heat could hold one reference. Heat
+  deliberately does NOT cross the bridge: two systems keep Neuenheim's load
+  off the Altstadt's trunk, which is also what the real city does. Heat
+  still converges 9/9 with 10 zones (8 south + 2 north).
+  TWO TRAPS, both found by the backend refusing the document: (1) a plant
+  whose pipe carries no EDGE yet used to get a singleton component and
+  became an isolated slack — a node with no pipes, which the contract
+  rightly refuses; `connected` is now filled for every heat building BEFORE
+  the no-reference early return, and a plant with no edge is simply not a
+  reference. (2) The first north main followed the empty north-west edge, so
+  `_hd_prune_idle_heat` removed every station on it and left the plant alone
+  on a main with no consumer; the second attempt turned east at y=96 and hit
+  the Neckar (the corner tile was water, splitting the main in two). A heat
+  main goes where the load is: (48,75) -> (48,94) -> (118,94), through
+  Neuenheim's real house band.
+  DELIBERATELY NOT A VERSION BUMP (recorded in docs/contract/v1.md): the
+  number of references lives in `native.producers`, which rides the document
+  backend-native and verbatim, and every single-reference document behaves
+  byte-identically. What widened at the contract level is only the binding
+  rule, first-device-wins -> by-node, which is the same thing for one
+  reference. Suites: backend test_gb_multi_system (4) +
+  test_data_contract's two-independent-systems case; game
+  test_heat_independent_systems (5) + test_scenario_heidelberg's
+  two-systems pin.
   METHOD NOTE worth keeping: the game smoke costs ~10 min per answer and
   reports only NON-converged frames, which hid the fix twice (the converged
   frames were already at 81 C while `heidelberg_why` showed 10 C). Dumping
@@ -1234,6 +1285,6 @@ econ books, event-system state incl. RNG position, device SoC survive
 loads), SoC replay on every registration (heatstorage smoke pins
 0.79→0.79), drag stalls halved, `WorldModel.check_invariants`, Windows
 installer, Linux port + tarball. Remaining: contract 1.2 candidates
-(emitter leaks, CHP fuel field, multi-network heat), dry-home visuals,
-terrain-aware coverage discs. River BRIDGES and HEAT PIPE SIZING: DONE
-2026-08-16.
+(emitter leaks, CHP fuel field), dry-home visuals, terrain-aware coverage
+discs. River BRIDGES and HEAT PIPE SIZING: DONE 2026-08-16.
+MULTI-NETWORK (multi-reference) HEAT: DONE 2026-08-17.

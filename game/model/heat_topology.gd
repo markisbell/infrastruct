@@ -78,7 +78,7 @@ static func pipe_std_type(load_kw: float) -> String:
 ## the load of whatever hangs off its far end, which is how a network is
 ## dimensioned in practice — thick at the plant, thin at the last house.
 static func load_tree(raw_pipes: Array, reachable: Dictionary,
-		slack_id: String, node_kw: Dictionary) -> Dictionary:
+		roots: Array, node_kw: Dictionary) -> Dictionary:
 	var adj := {}
 	for entry: Dictionary in raw_pipes:
 		if not (reachable.has(entry["a"]) and reachable.has(entry["b"])):
@@ -88,8 +88,14 @@ static func load_tree(raw_pipes: Array, reachable: Dictionary,
 				adj[pair[0]] = []
 			adj[pair[0]].append(pair[1])
 	var parent := {}
-	var order: Array = [slack_id]
-	var seen := {slack_id: true}
+	# one root PER independent system: each component is dimensioned from
+	# its own plant outwards, and a node belongs to exactly one of them
+	var order: Array = []
+	var seen := {}
+	for root: Variant in roots:
+		if not seen.has(root):
+			seen[root] = true
+			order.append(root)
 	var i := 0
 	while i < order.size():
 		var node: Variant = order[i]
@@ -102,9 +108,10 @@ static func load_tree(raw_pipes: Array, reachable: Dictionary,
 	var load := {}
 	for node: Variant in order:
 		load[node] = float(node_kw.get(node, 0.0))
-	for j in range(order.size() - 1, 0, -1):   # leaves first, up to the root
+	for j in range(order.size() - 1, -1, -1):   # leaves first, up to the roots
 		var node: Variant = order[j]
-		load[parent[node]] = float(load[parent[node]]) + float(load[node])
+		if parent.has(node):                    # a root has none
+			load[parent[node]] = float(load[parent[node]]) + float(load[node])
 	return {"parent": parent, "load": load, "node_kw": node_kw}
 
 
@@ -167,31 +174,64 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	has_plant = not plant_ids.is_empty()
 	if not has_plant:
 		return
-	# SLACK = the HOTTEST plant, not the alphabetically first. Only the
-	# slack is a pressure reference (circ_pump_const_pressure), and its
-	# t_flow_k is the supply temperature the WHOLE network runs at; every
-	# other plant feeds in at its own node as a heat_exchanger producer and
-	# adds heat without setting the temperature. Choosing by id let a 66 °C
-	# boiler outrank an 85 °C CHP ("boiler_plant" < "chp_plant") and drag a
-	# whole city below what its far ends could be served at — the reason
-	# Heidelberg could not carry a peak-load boiler at all.
-	var slack_id: String = plant_ids[0]
-	var hottest := -1.0
+	# ONE PRESSURE REFERENCE PER CONNECTED COMPONENT — not one per network.
+	# A district heating system that is not physically joined to another is
+	# an independent system, and a city split by a river is exactly that.
+	# This used to bind a SINGLE slack and BFS from it, silently discarding
+	# every pipe it could not reach ("only the slack plant's network is
+	# solved"), which is why Heidelberg's north bank could have no heat at
+	# all. The backend takes several slacks now, one per component.
+	var adjacency := NetGraph.adjacency(raw_pipes)
+	var component_of := {}          # node -> component index
+	var components: Array = []      # index -> Dictionary(node -> true)
+	for entry: Dictionary in raw_pipes:
+		for node: Variant in [entry["a"], entry["b"]]:
+			if component_of.has(node):
+				continue
+			var members := NetGraph.bfs_from(adjacency, [node])
+			for member: Variant in members:
+				component_of[member] = components.size()
+			components.append(members)
+
+	# Within a component the slack is the HOTTEST plant, not the
+	# alphabetically first: its t_flow_k is the supply temperature that
+	# component runs at, and every other plant there feeds in without
+	# setting it. Choosing by id let a 66 °C boiler outrank an 85 °C CHP
+	# ("boiler_plant" < "chp_plant") and drag a whole city below what its
+	# far ends could be served at.
+	var slack_of := {}              # component index -> plant id
+	var hottest_of := {}
 	for id: String in plant_ids:
+		if not component_of.has(id):
+			continue                # a plant with no pipe of its own
+		var cid: int = int(component_of[id])
 		var flow_c := float(BuildingDefs.get_def(
 			model.buildings[id]["kind"]).get("t_flow_c", 85.0))
-		if flow_c > hottest:
-			hottest = flow_c
-			slack_id = id
-	var adjacency := NetGraph.adjacency(raw_pipes)
-	var reachable := NetGraph.bfs_from(adjacency, [slack_id])
+		if not slack_of.has(cid) or flow_c > float(hottest_of[cid]):
+			slack_of[cid] = id
+			hottest_of[cid] = flow_c
+	var slack_ids: Array[String] = []
+	for cid: Variant in slack_of:
+		slack_ids.append(str(slack_of[cid]))
+	slack_ids.sort()                # deterministic document order
+	var reachable := {}
+	for cid: Variant in slack_of:
+		for node: Variant in components[int(cid)]:
+			reachable[node] = true
+	# `connected` is answered for EVERY heat building, including when there
+	# is nothing to solve — the HUD and the callers read it either way.
 	for id: String in model.buildings:
 		if _relevant(model, id):
 			connected[id] = reachable.has(id)
-	for id: String in plant_ids:
-		if not reachable.has(id):
-			warnings.append(("heat plant %s sits on a separate pipe network — "
-				+ "only the slack plant's network is solved; connect the networks") % id)
+	if slack_ids.is_empty():
+		return
+	# A component with consumers but NO plant stays dark — the heat
+	# equivalent of a renewable-only power island with nothing grid-forming
+	# in it. Nothing holds its pressure, so there is nothing to solve.
+	for sub_id: String in model.buildings_of_kind("heat_exchanger"):
+		if component_of.has(sub_id) and not reachable.has(sub_id):
+			warnings.append("heat exchangers sit on a pipe network with no "
+				+ "plant on it — build a plant there or join the networks")
 			break
 
 	# 4. junction/pipe/consumer/producer docs (reachable subgraph only)
@@ -203,7 +243,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		var kind := "node"
 		if key is String and not str(key).begins_with("j:"):
 			var b_kind: String = model.buildings[key]["kind"]
-			kind = "plant" if key == slack_id \
+			kind = "plant" if slack_ids.has(key) \
 				else ("consumer" if b_kind == "heat_exchanger" else "node")
 		var anchor: Vector2i = model.buildings[key]["anchor"] \
 			if (key is String and not str(key).begins_with("j:")) else _junction_pos(key)
@@ -220,10 +260,10 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		if reachable.has(id):
 			node_kw[id] = float(BuildingDefs.get_def(
 				model.buildings[id]["kind"]).get("dispatch_q_kw", 100.0))
-	var tree := load_tree(raw_pipes, reachable, slack_id, node_kw)
+	var tree := load_tree(raw_pipes, reachable, slack_ids, node_kw)
 
 	var pipes_out: Array[Dictionary] = []
-	var trench_km := 0.0
+	var trench_km := {}            # component index -> km, for its pump lift
 	for entry: Dictionary in raw_pipes:
 		if not (reachable.has(entry["a"]) and reachable.has(entry["b"])):
 			continue
@@ -236,7 +276,9 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			"length_km": tiles * BuildingDefs.TILE_M / 1000.0,
 			"sections": maxi(1, tiles / 4),
 		})
-		trench_km += tiles * BuildingDefs.TILE_M / 1000.0
+		var cid: int = int(component_of[entry["a"]])
+		trench_km[cid] = float(trench_km.get(cid, 0.0)) \
+			+ tiles * BuildingDefs.TILE_M / 1000.0
 
 	var zeros: Array[float] = []
 	var treturns: Array[float] = []
@@ -271,9 +313,9 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 	# producer still named the CHP's node. The CHP then ran as a secondary
 	# and its coupled electricity collapsed (coldsnap caught it: the heat→
 	# power coupling came back at -18.8 kW where the CHP owes < -30).
-	var ordered: Array[String] = [slack_id]
+	var ordered: Array[String] = slack_ids.duplicate()
 	for id: String in plant_ids:
-		if id != slack_id:
+		if not slack_ids.has(id):
 			ordered.append(id)
 	for id: String in ordered:
 		if reachable.has(id):
@@ -303,11 +345,23 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 		standby.append(100.0)
 	for device: Dictionary in devices:
 		var id: String = device["id"]
-		if id == slack_id or int(degree.get(id, 0)) != 1:
+		if slack_ids.has(id) or int(degree.get(id, 0)) != 1:
 			continue
 		consumers.append({"node": node_name[id], "name": "bypass_" + id,
 			"q_sh_w": zeros, "q_dhw_w": standby,
 			"controlled_mdot_kg_per_s": 0.02, "q_design_w": 100.0})
+
+	# ONE producer per pressure reference: its own supply temperature (its
+	# plant's kind) and its own pump lift (sized from ITS system's extent).
+	var producers_out: Array[Dictionary] = []
+	for id: String in slack_ids:
+		var cid: int = int(component_of[id])
+		producers_out.append({
+			"node": node_name[id], "name": "plant_" + id, "kind": "slack",
+			"p_flow_bar": 6.0,
+			"plift_bar": plift_bar(float(trench_km.get(cid, 0.0))),
+			"t_flow_k": 273.15 + float(BuildingDefs.get_def(
+				model.buildings[id]["kind"]).get("t_flow_c", 85.0))})
 
 	var temps: Array[float] = []
 	var grounds: Array[float] = []
@@ -323,11 +377,7 @@ func _build(model: WorldModel, tripped: Dictionary) -> void:
 			"network_structure": {"name": "city_heat", "junctions": junctions},
 			"pipes": {"pipes": pipes_out},
 			"consumers": {"resolution_minutes": 15, "steps": 96, "consumers": consumers},
-			"producers": {"producers": [{"node": node_name[slack_id],
-				"name": "plant", "kind": "slack", "p_flow_bar": 6.0,
-				"plift_bar": plift_bar(trench_km),
-				"t_flow_k": 273.15 + float(BuildingDefs.get_def(
-					model.buildings[slack_id]["kind"]).get("t_flow_c", 85.0))}]},
+			"producers": {"producers": producers_out},
 			"weather": {"resolution_minutes": 15, "steps": 96,
 				"t_amb_c": temps, "t_ground_c": grounds},
 		},

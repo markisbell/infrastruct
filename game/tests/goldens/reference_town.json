@@ -534,20 +534,20 @@
 					"junctions": [
 						{
 							"geo": [
-								48.006,
-								8.0048
-							],
-							"kind": "plant",
-							"name": "hn_chp_plant_9",
-							"pn_bar": 6.0
-						},
-						{
-							"geo": [
 								48.0052,
 								8.0024
 							],
 							"kind": "node",
 							"name": "hn_boiler_plant_6",
+							"pn_bar": 6.0
+						},
+						{
+							"geo": [
+								48.006,
+								8.0048
+							],
+							"kind": "plant",
+							"name": "hn_chp_plant_9",
 							"pn_bar": 6.0
 						},
 						{
@@ -584,7 +584,7 @@
 					"producers": [
 						{
 							"kind": "slack",
-							"name": "plant",
+							"name": "plant_chp_plant_9",
 							"node": "hn_chp_plant_9",
 							"p_flow_bar": 6.0,
 							"plift_bar": 2.0,

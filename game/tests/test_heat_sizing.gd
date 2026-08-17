@@ -48,7 +48,7 @@ func test_load_tree_sums_what_hangs_behind_each_node() -> void:
 		{"a": "j:1,1", "b": "b", "path": []},
 	]
 	var reachable := {"plant": true, "j:1,1": true, "a": true, "b": true}
-	var tree := HeatTopology.load_tree(edges, reachable, "plant",
+	var tree := HeatTopology.load_tree(edges, reachable, ["plant"],
 		{"a": 160.0, "b": 160.0})
 	var load: Dictionary = tree["load"]
 	assert_float(float(load["a"])).is_equal(160.0)

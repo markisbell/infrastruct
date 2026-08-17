@@ -64,10 +64,12 @@ func test_all_three_networks_are_supplied() -> void:
 	assert_int(model.buildings_of_kind("substation").size()).is_greater(4)
 	assert_int(model.buildings_of_kind("heat_exchanger").size()).is_greater(2)
 	assert_int(model.buildings_of_kind("water_station").size()).is_greater(4)
-	# ONE heat producer, and it must be the CENTRAL one: the contract
-	# carries a single slack, and with it at the west map edge the far
-	# exchangers fell to 10 °C and the solve failed outright.
-	assert_int(model.buildings_of_kind("chp_plant").size()).is_equal(1)
+	# TWO CHPs: Heizwerk Mitte on the south bank and the real Heizkraftwerk
+	# Heidelberg on the north, each the pressure reference of its OWN
+	# district heating system. Heat carried a single reference until
+	# 2026-08-17, so the north bank had none at all and the HKW — a gas CHP
+	# in life — had to be modelled as a plain power plant.
+	assert_int(model.buildings_of_kind("chp_plant").size()).is_equal(2)
 	assert_int(model.buildings_of_kind("heat_storage").size()).is_equal(1)
 	# two wells, both south — but the north bank drinks from them now. Its
 	# mains used to be discarded by WaterTopology, which BFSes from the one
@@ -205,11 +207,13 @@ func test_road_health_detects_a_dotted_network() -> void:
 
 func test_the_city_has_its_real_thermal_plants() -> void:
 	# Heidelberg is heated by Stadtwerke plants, not one shed at the map
-	# edge: a gas Heizkraftwerk on the north bank, a peak-load Heizwerk in
-	# the middle of town, and the Neckar river-water heat pump. Each must
-	# actually reach a heat main, or it is scenery.
+	# edge: the gas Heizkraftwerk on the north bank, Heizwerk Mitte in the
+	# middle of town, peak-load boilers along the line, and the Neckar
+	# river-water heat pump. Each must actually reach a heat main, or it is
+	# scenery — and the two CHPs are the pressure reference of one system
+	# each, north and south.
 	var model := City.model
-	assert_int(model.buildings_of_kind("chp_plant").size()).is_equal(1)
+	assert_int(model.buildings_of_kind("chp_plant").size()).is_equal(2)
 	assert_int(model.buildings_of_kind("heat_pump_plant").size()).is_equal(1)
 	# THREE SPITZENLASTKESSEL along the line, which is how a real district
 	# heating network is fed. This used to pin ZERO boilers, and the reason
@@ -223,27 +227,48 @@ func test_the_city_has_its_real_thermal_plants() -> void:
 	# The slack is the hottest plant now and secondaries are pumps, so these
 	# can stand. Every one of them must REACH a heat main (below).
 	assert_int(model.buildings_of_kind("boiler_plant").size()).is_equal(3)
-	# two gas plants: a small generator in the south and the real
-	# Heizkraftwerk Heidelberg, which is a gas CHP in life but can only be
-	# a power plant here (see below)
-	assert_int(model.buildings_of_kind("gas_plant").size()).is_equal(2)
-	# DISTRICT HEATING IS STILL SOUTH-BANK ONLY, but the reason has changed
-	# and is worth keeping straight. It used to be structural: heat drops
-	# every pipe it cannot reach from its one slack, so a river-split city
-	# needed a second heat system the model could not express. The Neckar is
-	# BRIDGED now — power and water cross it — so heat could follow. What
-	# stops it is capacity: HeatTopology gives every pipe in every city
-	# ISOPLUS_DRE50_STD, and DN50 carries ~293 kW at a sane velocity against
-	# 17 zones dimensioned at 2720 kW. The far Altstadt already runs at
-	# 10-20 °C supply; hanging Neuenheim off the same trunk would only
-	# spread the cold. Size pipes from downstream load and this assertion is
-	# the one to revisit.
+	# one gas plant: the small south-bank generator. The Heizkraftwerk that
+	# used to be the second is a CHP now (above), which is what it is.
+	assert_int(model.buildings_of_kind("gas_plant").size()).is_equal(1)
+	# BOTH BANKS ARE HEATED, by two SEPARATE systems. This assertion has
+	# been through every stage of the model's understanding: it used to
+	# demand zero north-bank heat because HeatTopology bound one slack and
+	# silently discarded every pipe it could not reach, so building heat up
+	# there cost the south its solve. Heat holds one pressure reference PER
+	# CONNECTED COMPONENT now. The two systems stay deliberately unjoined —
+	# no heat crosses the bridge — because that is both what the real city
+	# has and what keeps Neuenheim's load off the Altstadt's trunk.
 	var north_heat := 0
 	for pos: Vector2i in model.heat_pipes:
-		if pos.y < 105:
+		if pos.y < 100:
 			north_heat += 1
-	assert_int(north_heat).is_equal(0)
+	assert_int(north_heat) \
+		.override_failure_message("the north bank lost its district heating") \
+		.is_greater(40)
 	assert_int(model.heat_pipes.size()).is_greater(150)
+
+
+func test_the_two_heat_systems_stay_independent() -> void:
+	# The property that makes this legal: one pressure reference per
+	# connected component. Two on one component over-determine the
+	# hydraulics and the backend refuses the document outright.
+	var topo := HeatTopology.build(City.model, {})
+	var producers: Array = topo.doc["native"]["producers"]["producers"]
+	assert_int(producers.size()) \
+		.override_failure_message("expected one reference per bank, got %d"
+			% producers.size()) \
+		.is_equal(2)
+	# and no heat crosses the river: the systems share no pipe
+	var crossing := 0
+	for pos: Vector2i in City.model.bridges:
+		if City.model.heat_pipes.has(pos):
+			crossing += 1
+	assert_int(crossing) \
+		.override_failure_message("heat crossed the bridge and merged the systems") \
+		.is_equal(0)
+	# every exchanger on both banks is served
+	assert_int(topo.zones_info.size()) \
+		.is_equal(City.model.buildings_of_kind("heat_exchanger").size())
 
 
 func test_the_neckar_is_bridged_and_the_north_bank_joins_the_city() -> void:

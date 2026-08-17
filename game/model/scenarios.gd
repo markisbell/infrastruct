@@ -312,8 +312,11 @@ static func _build_heidelberg() -> void:
 	City.place_building("gas_plant", Vector2i(47, 185))     # gas generator
 	City.place_building("grid_connection", Vector2i(46, 58))   # north bank
 	# OSM puts the Heizkraftwerk at (48,75), which straddles a terrain step
-	# — a 2x2 needs one level, so it sits one tile east, still on its spur
-	City.place_building("gas_plant", Vector2i(49, 74))      # Heizkraftwerk HD
+	# — a 2x2 needs one level, so it sits one tile east, still on its spur.
+	# A CHP, which is what it really is: it had to be a plain power plant
+	# while heat could carry only ONE pressure reference and that reference
+	# was on the south bank. Independent systems exist now.
+	City.place_building("chp_plant", Vector2i(49, 74))      # Heizkraftwerk HD
 
 	# Utility corridors: BURIED, and buried is not a detail here — a surface
 	# line cannot cross a road at all, so an overhead trunk could never enter
@@ -427,6 +430,20 @@ static func _build_heidelberg() -> void:
 	for run: Array in north:
 		_hd_run("water", run)
 		north_tiles.append(_hd_run("cable", run))
+	# THE NORTH BANK'S OWN DISTRICT HEATING. Fed by the Heizkraftwerk, and
+	# deliberately NOT joined to the south over the bridge: two independent
+	# systems with a pressure reference each is what the real city has, and
+	# it keeps Neuenheim's load off a trunk that is already carrying the
+	# Altstadt. This was impossible until heat learned to hold more than one
+	# reference — the north bank simply had no district heating at all.
+	# Down the bank and INTO Neuenheim, where the houses actually are: the
+	# first routing followed the empty north-west edge and every station on
+	# it was pruned for having no customers, which left the plant alone on
+	# a main with no consumer — an isolated node the contract rightly
+	# refuses. A heat main goes where the load is.
+	var north_heat: Array = _hd_run("heat", [
+		Vector2i(48, 75), Vector2i(48, 94), Vector2i(118, 94)])
+	_hd_seat_every(north_heat, 14, "heat_exchanger")
 	# THE CROSSING. One run over the Theodor-Heuss-Brücke joins the north
 	# bank to the south networks: power meshes into one grid, and the water
 	# mains reach the Königstuhl tower's pressure zone instead of being
