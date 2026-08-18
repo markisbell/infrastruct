@@ -1035,23 +1035,33 @@ start_game.bat   visible desktop launch (preview launchers spawn hidden windows)
   parse_input_event): both cable kinds on ONE run pipette to their own
   tool, a 40-px middle-drag still pans. GdUnit 260/260;
   saveload/citylife/playtest green.
-  NOT YET (layers 2+4 of the design): the flat all-28-tiles catalogue
-  with a SEARCH field (fuzzy over name/category/network + GERMAN aliases
-  — Ortsnetzstation, Erdkabel, Freileitung, Wärmespeicher, Brunnen — and
-  ratings as text "630"/"1000"/"3 MW"; Furnas: two people pick the same
-  term <20 % of the time), collapsing surface/buried into one tool + a
-  variant modifier (city.gd:308-313 already maps both to one `kind` int,
-  so it is a UI-only change), and an MRU strip. LANDMINE FOR THAT WORK:
-  `city_view.gd:1304` PANS THE CAMERA from `Input.get_axis(&"ui_left"…)`
-  polled in `_process`, and polled input ignores GUI focus — the moment a
-  focusable LineEdit exists, arrow keys pan the map while you type. Gate
-  it on `get_viewport().gui_get_focus_owner() is LineEdit`. Second trap:
-  the HUD's blanket `FOCUS_NONE` is LOAD-BEARING (hud.gd says so) —
-  making tiles focusable turns TAB into `ui_focus_next` and SPACE into
-  `ui_accept`, killing the menu toggle and pause; only the search field
-  may take focus, and grid nav must be a hand-rolled cursor index. Third:
-  Esc must get ONE owner or it becomes a 3-press ritual (LineEdit
-  unfocus → close panel → disarm tool).
+  LAYERS 2+4 LANDED (2026-08-18): a SEARCH field above the tab row —
+  case-insensitive AND-of-substrings over label + id + category + a
+  per-id GERMAN/ratings alias table (`Hud.SEARCH_ALIASES`: Erdkabel,
+  Brunnen, Ortsnetzstation, "630", "3 mw"…; Furnas <20 % term overlap is
+  why aliases, and category matching is why "heat" surfaces the heat
+  tools) — typing swaps the tab view for a flat result row (cap 12 + "…",
+  result tiles are UNREGISTERED `_make_tile(item, false)` clones so the
+  canonical `_tool_buttons` references never dangle); and the
+  surface/buried collapse (`Hud.VARIANT_PAIRS`): ONE tile per line
+  family, clicking the tile while its tool is armed FLIPS the variant,
+  the buried twin keeps its id + tool registered (hotbar slots and the
+  pipette speak variant ids — pinned) and shares the surface tile's
+  pressed highlight; `_sync_variant` follows outside armings (hotkey G/
+  K/L, pipette, hotbar) so the tile's face always shows the armed
+  variant. All three documented landmines defused as prescribed: the
+  camera pan poll in city_view._process is gated on
+  `gui_get_focus_owner()` (search is the ONE focusable control, so any
+  focus owner == typing), the blanket FOCUS_NONE stands everywhere else,
+  and while the field holds focus `_unhandled_key_input` returns early —
+  Esc there ONLY clears + unfocuses (plus LineEdit's own ✕). The MRU
+  strip was DELIBERATELY DROPPED: an auto-reordering strip is exactly
+  the moving-target UI the hotbar research rejected (Somberg/Mitchell
+  spatial constancy) — the hotbar IS the user-curated MRU.
+  PALETTE_SEARCH=<query> env joins PALETTE_TAB as a screenshot probe.
+  Suites: test_hud_components +4 (German/ratings hits, findable-by-own-
+  label completeness, AND-tokens, variant-pair integrity) and the tab
+  pin now expects one tile per PAIR + asserts twin registration.
   Smokes recalibrated for sampled variance: maintenance grid override
   140 kW, drought tower 0.5 m³ + 9 h window + dry-phase (not end-instant)
   assertion — calibrated smokes must assert WINDOW properties, samples

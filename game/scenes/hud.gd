@@ -209,11 +209,92 @@ func _ready() -> void:
 
 # ─── build menu (palette) ───
 
+## Layer 2 of the 2026-08-14 build-menu design: SEARCH. Furnas: two people
+## pick the same term for one thing <20 % of the time — so the index
+## carries German domain vocabulary and ratings-as-text alongside the
+## English labels. Substring match, every token must hit (an AND of
+## substrings beats fuzzy scoring for a 30-entry catalogue: no ranking to
+## explain, no surprising near-misses).
+const SEARCH_ALIASES := {
+	"road": "strasse straße street asphalt",
+	"zone": "wohngebiet wohnen siedlung residential",
+	"zone_commercial": "gewerbe gewerbegebiet industrie industrial mall fabrik",
+	"bridge": "bruecke brücke fluss river neckar deck",
+	"cable_overhead": "freileitung stromleitung leitung strom power 20 kv 7 mva mast surface",
+	"cable_buried": "erdkabel kabel strom power leitung 20 kv 8.7 mva na2xs2y buried",
+	"substation": "ortsnetzstation trafo transformator station 630 kva strom",
+	"grid_connection": "umspannwerk netzanschluss einspeisung 110 kv 20 mva grid import",
+	"gas_plant": "gaskraftwerk kraftwerk generator gas 2 mw",
+	"wind_farm": "windrad windkraft windkraftanlage turbine 3 mw",
+	"solar_park": "solarpark photovoltaik pv sonne 1.2 mwp 300 kw",
+	"battery": "batterie speicher akku bess 1 mwh 400 kw",
+	"substation_xl": "ortsnetzstation trafo station 1000 kva 1 mva gewerbe xl",
+	"charging_park": "ladepark ladesaeule ladesäule ev elektroauto schnelllader 175 kw",
+	"heat_pipe": "fernwaerme fernwärme waermeleitung wärmeleitung rohr heizung district surface",
+	"heat_pipe_buried": "fernwaerme fernwärme erdleitung rohr heizung buried",
+	"heat_exchanger": "waermetauscher wärmetauscher uebergabestation übergabestation heizung",
+	"boiler_plant": "heizwerk kessel spitzenlastkessel spitzenlast boiler 66",
+	"chp_plant": "blockheizkraftwerk bhkw heizkraftwerk kraft waerme kopplung 85",
+	"heat_pump_plant": "waermepumpe wärmepumpe flusswaermepumpe cop",
+	"heat_storage": "waermespeicher wärmespeicher pufferspeicher puffer tank",
+	"water_pipe": "wasserleitung rohr trinkwasser wasser surface",
+	"water_pipe_buried": "wasserleitung erdleitung rohr trinkwasser wasser buried",
+	"water_station": "wasserwerk druckstation trinkwasser wasser 2.4 bar",
+	"well": "brunnen grundwasser quelle wasser",
+	"pumping_station": "pumpwerk pumpe druckerhoehung druckerhöhung booster wasser",
+	"water_tower": "wasserturm hochbehaelter hochbehälter druck head wasser",
+	"inspect": "inspektor info anzeigen panel",
+	"repair": "reparatur trupp crew 1500",
+	"bulldoze": "abriss bagger loeschen löschen entfernen delete demolish",
+}
+
+## Layer 4: surface tool id -> its buried twin. ONE catalogue tile serves
+## both (the model already collapses them to one `kind` int); clicking the
+## tile while its tool is armed FLIPS the variant. Both ids stay registered
+## — hotbar slots and the pipette speak variant ids, never the tile.
+const VARIANT_PAIRS := {
+	"cable_overhead": "cable_buried",
+	"heat_pipe": "heat_pipe_buried",
+	"water_pipe": "water_pipe_buried",
+}
+
+
+## Every palette entry as a flat list with its category injected — the
+## search index (categories are the network language: "heat" finds tools).
+func _flat_items() -> Array:
+	var out: Array = []
+	for category: Dictionary in _build_items():
+		for item: Dictionary in category["items"]:
+			var entry: Dictionary = item.duplicate()
+			entry["cat"] = category["cat"]
+			out.append(entry)
+	return out
+
+
+## Case-insensitive AND-of-substrings over label + id + category + the
+## alias vocabulary + the tooltip text.
+static func search_matches(query: String, item: Dictionary) -> bool:
+	var trimmed := query.strip_edges().to_lower()
+	if trimmed == "":
+		return false
+	var hay := ("%s %s %s %s %s" % [item.get("label", ""), item.get("id", ""),
+		item.get("cat", ""), SEARCH_ALIASES.get(str(item.get("id", "")), ""),
+		item.get("desc", "")]).to_lower()
+	for token: String in trimmed.split(" ", false):
+		if not hay.contains(token):
+			return false
+	return true
+
+
 ## Tabbed palette (user request 2026-08-06 — 28 tiles outgrew the single
 ## all-categories row): a slim tab row on top, ONE tile row below showing
 ## the active category. Hotkeys stay global and auto-switch the tab so
 ## the pressed highlight is never hidden.
 var _tab_buttons := {}   # cat name -> Button
+var _search: LineEdit
+var _search_results: HBoxContainer
+var _tab_row: HBoxContainer
+var _buried_variant := {}  # surface id -> true when the buried twin is active
 var _tab_rows := {}      # cat name -> HBoxContainer
 var _tool_category := {} # CityView.Tool -> cat name
 var _tab_group := ButtonGroup.new()
@@ -230,10 +311,35 @@ func _make_build_menu() -> void:
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 4)
 	_build_menu.add_child(stack)
+	# the search field is THE ONE focusable control in the whole HUD (the
+	# blanket FOCUS_NONE below it is load-bearing: TAB must stay the menu
+	# toggle and SPACE the pause key). While it holds focus, Esc belongs to
+	# it alone and the camera's polled arrow-key pan is gated off.
+	var search_row := HBoxContainer.new()
+	search_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	stack.add_child(search_row)
+	_search = LineEdit.new()
+	_search.placeholder_text = "search · Suche  (Erdkabel, Brunnen, 630, wind…)"
+	_search.custom_minimum_size = Vector2(300, 0)
+	_search.clear_button_enabled = true
+	_search.add_theme_font_size_override("font_size", 12)
+	_search.text_changed.connect(_on_search_changed)
+	search_row.add_child(_search)
 	var tab_row := HBoxContainer.new()
 	tab_row.add_theme_constant_override("separation", 2)
 	tab_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	stack.add_child(tab_row)
+	_tab_row = tab_row
+	# the flat result row lives where the category rows do; searching swaps
+	# the tab view out for it and back
+	_search_results = HBoxContainer.new()
+	_search_results.add_theme_constant_override("separation", 4)
+	_search_results.alignment = BoxContainer.ALIGNMENT_CENTER
+	_search_results.visible = false
+	stack.add_child(_search_results)
+	var buried_ids := {}
+	for surface_id: String in VARIANT_PAIRS:
+		buried_ids[VARIANT_PAIRS[surface_id]] = surface_id
 	for category: Dictionary in _build_items():
 		var cat: String = category["cat"]
 		# rows live directly in the VBox: hidden children are excluded
@@ -245,8 +351,17 @@ func _make_build_menu() -> void:
 		tile_row.alignment = BoxContainer.ALIGNMENT_CENTER
 		tile_row.visible = false
 		for item: Dictionary in category["items"]:
-			tile_row.add_child(_make_tile(item))
 			_tool_category[item["tool"]] = cat
+			if buried_ids.has(str(item["id"])):
+				# layer 4: the buried twin gets NO tile of its own — it
+				# registers for hotbar/pipette/status lookups and shares
+				# the surface tile's pressed highlight
+				_items_by_tool[item["tool"]] = item
+				_items_by_id[item["id"]] = item
+				var surface_item: Dictionary = _items_by_id[buried_ids[str(item["id"])]]
+				_tool_buttons[item["tool"]] = _tool_buttons[surface_item["tool"]]
+				continue
+			tile_row.add_child(_make_tile(item))
 		stack.add_child(tile_row)
 		_tab_rows[cat] = tile_row
 		var tab := Button.new()
@@ -271,6 +386,11 @@ func _make_build_menu() -> void:
 	var probe := OS.get_environment("PALETTE_TAB")
 	_show_category(probe if _tab_rows.has(probe)
 		else str((_build_items()[0] as Dictionary)["cat"]))
+	# PALETTE_SEARCH=<query> screenshots the search results (same family)
+	var search_probe := OS.get_environment("PALETTE_SEARCH")
+	if search_probe != "":
+		_search.text = search_probe
+		_on_search_changed(search_probe)
 	# the catalogue STAYS on screen by default: every tool the hotbar does
 	# not hold has to remain visible, or the ones that moved off the digit
 	# row read as deleted. TAB still folds it away when the map matters
@@ -288,15 +408,16 @@ func _show_category(cat: String) -> void:
 	# around the active row on their own
 
 
-func _make_tile(item: Dictionary) -> Button:
+func _make_tile(item: Dictionary, register: bool = true) -> Button:
 	var color: Color = item.get("color", Color.GRAY)
 	var cost: int = item.get("cost", 0)
 	if item.has("kind"):
 		var def := BuildingDefs.get_def(item["kind"])
 		color = def["color"]
 		cost = def["cost"]
-	_items_by_tool[item["tool"]] = item
-	_items_by_id[item["id"]] = item
+	if register:
+		_items_by_tool[item["tool"]] = item
+		_items_by_id[item["id"]] = item
 	var button := Button.new()
 	button.text = item["mono"]
 	button.custom_minimum_size = Vector2(44, 44)
@@ -326,7 +447,10 @@ func _make_tile(item: Dictionary) -> Button:
 	button.add_theme_color_override("font_color", Color.WHITE)
 	button.add_theme_color_override("font_pressed_color", Color.WHITE)
 	button.add_theme_color_override("font_hover_color", Color.WHITE)
-	button.pressed.connect(func() -> void: _select_tool(item["tool"]))
+	if register and VARIANT_PAIRS.has(str(item["id"])):
+		button.pressed.connect(_press_variant_tile.bind(item))
+	else:
+		button.pressed.connect(func() -> void: _select_tool(item["tool"]))
 	# hovering a tile with the catalogue open makes the digit keys PIN
 	# instead of select — Minecraft's creative-inventory binding gesture,
 	# the cheapest possible way to build a loadout
@@ -334,7 +458,8 @@ func _make_tile(item: Dictionary) -> Button:
 	button.mouse_exited.connect(func() -> void:
 		if _hovered_id == str(item["id"]):
 			_hovered_id = "")
-	_tool_buttons[item["tool"]] = button
+	if register:
+		_tool_buttons[item["tool"]] = button
 	return button
 
 
@@ -1188,6 +1313,80 @@ func _pipe_sample(runs: Array, radius: float) -> Node3D:
 	return node
 
 
+## One tile, two tools: arm the active variant; clicking while it is
+## already armed flips surface <-> buried (Satisfactory's hold-variant
+## idea reduced to a second click — no radial needed for a pair).
+func _press_variant_tile(surface_item: Dictionary) -> void:
+	var surface_id := str(surface_item["id"])
+	var buried_item: Dictionary = _items_by_id.get(VARIANT_PAIRS[surface_id], {})
+	var buried := bool(_buried_variant.get(surface_id, false))
+	var active_tool: CityView.Tool = buried_item["tool"] if buried 		else surface_item["tool"]
+	if view.tool == active_tool:
+		buried = not buried
+		_buried_variant[surface_id] = buried
+		active_tool = buried_item["tool"] if buried else surface_item["tool"]
+	_refresh_variant_tile(surface_id)
+	_select_tool(active_tool)
+
+
+func _refresh_variant_tile(surface_id: String) -> void:
+	var surface_item: Dictionary = _items_by_id[surface_id]
+	var buried_item: Dictionary = _items_by_id[VARIANT_PAIRS[surface_id]]
+	var buried := bool(_buried_variant.get(surface_id, false))
+	var active: Dictionary = buried_item if buried else surface_item
+	var button: Button = _tool_buttons[surface_item["tool"]]
+	button.text = str(active["mono"])
+	var cost := _item_cost(active)
+	button.tooltip_text = "%s (%s) — %s\n%s\nclick again: switch surface/buried" % [
+		active["label"], active["key"],
+		("€%d" % cost) if cost > 0 else "free", active["desc"]]
+
+
+## An outside arming (hotkey, pipette, hotbar) of either half of a pair
+## must move the shared tile's face and remembered variant with it.
+func _sync_variant(tool: CityView.Tool) -> void:
+	for surface_id: String in VARIANT_PAIRS:
+		var surface_item: Dictionary = _items_by_id.get(surface_id, {})
+		var buried_item: Dictionary = _items_by_id.get(VARIANT_PAIRS[surface_id], {})
+		if surface_item.is_empty() or buried_item.is_empty():
+			continue
+		if tool == surface_item["tool"] or tool == buried_item["tool"]:
+			_buried_variant[surface_id] = tool == buried_item["tool"]
+			_refresh_variant_tile(surface_id)
+
+
+func _on_search_changed(query: String) -> void:
+	var searching := query.strip_edges() != ""
+	_tab_row.visible = not searching
+	for name: String in _tab_rows:
+		(_tab_rows[name] as HBoxContainer).visible = false
+	_search_results.visible = searching
+	for child in _search_results.get_children():
+		child.queue_free()
+	if not searching:
+		_show_category(str(_tab_group.get_pressed_button().text) 			if _tab_group.get_pressed_button() != null
+			else str((_build_items()[0] as Dictionary)["cat"]))
+		return
+	var shown := 0
+	for item: Dictionary in _flat_items():
+		if not search_matches(query, item):
+			continue
+		if shown >= 12:
+			var more := Label.new()
+			more.text = "…"
+			more.add_theme_font_size_override("font_size", 16)
+			_search_results.add_child(more)
+			break
+		_search_results.add_child(_make_tile(item, false))
+		shown += 1
+	if shown == 0:
+		var empty := Label.new()
+		empty.text = "no tool matches \"%s\"" % query.strip_edges()
+		empty.add_theme_font_size_override("font_size", 12)
+		empty.modulate = Color(1, 1, 1, 0.7)
+		_search_results.add_child(empty)
+
+
 func _select_tool(tool: CityView.Tool) -> void:
 	view.tool = tool
 	var item: Dictionary = _items_by_tool.get(tool, {})
@@ -1199,6 +1398,7 @@ func _select_tool(tool: CityView.Tool) -> void:
 	_tool_label.text = "Tool: %s%s" % [item.get("label", "none"), hint]
 	if _tool_buttons.has(tool):
 		(_tool_buttons[tool] as Button).set_pressed_no_signal(true)
+	_sync_variant(tool)
 	_sync_slot_pressed(tool)
 	if item.has("label"):
 		var cost := _item_cost(item)
@@ -1251,6 +1451,16 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.is_pressed():
 		return
 	var key: InputEventKey = event
+	# while the search field holds focus it OWNS the keyboard: printable
+	# keys never reach here (the LineEdit consumes them), and Esc must do
+	# exactly one thing — clear and leave the field. Without this guard it
+	# would ALSO disarm the tool and close the inspector, the three-press
+	# ritual the design warned about.
+	if _search != null and _search.has_focus():
+		if key.keycode == KEY_ESCAPE:
+			_search.clear()
+			_search.release_focus()
+		return
 	var slot := Hotbar.slot_for_physical(key.physical_keycode)
 	if key.keycode == KEY_ESCAPE:
 		_select_tool(CityView.Tool.NONE)  # back to inspect mode

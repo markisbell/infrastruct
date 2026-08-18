@@ -206,15 +206,114 @@ func test_build_menu_tabs_carry_every_item() -> void:
 	var hud := Hud.new()
 	hud._make_build_menu()
 	var visible_rows := 0
+	var buried_ids := {}
+	for surface_id: String in Hud.VARIANT_PAIRS:
+		buried_ids[Hud.VARIANT_PAIRS[surface_id]] = surface_id
 	for category: Dictionary in hud._build_items():
 		var row: HBoxContainer = hud._tab_rows[category["cat"]]
+		# layer 4: a buried twin shares its surface tile instead of having
+		# one of its own — the row deliberately carries one tile per PAIR
+		var expected := 0
+		for item: Dictionary in category["items"]:
+			if not buried_ids.has(str(item["id"])):
+				expected += 1
 		assert_int(row.get_child_count()) \
 			.override_failure_message(str(category["cat"]) + " row lost tiles") \
-			.is_equal((category["items"] as Array).size())
+			.is_equal(expected)
 		if row.visible:
 			visible_rows += 1
 		for item: Dictionary in category["items"]:
 			assert_str(str(hud._tool_category.get(item["tool"], ""))) \
 				.is_equal(str(category["cat"]))
 	assert_int(visible_rows).is_equal(1)
+	# and the twins are still fully REGISTERED: hotbar slots and the
+	# pipette resolve their ids, and both halves share ONE highlight button
+	for surface_id: String in Hud.VARIANT_PAIRS:
+		var buried_id: String = Hud.VARIANT_PAIRS[surface_id]
+		assert_bool(hud._items_by_id.has(buried_id)) \
+			.override_failure_message("%s lost its registration" % buried_id) \
+			.is_true()
+		var surface_tool: CityView.Tool = hud._items_by_id[surface_id]["tool"]
+		var buried_tool: CityView.Tool = hud._items_by_id[buried_id]["tool"]
+		assert_bool(hud._tool_buttons[surface_tool] == hud._tool_buttons[buried_tool]) \
+			.override_failure_message("%s does not share %s's tile" \
+				% [buried_id, surface_id]) \
+			.is_true()
 	hud.free()
+
+
+# ─── layer 2: the catalogue search ───
+
+func test_search_speaks_german_and_ratings() -> void:
+	# Furnas: two people pick the same term for one thing <20 % of the
+	# time — the index must carry the domain vocabulary, not just labels
+	var hud := Hud.new()
+	var flat := hud._flat_items()
+	hud.free()
+	var hits := func(query: String) -> Array:
+		var ids: Array = []
+		for item: Dictionary in flat:
+			if Hud.search_matches(query, item):
+				ids.append(str(item["id"]))
+		return ids
+	assert_array(hits.call("erdkabel")).contains(["cable_buried"])
+	assert_array(hits.call("Brunnen")).contains(["well"])
+	assert_array(hits.call("630")).contains(["substation"])
+	assert_array(hits.call("wärmespeicher")).contains(["heat_storage"])
+	assert_array(hits.call("freileitung")).contains(["cable_overhead"])
+	assert_array(hits.call("3 mw")).contains(["wind_farm"])
+	# category IS the network language: "heat" surfaces the heat tools
+	assert_array(hits.call("heat")).contains(["heat_pipe", "chp_plant"])
+
+
+func test_search_finds_every_entry_by_its_own_label() -> void:
+	# the completeness sweep (§6: a consistency test over a table proves
+	# nothing about the table being complete — this one does)
+	var hud := Hud.new()
+	var flat := hud._flat_items()
+	hud.free()
+	for item: Dictionary in flat:
+		assert_bool(Hud.search_matches(str(item["label"]), item)) \
+			.override_failure_message("entry %s is not findable by its own label" \
+				% item["id"]) \
+			.is_true()
+
+
+func test_search_needs_every_token_and_ignores_case() -> void:
+	var hud := Hud.new()
+	var flat := hud._flat_items()
+	hud.free()
+	var tower: Dictionary = {}
+	var pipe: Dictionary = {}
+	for item: Dictionary in flat:
+		if str(item["id"]) == "water_tower":
+			tower = item
+		elif str(item["id"]) == "water_pipe":
+			pipe = item
+	assert_bool(Hud.search_matches("WASSER turm", tower)).is_true()
+	assert_bool(Hud.search_matches("wasser turm", pipe)).is_false()
+	assert_bool(Hud.search_matches("", tower)).is_false()
+
+
+# ─── layer 4: surface/buried collapse ───
+
+func test_variant_pairs_name_real_entries_in_the_same_category() -> void:
+	var hud := Hud.new()
+	var by_id := {}
+	var cat_of := {}
+	for category: Dictionary in hud._build_items():
+		for item: Dictionary in category["items"]:
+			by_id[str(item["id"])] = item
+			cat_of[str(item["id"])] = str(category["cat"])
+	hud.free()
+	for surface_id: String in Hud.VARIANT_PAIRS:
+		var buried_id: String = Hud.VARIANT_PAIRS[surface_id]
+		assert_bool(by_id.has(surface_id)).is_true()
+		assert_bool(by_id.has(buried_id)) \
+			.override_failure_message("variant twin %s missing" % buried_id) \
+			.is_true()
+		assert_str(cat_of[surface_id]).is_equal(cat_of[buried_id])
+		# the pair maps onto DIFFERENT tools — collapse is UI-only, the
+		# tool enum and the persisted ids never change
+		assert_bool(by_id[surface_id]["tool"] != by_id[buried_id]["tool"]) \
+			.is_true()

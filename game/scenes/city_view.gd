@@ -1400,7 +1400,13 @@ func _apply_overlay_visibility() -> void:
 
 
 func _process(delta: float) -> void:
-	var pan := Vector2(Input.get_axis(&"ui_left", &"ui_right"),
+	# polled input ignores GUI focus — with the catalogue's search field
+	# focused, arrow keys would pan the map WHILE the player types (the
+	# documented landmine). One focusable control exists in the whole HUD,
+	# so "any focus owner" is exactly "typing in search".
+	var typing := get_viewport().gui_get_focus_owner() != null
+	var pan := Vector2.ZERO if typing else Vector2(
+		Input.get_axis(&"ui_left", &"ui_right"),
 		Input.get_axis(&"ui_up", &"ui_down"))
 	if pan != Vector2.ZERO:
 		_pan_ground(pan * 20.0 * delta * (_zoom / 18.0))
